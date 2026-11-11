@@ -275,7 +275,6 @@ class MainActivity : AppCompatActivity() {
         val trying = prefs.getString("trying", null)
         prefs.edit().remove("trying").apply()
         play(if (idx >= 0) idx else 0)
-        Thread { checkUpdate() }.start()
         if (trying != null) {
             val bad = all.firstOrNull { it.url == trying }
             if (bad != null) showBanner("Channel \"" + bad.name + "\" tadi membuat aplikasi tertutup. Dilewati.", 9000L)
