@@ -1,6 +1,13 @@
 package com.bayutv.hotel
 
+import android.content.Intent
 import android.graphics.drawable.ColorDrawable
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
+import org.json.JSONObject
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -268,6 +275,7 @@ class MainActivity : AppCompatActivity() {
         val trying = prefs.getString("trying", null)
         prefs.edit().remove("trying").apply()
         play(if (idx >= 0) idx else 0)
+        Thread { checkUpdate() }.start()
         if (trying != null) {
             val bad = all.firstOrNull { it.url == trying }
             if (bad != null) showBanner("Channel \"" + bad.name + "\" tadi membuat aplikasi tertutup. Dilewati.", 9000L)
@@ -339,6 +347,70 @@ class MainActivity : AppCompatActivity() {
     private fun hidePanel() {
         hideKeyboard()
         panel.visibility = View.GONE
+    }
+
+    private val repoApi = "https://api.github.com/repos/bayu-tv/tv-hotel/releases/latest"
+
+    private fun checkUpdate() {
+        try {
+            val c = URL(repoApi).openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 10000
+            c.setRequestProperty("Accept", "application/vnd.github+json")
+            c.setRequestProperty("User-Agent", "BayuTV")
+            val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+            val tag = o.getString("tag_name").removePrefix("v").toIntOrNull() ?: return
+            val now = PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
+            if (tag <= now) return
+            val assets = o.getJSONArray("assets")
+            var found: String? = null
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                if (a.getString("name").endsWith(".apk")) found = a.getString("browser_download_url")
+            }
+            val url = found ?: return
+            ui.post { askUpdate(tag, url) }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun askUpdate(tag: Int, url: String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Ada versi baru (v" + tag + ")")
+            .setMessage("Tekan Perbarui untuk mengunduh dan memasang. Aplikasi akan tertutup sebentar saat pemasangan.")
+            .setPositiveButton("Perbarui") { _, _ -> startUpdate(url) }
+            .setNegativeButton("Nanti", null)
+            .show()
+    }
+
+    private fun startUpdate(url: String) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            status.text = "Izinkan 'Pasang aplikasi tak dikenal' untuk Bayu TV, lalu buka lagi dan tekan Perbarui."
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + packageName)))
+            return
+        }
+        status.text = "Mengunduh pembaruan..."
+        Thread {
+            try {
+                val f = File(cacheDir, "update.apk")
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 10000
+                c.readTimeout = 30000
+                c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
+                ui.post { installApk(f) }
+            } catch (e: Exception) {
+                ui.post { status.text = "Gagal mengunduh pembaruan: " + e.javaClass.simpleName }
+            }
+        }.start()
+    }
+
+    private fun installApk(f: File) {
+        status.text = ""
+        val uri = FileProvider.getUriForFile(this, packageName + ".fileprovider", f)
+        val i = Intent(Intent.ACTION_VIEW)
+        i.setDataAndType(uri, "application/vnd.android.package-archive")
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(i)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
