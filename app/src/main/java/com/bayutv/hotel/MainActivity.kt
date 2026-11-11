@@ -24,6 +24,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -52,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private val labels = ArrayList<String>()
     private var cur = 0
     private var numBuf = ""
+    private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
 
     private lateinit var status: TextView
     private lateinit var banner: TextView
@@ -74,6 +76,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                File(filesDir, "crash.txt").writeText(android.util.Log.getStackTraceString(e))
+            } catch (x: Exception) {
+            }
+            oldHandler?.uncaughtException(t, e)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
 
@@ -154,14 +164,39 @@ class MainActivity : AppCompatActivity() {
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_BUFFERING) status.text = "Memuat..."
-                if (state == Player.STATE_READY) status.text = ""
+                if (state == Player.STATE_READY) {
+                    status.text = ""
+                    if (all.isNotEmpty()) prefs.edit().putString("last", all[cur].url).remove("trying").apply()
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                status.text = "Sinyal hilang (" + error.errorCodeName + "). Atas/bawah: ganti channel. OK: daftar."
+                prefs.edit().remove("trying").apply()
+                val cause = error.cause
+                val why = if (cause is HttpDataSource.InvalidResponseCodeException) {
+                    when (cause.responseCode) {
+                        404, 410 -> "alamat siaran sudah tidak ada (HTTP " + cause.responseCode + ")"
+                        401, 403 -> "ditolak server, diblokir atau butuh izin (HTTP " + cause.responseCode + ")"
+                        else -> "server bermasalah (HTTP " + cause.responseCode + ")"
+                    }
+                } else {
+                    error.errorCodeName
+                }
+                status.text = "Sinyal hilang: " + why + ". Atas/bawah: ganti channel. OK: daftar."
             }
         })
         player = p
+
+        val cf = File(filesDir, "crash.txt")
+        if (cf.exists()) {
+            val t = cf.readText()
+            cf.delete()
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Aplikasi sempat tertutup")
+                .setMessage(t.take(700))
+                .setPositiveButton("OK", null)
+                .show()
+        }
 
         status.text = "Memuat daftar channel..."
         Thread { loadChannels() }.start()
@@ -189,6 +224,8 @@ class MainActivity : AppCompatActivity() {
         val v = m?.groupValues?.get(1)
         return if (v.isNullOrEmpty()) null else v
     }
+
+    private fun clean(v: String): String = v.filter { it.code in 32..126 }.trim()
 
     private fun parse(text: String): List<Channel> {
         val out = ArrayList<Channel>()
@@ -226,9 +263,15 @@ class MainActivity : AppCompatActivity() {
         all = parsed
         search.hint = "Cari di " + all.size + " channel" + (if (fromCache) " (dari cache)" else "")
         applyFilter()
-        val last = getSharedPreferences("bayutv", MODE_PRIVATE).getString("last", null)
+        val last = prefs.getString("last", null)
         val idx = all.indexOfFirst { it.url == last }
+        val trying = prefs.getString("trying", null)
+        prefs.edit().remove("trying").apply()
         play(if (idx >= 0) idx else 0)
+        if (trying != null) {
+            val bad = all.firstOrNull { it.url == trying }
+            if (bad != null) showBanner("Channel \"" + bad.name + "\" tadi membuat aplikasi tertutup. Dilewati.", 9000L)
+        }
     }
 
     private fun applyFilter() {
@@ -244,19 +287,26 @@ class MainActivity : AppCompatActivity() {
         val p = player ?: return
         cur = ((i % all.size) + all.size) % all.size
         val ch = all[cur]
-        val dsf = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(8000)
-        if (ch.userAgent != null) dsf.setUserAgent(ch.userAgent)
-        if (ch.referrer != null) dsf.setDefaultRequestProperties(mapOf("Referer" to ch.referrer))
-        p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(ch.url)))
-        p.prepare()
-        p.playWhenReady = true
-        getSharedPreferences("bayutv", MODE_PRIVATE).edit().putString("last", ch.url).apply()
         showBanner((cur + 1).toString() + "  " + ch.name, 3000L)
         status.text = "Memuat..."
         adapter.notifyDataSetChanged()
+        prefs.edit().putString("trying", ch.url).commit()
+        try {
+            val dsf = DefaultHttpDataSource.Factory()
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(8000)
+                .setReadTimeoutMs(8000)
+            val ua = ch.userAgent?.let { clean(it) }
+            val ref = ch.referrer?.let { clean(it) }
+            if (!ua.isNullOrEmpty()) dsf.setUserAgent(ua)
+            if (!ref.isNullOrEmpty()) dsf.setDefaultRequestProperties(mapOf("Referer" to ref))
+            p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(ch.url)))
+            p.prepare()
+            p.playWhenReady = true
+        } catch (e: Exception) {
+            prefs.edit().remove("trying").apply()
+            status.text = "Gagal memutar: " + e.javaClass.simpleName
+        }
     }
 
     private fun showBanner(t: String, ms: Long) {
