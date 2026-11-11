@@ -3,6 +3,7 @@ package com.bayutv.hotel
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.util.TypedValue
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -13,12 +14,12 @@ class PanduanActivity : AppCompatActivity() {
     private val brass = 0xFFB8975A.toInt()
     private val ivory = 0xFFEFE8DA.toInt()
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+    private fun dp(v: Int): Int = Ui.dp(this, v)
 
     private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
         val v = TextView(this)
         v.text = t
-        v.textSize = sp
+        v.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, sp))
         v.setTextColor(color)
         v.typeface = face
         return v

@@ -16,6 +16,7 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -64,18 +65,19 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var tvCd: TextView
     private lateinit var tvNote: TextView
     private lateinit var tiles: LinearLayout
+    private lateinit var notice: Notice
     private val cells = ArrayList<Pair<TextView, TextView>>()
     private val times = IntArray(5) { -1 }
     private val prayNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
     private var prayerDay = ""
     private var prayerTryAt = 0L
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+    private fun dp(v: Int): Int = Ui.dp(this, v)
 
     private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
         val v = TextView(this)
         v.text = t
-        v.textSize = sp
+        v.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, sp))
         v.setTextColor(color)
         v.typeface = face
         return v
@@ -105,6 +107,7 @@ class HomeActivity : AppCompatActivity() {
         t.addView(ic)
         val tx = tv(label, 20f, mute, Typeface.SERIF)
         tx.setPadding(0, dp(12), 0, 0)
+        tx.gravity = Gravity.CENTER_HORIZONTAL
         t.addView(tx)
         t.isFocusable = true
         t.isClickable = true
@@ -153,6 +156,9 @@ class HomeActivity : AppCompatActivity() {
         tvClock = tv("", 54f, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
         tvDate = tv("", 16f, mute, Typeface.SANS_SERIF)
         tvHijri = tv("", 16f, mute, Typeface.SANS_SERIF)
+        tvClock.gravity = Gravity.END
+        tvDate.gravity = Gravity.END
+        tvHijri.gravity = Gravity.END
         right.addView(tvClock)
         right.addView(tvDate)
         right.addView(tvHijri)
@@ -197,8 +203,8 @@ class HomeActivity : AppCompatActivity() {
         tiles.gravity = Gravity.CENTER
         tiles.addView(tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) })
         tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
-        tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { Toast.makeText(this, "Segera hadir", Toast.LENGTH_SHORT).show() })
-        tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { Toast.makeText(this, "Segera hadir", Toast.LENGTH_SHORT).show() })
+        tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
+        tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { notice.show("Segera hadir", "Pengaturan lewat HP menyusul di pembaruan berikutnya.", 2500L) })
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
 
         col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
@@ -213,6 +219,8 @@ class HomeActivity : AppCompatActivity() {
             c.gravity = Gravity.CENTER
             val n = tv(prayNames[i], 14f, mute, Typeface.SANS_SERIF)
             val t = tv("--:--", 22f, ivory, Typeface.SERIF)
+            n.gravity = Gravity.CENTER_HORIZONTAL
+            t.gravity = Gravity.CENTER_HORIZONTAL
             c.addView(n)
             c.addView(t)
             cells.add(Pair(n, t))
@@ -226,6 +234,7 @@ class HomeActivity : AppCompatActivity() {
         tvNote.setPadding(dp(8), dp(4), 0, 0)
         col.addView(tvNote)
 
+        notice = Notice(this, root)
         setContentView(root)
         tiles.getChildAt(0).requestFocus()
 
@@ -459,11 +468,11 @@ class HomeActivity : AppCompatActivity() {
 
     private fun startUpdate(url: String) {
         if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-            tvNote.text = "Izinkan 'Pasang aplikasi tak dikenal' untuk Bayu TV, lalu buka lagi dan tekan Perbarui."
+            notice.show("Perlu izin", "Izinkan 'Pasang aplikasi tak dikenal' untuk Bayu TV, lalu buka lagi aplikasinya dan tekan Perbarui.", 9000L)
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + packageName)))
             return
         }
-        tvNote.text = "Mengunduh pembaruan..."
+        notice.show("Pembaruan", "Mengunduh versi baru...")
         Thread {
             try {
                 val f = File(cacheDir, "update.apk")
@@ -473,13 +482,13 @@ class HomeActivity : AppCompatActivity() {
                 c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
                 ui.post { installApk(f) }
             } catch (e: Exception) {
-                ui.post { tvNote.text = "Gagal mengunduh pembaruan: " + e.javaClass.simpleName }
+                ui.post { notice.show("Pembaruan gagal", "Tidak bisa mengunduh: " + e.javaClass.simpleName, 6000L) }
             }
         }.start()
     }
 
     private fun installApk(f: File) {
-        tvNote.text = ""
+        notice.hide()
         val uri = FileProvider.getUriForFile(this, packageName + ".fileprovider", f)
         val i = Intent(Intent.ACTION_VIEW)
         i.setDataAndType(uri, "application/vnd.android.package-archive")

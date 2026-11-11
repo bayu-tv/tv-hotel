@@ -1,13 +1,9 @@
 package com.bayutv.hotel
 
-import android.content.Intent
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.core.content.FileProvider
-import androidx.core.content.pm.PackageInfoCompat
-import org.json.JSONObject
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -39,28 +35,21 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class Channel(
-    val name: String,
-    val url: String,
-    val logo: String?,
-    val group: String?,
-    val referrer: String?,
-    val userAgent: String?
-)
-
 class MainActivity : AppCompatActivity() {
 
-    // Playlist Indonesia dari iptv-org. Kode negara lain: us, my, sg, jp, dst.
-    private val playlistUrl = "https://iptv-org.github.io/iptv/countries/id.m3u"
-
     private val ui = Handler(Looper.getMainLooper())
+    private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
     private var player: ExoPlayer? = null
+
     private var all: List<Channel> = emptyList()
+    private var groups: Map<String, List<Channel>> = emptyMap()
+    private var dead: Set<String> = emptySet()
     private var shownIdx: List<Int> = emptyList()
     private val labels = ArrayList<String>()
     private var cur = 0
+    private var cands: List<Channel> = emptyList()
+    private var candPos = 0
     private var numBuf = ""
-    private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
 
     private lateinit var status: TextView
     private lateinit var banner: TextView
@@ -68,11 +57,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var search: EditText
     private lateinit var list: ListView
     private lateinit var adapter: ArrayAdapter<String>
+    private lateinit var notice: Notice
 
     private val brass = 0xFFB8975A.toInt()
     private val ivory = 0xFFEFE8DA.toInt()
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+    private fun dp(v: Int): Int = Ui.dp(this, v)
 
     private val hideBanner = Runnable { banner.visibility = View.GONE }
     private val jump = Runnable {
@@ -101,20 +91,25 @@ class MainActivity : AppCompatActivity() {
 
         banner = TextView(this)
         banner.setTextColor(ivory)
-        banner.textSize = 24f
-        banner.setBackgroundColor(0xB0000000.toInt())
-        banner.setPadding(dp(20), dp(10), dp(20), dp(10))
+        banner.textSize = 26f
+        banner.typeface = Typeface.SERIF
+        banner.setPadding(dp(28), dp(14), dp(28), dp(14))
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(16).toFloat()
+        bg.setColor(0x99100F0E.toInt())
+        bg.setStroke(dp(1), 0x33FFFFFF)
+        banner.background = bg
         banner.visibility = View.GONE
-        val bl = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
-        bl.setMargins(dp(32), dp(24), dp(32), 0)
+        val bl = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START)
+        bl.setMargins(dp(40), 0, dp(40), dp(36))
         root.addView(banner, bl)
 
         status = TextView(this)
         status.setTextColor(ivory)
-        status.textSize = 22f
+        status.textSize = 20f
         status.setShadowLayer(8f, 0f, 2f, 0xFF000000.toInt())
         status.setPadding(dp(32), dp(20), dp(32), dp(24))
-        root.addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START))
+        root.addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END))
 
         panel = LinearLayout(this)
         panel.orientation = LinearLayout.VERTICAL
@@ -143,8 +138,11 @@ class MainActivity : AppCompatActivity() {
         adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_list_item_1, labels) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val v = super.getView(position, convertView, parent) as TextView
-                val playing = position < shownIdx.size && shownIdx[position] == cur
-                v.setTextColor(if (playing) brass else ivory)
+                val idx = if (position < shownIdx.size) shownIdx[position] else -1
+                val playing = idx == cur
+                val isDead = idx >= 0 && all[idx].key in dead
+                v.setTextColor(if (playing) brass else if (isDead) 0xFF6D675C.toInt() else ivory)
+                v.paintFlags = if (isDead) v.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG else v.paintFlags and Paint.STRIKE_THRU_TEXT_FLAG.inv()
                 v.textSize = 20f
                 return v
             }
@@ -164,6 +162,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(panel, FrameLayout.LayoutParams(dp(440), -1, Gravity.START))
 
+        notice = Notice(this, root)
         setContentView(root)
 
         val p = ExoPlayer.Builder(this).build()
@@ -173,23 +172,35 @@ class MainActivity : AppCompatActivity() {
                 if (state == Player.STATE_BUFFERING) status.text = "Memuat..."
                 if (state == Player.STATE_READY) {
                     status.text = ""
-                    if (all.isNotEmpty()) prefs.edit().putString("last", all[cur].url).remove("trying").apply()
+                    notice.hide()
+                    if (all.isNotEmpty()) {
+                        val ch = all[cur]
+                        prefs.edit().putString("last", ch.key).remove("trying").apply()
+                        if (candPos > 0 && candPos < cands.size) rememberAlive(ch.key, cands[candPos].url)
+                    }
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (candPos + 1 < cands.size) {
+                    candPos++
+                    status.text = "Mencoba sumber lain (" + (candPos + 1) + "/" + cands.size + ")..."
+                    startCandidate()
+                    return
+                }
                 prefs.edit().remove("trying").apply()
+                status.text = ""
                 val cause = error.cause
                 val why = if (cause is HttpDataSource.InvalidResponseCodeException) {
                     when (cause.responseCode) {
-                        404, 410 -> "alamat siaran sudah tidak ada (HTTP " + cause.responseCode + ")"
-                        401, 403 -> "ditolak server, diblokir atau butuh izin (HTTP " + cause.responseCode + ")"
-                        else -> "server bermasalah (HTTP " + cause.responseCode + ")"
+                        404, 410 -> "Alamat siaran sudah tidak ada (HTTP " + cause.responseCode + ")"
+                        401, 403 -> "Ditolak server, diblokir atau butuh izin (HTTP " + cause.responseCode + ")"
+                        else -> "Server bermasalah (HTTP " + cause.responseCode + ")"
                     }
                 } else {
                     error.errorCodeName
                 }
-                status.text = "Sinyal hilang: " + why + ". Atas/bawah: ganti channel. OK: daftar."
+                notice.show("Sinyal hilang", why + "\n\nAtas/bawah: ganti channel  \u00B7  OK: daftar channel\nBeranda, Pindai Sinyal: cari sumber baru")
             }
         })
         player = p
@@ -205,79 +216,63 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
 
-        status.text = "Memuat daftar channel..."
+        notice.show("Mohon tunggu", "Memuat daftar channel...")
         Thread { loadChannels() }.start()
     }
 
+    private fun rememberAlive(key: String, url: String) {
+        val m = Playlist.loadScan(this)
+        m[key] = url
+        Playlist.saveScan(this, m)
+    }
+
     private fun loadChannels() {
-        val cache = File(filesDir, "channels.m3u")
+        val cache = Playlist.cacheFile(this)
         val fresh: String? = try {
-            val c = URL(playlistUrl).openConnection() as HttpURLConnection
+            val c = URL(Playlist.PLAYLIST_URL).openConnection() as HttpURLConnection
             c.connectTimeout = 10000
             c.readTimeout = 20000
             c.inputStream.bufferedReader().use { it.readText() }
         } catch (e: Exception) {
             null
         }
-        if (fresh != null && fresh.length > 100) cache.writeText(fresh)
-        val text: String? = if (fresh != null && fresh.length > 100) fresh else if (cache.exists()) cache.readText() else null
-        val fromCache = !(fresh != null && fresh.length > 100)
-        val parsed = if (text != null) parse(text) else emptyList()
-        ui.post { onLoaded(parsed, fromCache) }
-    }
-
-    private fun attr(line: String, key: String): String? {
-        val m = Regex(key + "=\"([^\"]*)\"").find(line)
-        val v = m?.groupValues?.get(1)
-        return if (v.isNullOrEmpty()) null else v
-    }
-
-    private fun clean(v: String): String = v.filter { it.code in 32..126 }.trim()
-
-    private fun parse(text: String): List<Channel> {
-        val out = ArrayList<Channel>()
-        var name: String? = null
-        var logo: String? = null
-        var group: String? = null
-        var ref: String? = null
-        var ua: String? = null
-        for (raw in text.lineSequence()) {
-            val line = raw.trim()
-            if (line.isEmpty()) continue
-            if (line.startsWith("#EXTINF")) {
-                name = line.substringAfterLast(",").trim()
-                logo = attr(line, "tvg-logo")
-                group = attr(line, "group-title")
-                ref = null
-                ua = null
-            } else if (line.startsWith("#EXTVLCOPT:http-referrer=")) {
-                ref = line.substringAfter("=")
-            } else if (line.startsWith("#EXTVLCOPT:http-user-agent=")) {
-                ua = line.substringAfter("=")
-            } else if (!line.startsWith("#") && name != null) {
-                out.add(Channel(name, line, logo, group, ref, ua))
-                name = null
-            }
-        }
-        return out
+        val ok = fresh != null && fresh.length > 100
+        if (ok) cache.writeText(fresh!!)
+        val text: String? = if (ok) fresh else Playlist.loadCached(this)
+        val parsed = if (text != null) Playlist.parse(text) else emptyList()
+        ui.post { onLoaded(parsed, !ok) }
     }
 
     private fun onLoaded(parsed: List<Channel>, fromCache: Boolean) {
         if (parsed.isEmpty()) {
-            status.text = "Daftar channel kosong. Periksa internet TV."
+            notice.show("Daftar kosong", "Periksa koneksi internet TV, lalu buka lagi aplikasinya.")
             return
         }
-        all = parsed
+        notice.hide()
+        val g = Playlist.group(parsed)
+        val scan = Playlist.loadScan(this)
+        val picks = ArrayList<Channel>()
+        val deadSet = HashSet<String>()
+        for ((k, members) in g) {
+            val want = scan[k]
+            val pick = if (!want.isNullOrEmpty()) (members.firstOrNull { it.url == want } ?: members[0]) else members[0]
+            picks.add(pick)
+            if (want != null && want.isEmpty()) deadSet.add(k)
+        }
+        groups = g
+        all = picks
+        dead = deadSet
         search.hint = "Cari di " + all.size + " channel" + (if (fromCache) " (dari cache)" else "")
         applyFilter()
         val last = prefs.getString("last", null)
-        val idx = all.indexOfFirst { it.url == last }
+        val idx = all.indexOfFirst { it.key == last }
         val trying = prefs.getString("trying", null)
         prefs.edit().remove("trying").apply()
-        play(if (idx >= 0) idx else 0)
+        val firstAlive = all.indexOfFirst { it.key !in dead }
+        play(if (idx >= 0) idx else if (firstAlive >= 0) firstAlive else 0)
         if (trying != null) {
-            val bad = all.firstOrNull { it.url == trying }
-            if (bad != null) showBanner("Channel \"" + bad.name + "\" tadi membuat aplikasi tertutup. Dilewati.", 9000L)
+            val bad = all.firstOrNull { it.key == trying }
+            if (bad != null) notice.show("Dilewati", "Channel \"" + bad.name + "\" tadi membuat aplikasi tertutup, jadi tidak diputar lagi.", 7000L)
         }
     }
 
@@ -291,29 +286,49 @@ class MainActivity : AppCompatActivity() {
 
     private fun play(i: Int) {
         if (all.isEmpty()) return
-        val p = player ?: return
         cur = ((i % all.size) + all.size) % all.size
         val ch = all[cur]
-        showBanner((cur + 1).toString() + "  " + ch.name, 3000L)
+        val members = groups[ch.key] ?: listOf(ch)
+        cands = (listOf(ch) + members.filter { it.url != ch.url }).take(5)
+        candPos = 0
+        showBanner((cur + 1).toString() + "   " + ch.name, 3000L)
         status.text = "Memuat..."
+        notice.hide()
         adapter.notifyDataSetChanged()
-        prefs.edit().putString("trying", ch.url).commit()
+        prefs.edit().putString("trying", ch.key).commit()
+        startCandidate()
+    }
+
+    private fun startCandidate() {
+        val p = player ?: return
+        val ch = cands[candPos]
         try {
             val dsf = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(8000)
                 .setReadTimeoutMs(8000)
-            val ua = ch.userAgent?.let { clean(it) }
-            val ref = ch.referrer?.let { clean(it) }
-            if (!ua.isNullOrEmpty()) dsf.setUserAgent(ua)
-            if (!ref.isNullOrEmpty()) dsf.setDefaultRequestProperties(mapOf("Referer" to ref))
+            val ua = Playlist.clean(ch.userAgent)
+            val ref = Playlist.clean(ch.referrer)
+            if (ua != null) dsf.setUserAgent(ua)
+            if (ref != null) dsf.setDefaultRequestProperties(mapOf("Referer" to ref))
             p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(ch.url)))
             p.prepare()
             p.playWhenReady = true
         } catch (e: Exception) {
             prefs.edit().remove("trying").apply()
-            status.text = "Gagal memutar: " + e.javaClass.simpleName
+            status.text = ""
+            notice.show("Gagal memutar", e.javaClass.simpleName, 6000L)
         }
+    }
+
+    private fun zap(d: Int) {
+        if (all.isEmpty()) return
+        var i = cur
+        for (k in 0 until all.size) {
+            i = ((i + d) % all.size + all.size) % all.size
+            if (all[i].key !in dead) break
+        }
+        play(i)
     }
 
     private fun showBanner(t: String, ms: Long) {
@@ -348,70 +363,6 @@ class MainActivity : AppCompatActivity() {
         panel.visibility = View.GONE
     }
 
-    private val repoApi = "https://api.github.com/repos/bayu-tv/tv-hotel/releases/latest"
-
-    private fun checkUpdate() {
-        try {
-            val c = URL(repoApi).openConnection() as HttpURLConnection
-            c.connectTimeout = 8000
-            c.readTimeout = 10000
-            c.setRequestProperty("Accept", "application/vnd.github+json")
-            c.setRequestProperty("User-Agent", "BayuTV")
-            val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
-            val tag = o.getString("tag_name").removePrefix("v").toIntOrNull() ?: return
-            val now = PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
-            if (tag <= now) return
-            val assets = o.getJSONArray("assets")
-            var found: String? = null
-            for (i in 0 until assets.length()) {
-                val a = assets.getJSONObject(i)
-                if (a.getString("name").endsWith(".apk")) found = a.getString("browser_download_url")
-            }
-            val url = found ?: return
-            ui.post { askUpdate(tag, url) }
-        } catch (e: Exception) {
-        }
-    }
-
-    private fun askUpdate(tag: Int, url: String) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Ada versi baru (v" + tag + ")")
-            .setMessage("Tekan Perbarui untuk mengunduh dan memasang. Aplikasi akan tertutup sebentar saat pemasangan.")
-            .setPositiveButton("Perbarui") { _, _ -> startUpdate(url) }
-            .setNegativeButton("Nanti", null)
-            .show()
-    }
-
-    private fun startUpdate(url: String) {
-        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-            status.text = "Izinkan 'Pasang aplikasi tak dikenal' untuk Bayu TV, lalu buka lagi dan tekan Perbarui."
-            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + packageName)))
-            return
-        }
-        status.text = "Mengunduh pembaruan..."
-        Thread {
-            try {
-                val f = File(cacheDir, "update.apk")
-                val c = URL(url).openConnection() as HttpURLConnection
-                c.connectTimeout = 10000
-                c.readTimeout = 30000
-                c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
-                ui.post { installApk(f) }
-            } catch (e: Exception) {
-                ui.post { status.text = "Gagal mengunduh pembaruan: " + e.javaClass.simpleName }
-            }
-        }.start()
-    }
-
-    private fun installApk(f: File) {
-        status.text = ""
-        val uri = FileProvider.getUriForFile(this, packageName + ".fileprovider", f)
-        val i = Intent(Intent.ACTION_VIEW)
-        i.setDataAndType(uri, "application/vnd.android.package-archive")
-        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(i)
-    }
-
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (panel.visibility == View.VISIBLE) {
             if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -421,11 +372,11 @@ class MainActivity : AppCompatActivity() {
             return super.onKeyDown(keyCode, event)
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_CHANNEL_UP) {
-            play(cur - 1)
+            zap(-1)
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN) {
-            play(cur + 1)
+            zap(1)
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
