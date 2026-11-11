@@ -220,6 +220,13 @@ class MainActivity : AppCompatActivity() {
         Thread { loadChannels() }.start()
     }
 
+    private fun playlistUrl(): String {
+        val custom = (prefs.getString("playlist", "") ?: "").trim()
+        if (custom.startsWith("http://") || custom.startsWith("https://")) return custom
+        val cc = (prefs.getString("country", "id") ?: "id").trim().lowercase().filter { it in 'a'..'z' }
+        return "https://iptv-org.github.io/iptv/countries/" + (if (cc.length == 2) cc else "id") + ".m3u"
+    }
+
     private fun rememberAlive(key: String, url: String) {
         val m = Playlist.loadScan(this)
         m[key] = url
@@ -229,7 +236,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadChannels() {
         val cache = Playlist.cacheFile(this)
         val fresh: String? = try {
-            val c = URL(Playlist.PLAYLIST_URL).openConnection() as HttpURLConnection
+            val c = URL(playlistUrl()).openConnection() as HttpURLConnection
             c.connectTimeout = 10000
             c.readTimeout = 20000
             c.inputStream.bufferedReader().use { it.readText() }

@@ -3,9 +3,12 @@ package com.bayutv.hotel
 import android.animation.ObjectAnimator
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -39,9 +42,9 @@ import java.util.Locale
 class HomeActivity : AppCompatActivity() {
 
     // Lokasi bawaan: Pontianak. Nanti bisa diubah dari HP.
-    private val lat = -0.0263
-    private val lon = 109.3425
-    private val tzName = "Asia/Pontianak"
+    private val lat: Double get() = prefs.getString("lat", null)?.toDoubleOrNull() ?: -0.0263
+    private val lon: Double get() = prefs.getString("lon", null)?.toDoubleOrNull() ?: 109.3425
+    private val tzName: String get() = prefs.getString("tz", null) ?: "Asia/Pontianak"
     private val repoApi = "https://api.github.com/repos/bayu-tv/tv-hotel/releases/latest"
 
     private val brass = 0xFFB8975A.toInt()
@@ -66,6 +69,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var tvNote: TextView
     private lateinit var tiles: LinearLayout
     private lateinit var notice: Notice
+    private lateinit var bgView: ImageView
+    private var locSig = ""
     private val cells = ArrayList<Pair<TextView, TextView>>()
     private val times = IntArray(5) { -1 }
     private val prayNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
@@ -134,6 +139,8 @@ class HomeActivity : AppCompatActivity() {
 
         val root = FrameLayout(this)
         root.setBackgroundColor(0xFF121110.toInt())
+        bgView = ImageView(this)
+        root.addView(bgView, FrameLayout.LayoutParams(-1, -1))
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(56), dp(32), dp(56), dp(20))
@@ -204,7 +211,7 @@ class HomeActivity : AppCompatActivity() {
         tiles.addView(tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) })
         tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
         tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
-        tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { notice.show("Segera hadir", "Pengaturan lewat HP menyusul di pembaruan berikutnya.", 2500L) })
+        tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) })
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
 
         col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
@@ -318,7 +325,7 @@ class HomeActivity : AppCompatActivity() {
             if (cached != null && applyPrayer(cached, today)) return
         }
         Thread {
-            val r = httpGet("https://api.aladhan.com/v1/timings/" + today + "?latitude=" + lat + "&longitude=" + lon + "&method=20&timezonestring=" + tzName)
+            val r = httpGet("https://api.aladhan.com/v1/timings/" + today + "?latitude=" + lat + "&longitude=" + lon + "&method=20&timezonestring=" + java.net.URLEncoder.encode(tzName, "UTF-8"))
             if (r != null) {
                 ui.post {
                     if (applyPrayer(r, today)) prefs.edit().putString("pray_date", today).putString("pray", r).apply()
@@ -346,17 +353,21 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun loadWeather() {
+        fetchWeather()
+        ui.postDelayed({ loadWeather() }, 30 * 60 * 1000L)
+    }
+
+    private fun fetchWeather() {
         Thread {
             val w = httpGet("https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon +
                 "&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m" +
-                "&daily=weather_code,temperature_2m_max&timezone=Asia%2FPontianak&forecast_days=4")
+                "&daily=weather_code,temperature_2m_max&timezone=" + java.net.URLEncoder.encode(tzName, "UTF-8") + "&forecast_days=4")
             val a = httpGet("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + lat + "&longitude=" + lon +
-                "&current=us_aqi&timezone=Asia%2FPontianak")
+                "&current=us_aqi&timezone=" + java.net.URLEncoder.encode(tzName, "UTF-8"))
             if (w != null) prefs.edit().putString("wx", w).apply()
             if (a != null) prefs.edit().putString("aq", a).apply()
             ui.post { renderWeather() }
         }.start()
-        ui.postDelayed({ loadWeather() }, 30 * 60 * 1000L)
     }
 
     private fun cond(c: Int): Pair<String, Int> {
@@ -494,6 +505,49 @@ class HomeActivity : AppCompatActivity() {
         i.setDataAndType(uri, "application/vnd.android.package-archive")
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(i)
+    }
+
+    private fun applyBackground() {
+        val mode = prefs.getString("bg", "none")
+        bgView.clearColorFilter()
+        if (mode == "senja") {
+            val sky = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xFF14121A.toInt(), 0xFF4A2F33.toInt(), 0xFF9C6038.toInt()))
+            val shade = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x90121110.toInt(), 0xE0121110.toInt()))
+            bgView.scaleType = ImageView.ScaleType.FIT_XY
+            bgView.setImageDrawable(LayerDrawable(arrayOf(sky, shade)))
+        } else if (mode == "photo") {
+            try {
+                val o = BitmapFactory.Options()
+                o.inPreferredConfig = Bitmap.Config.RGB_565
+                val bmp = BitmapFactory.decodeFile(File(filesDir, "bg.jpg").absolutePath, o)
+                if (bmp != null) {
+                    bgView.scaleType = ImageView.ScaleType.CENTER_CROP
+                    bgView.setImageBitmap(bmp)
+                    bgView.setColorFilter(0xB5121110.toInt(), PorterDuff.Mode.SRC_OVER)
+                } else {
+                    bgView.setImageDrawable(null)
+                }
+            } catch (e: Exception) {
+                bgView.setImageDrawable(null)
+            }
+        } else {
+            bgView.setImageDrawable(null)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        tvName.text = prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda"
+        applyBackground()
+        val sig = lat.toString() + lon.toString() + tzName
+        if (locSig != "" && sig != locSig) {
+            for (i in 0..4) times[i] = -1
+            prayerDay = ""
+            prayerTryAt = 0L
+            fetchWeather()
+        }
+        locSig = sig
+        renderWeather()
     }
 
     override fun onDestroy() {
