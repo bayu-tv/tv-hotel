@@ -13,8 +13,7 @@ object Themes {
     // Mengembalikan [bulan Hijriah (0-11, Ramadan = 8), tanggal]
     fun hijri(): IntArray {
         return try {
-            val c = android.icu.util.IslamicCalendar()
-            c.calendarType = android.icu.util.IslamicCalendar.CalendarType.ISLAMIC_UMALQURA
+            val c = android.icu.util.Calendar.getInstance(android.icu.util.ULocale("id_ID@calendar=islamic-umalqura"))
             intArrayOf(c.get(android.icu.util.Calendar.MONTH), c.get(android.icu.util.Calendar.DAY_OF_MONTH))
         } catch (e: Exception) {
             intArrayOf(-1, 0)
