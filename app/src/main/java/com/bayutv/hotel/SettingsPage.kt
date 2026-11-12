@@ -29,17 +29,25 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <label>Nama keluarga di sapaan Beranda</label><input id="family">
 <h2>Kota (cuaca dan jadwal sholat)</h2>
 <label>Kota terpilih</label><input id="city" readonly>
-<label>Cari kota lain</label><input id="q" placeholder="mis. Pontianak, Jakarta, Medan">
+<label>Cari kota atau kecamatan</label><input id="q" placeholder="mis. Tanah Grogot, Pontianak">
 <button onclick="findCity()">Cari</button>
 <div id="res"></div>
+<label>Garis lintang (bisa disesuaikan manual)</label><input id="lat" inputmode="decimal">
+<label>Garis bujur</label><input id="lon" inputmode="decimal">
+<input id="tz" type="hidden">
+<div class="s">Titik ini menentukan cuaca dan jadwal sholat. Cari nama tempat dulu, lalu sesuaikan angka bila perlu.</div>
 <h2>Panduan Rumah</h2>
 <label>Nama Wi-Fi</label><input id="wifi">
 <label>Sandi Wi-Fi</label><input id="wifipass">
 <label>Aturan rumah</label><textarea id="rules" rows="3"></textarea>
 <label>Catatan</label><textarea id="note" rows="3"></textarea>
+<h2>Tema</h2>
+<label>Tema tampilan</label>
+<select id="theme"><option value="auto">Otomatis (Ramadan dan Tahun Baru)</option><option value="default">Standar</option><option value="ramadan">Ramadan</option><option value="newyear">Tahun Baru</option></select>
+<div class="s">Otomatis mengikuti kalender Hijriah di TV, yang bisa berbeda satu hari dari ketetapan pemerintah. Pilih manual bila perlu.</div>
 <h2>Latar Beranda</h2>
 <label>Pilihan latar</label>
-<select id="bg"><option value="none">Polos (bawaan)</option><option value="senja">Senja</option><option value="photo">Foto saya</option></select>
+<select id="bg"><option value="none">Cahaya lembut bergerak (bawaan)</option><option value="plain">Polos</option><option value="senja">Senja</option><option value="photo">Foto saya</option></select>
 <label>Pilih foto dari HP (otomatis dikecilkan)</label>
 <input id="file" type="file" accept="image/*" onchange="photo()">
 <h2>Sumber channel</h2>
@@ -50,8 +58,8 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <div id="msg"></div>
 </div>
 <script>
-var PIN='',LAT='',LON='',TZ='';
-var F=['family','city','wifi','wifipass','rules','note','country','playlist','bg'];
+var PIN='';
+var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme'];
 function g(i){return document.getElementById(i)}
 function api(p,o){o=o||{};o.headers=o.headers||{};o.headers['X-Pin']=PIN;return fetch(p,o)}
 function login(){
@@ -63,21 +71,22 @@ function login(){
   if(!d)return;
   g('lock').style.display='none';g('main').style.display='block';
   F.forEach(function(k){if(d[k]!==undefined)g(k).value=d[k]});
-  LAT=d.lat||'';LON=d.lon||'';TZ=d.tz||''
  }).catch(function(){g('err').textContent='Tidak bisa terhubung ke TV. Pastikan HP satu Wi-Fi dengan TV.'})
 }
 function findCity(){
  var q=g('q').value.trim();if(!q)return;
- fetch('https://geocoding-api.open-meteo.com/v1/search?count=5&language=id&name='+encodeURIComponent(q))
+ fetch('https://geocoding-api.open-meteo.com/v1/search?count=15&language=id&name='+encodeURIComponent(q))
  .then(function(r){return r.json()}).then(function(d){
-  window.RES=d.results||[];var h='';
-  window.RES.forEach(function(x,i){h+='<div class="r" onclick="pick('+i+')">'+x.name+(x.admin1?', '+x.admin1:'')+', '+x.country+'</div>'});
+  var all=d.results||[];
+  var pl=all.filter(function(x){var c=x.feature_code||'';return c.indexOf('PPL')==0||c.indexOf('ADM')==0});
+  window.RES=pl.length?pl:all;var h='';
+  window.RES.forEach(function(x,i){h+='<div class="r" onclick="pick('+i+')">'+x.name+(x.admin2?', '+x.admin2:'')+(x.admin1?', '+x.admin1:'')+'<div class="s">'+x.latitude.toFixed(4)+', '+x.longitude.toFixed(4)+'</div></div>'});
   g('res').innerHTML=h||'<div class="r">Tidak ditemukan</div>'
  }).catch(function(){g('res').innerHTML='<div class="r">Pencarian butuh internet di HP</div>'})
 }
-function pick(i){var x=window.RES[i];g('city').value=x.name;LAT=String(x.latitude);LON=String(x.longitude);TZ=x.timezone;g('res').innerHTML='<div class="r">Dipilih: '+x.name+'</div>'}
+function pick(i){var x=window.RES[i];g('city').value=x.name;g('lat').value=String(x.latitude);g('lon').value=String(x.longitude);g('tz').value=x.timezone;g('res').innerHTML='<div class="r">Dipilih: '+x.name+'</div>'}
 function save(){
- var o={lat:LAT,lon:LON,tz:TZ};F.forEach(function(k){o[k]=g(k).value});
+ var o={};F.forEach(function(k){o[k]=g(k).value});
  api('/api/save',{method:'POST',body:JSON.stringify(o)}).then(function(r){g('msg').textContent=r.ok?'Tersimpan. Lihat layar TV.':'Gagal menyimpan.'})
 }
 function photo(){

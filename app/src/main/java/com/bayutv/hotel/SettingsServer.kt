@@ -21,7 +21,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
     private var fails = 0
     var port = 0
     private val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
-    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg")
+    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme")
 
     fun start(): Boolean {
         for (p in 8080..8090) {
@@ -146,6 +146,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if ((o.getString("city")).isEmpty()) o.put("city", "Pontianak")
             if ((o.getString("country")).isEmpty()) o.put("country", "id")
             if ((o.getString("bg")).isEmpty()) o.put("bg", "none")
+            if ((o.getString("theme")).isEmpty()) o.put("theme", "auto")
             respond(s, 200, "application/json", o.toString().toByteArray())
         } else if (m == "POST" && path == "/api/save") {
             save(JSONObject(String(body, Charsets.UTF_8)))
@@ -173,12 +174,16 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if (!o.has(k)) continue
             var v = o.getString(k).trim().take(500)
             if (k == "lat" || k == "lon") {
-                if (v.toDoubleOrNull() == null) continue
+                val d = v.toDoubleOrNull() ?: continue
+                if (k == "lat" && (d < -90.0 || d > 90.0)) continue
+                if (k == "lon" && (d < -180.0 || d > 180.0)) continue
             }
+            if (k == "tz" && !Regex("^[A-Za-z_/+-]{3,40}$").matches(v)) continue
             if (k == "country") v = v.lowercase().filter { it in 'a'..'z' }.take(2)
             if (k == "playlist" && v.isNotEmpty() && !(v.startsWith("http://") || v.startsWith("https://"))) v = ""
+            if (k == "theme" && v != "auto" && v != "default" && v != "ramadan" && v != "newyear") v = "auto"
             if (k == "bg") {
-                if (v != "none" && v != "senja" && v != "photo") v = "none"
+                if (v != "none" && v != "plain" && v != "senja" && v != "photo") v = "none"
                 if (v == "photo" && !File(ctx.filesDir, "bg.jpg").exists()) v = "none"
             }
             e.putString(k, v)

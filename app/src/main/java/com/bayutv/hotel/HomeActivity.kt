@@ -1,7 +1,10 @@
 package com.bayutv.hotel
 
 import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.AlertDialog
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -9,6 +12,8 @@ import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.media.tv.TvContract
+import android.media.tv.TvInputInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +27,7 @@ import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -47,8 +53,12 @@ class HomeActivity : AppCompatActivity() {
     private val tzName: String get() = prefs.getString("tz", null) ?: "Asia/Pontianak"
     private val repoApi = "https://api.github.com/repos/bayu-tv/tv-hotel/releases/latest"
 
-    private val brass = 0xFFB8975A.toInt()
-    private val brassLight = 0xFFE6C88F.toInt()
+    private var brass = 0xFFB8975A.toInt()
+    private var brassLight = 0xFFE6C88F.toInt()
+    private var skin: ThemeSpec = Themes.DEFAULT
+    private lateinit var decoLayer: FrameLayout
+    private lateinit var tvWelcome: TextView
+    private val decoAnims = ArrayList<android.animation.Animator>()
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
 
@@ -70,6 +80,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var tiles: LinearLayout
     private lateinit var notice: Notice
     private lateinit var bgView: ImageView
+    private lateinit var glow: View
+    private lateinit var glowAnim: ValueAnimator
     private var locSig = ""
     private val cells = ArrayList<Pair<TextView, TextView>>()
     private val times = IntArray(5) { -1 }
@@ -99,7 +111,7 @@ class HomeActivity : AppCompatActivity() {
     private fun box(focused: Boolean): GradientDrawable {
         val g = GradientDrawable()
         g.cornerRadius = dp(16).toFloat()
-        g.setColor(if (focused) 0x30B8975A else 0x14FFFFFF)
+        g.setColor(if (focused) ((brass and 0x00FFFFFF) or 0x30000000) else 0x14FFFFFF)
         g.setStroke(dp(if (focused) 2 else 1), if (focused) brass else 0x22FFFFFF)
         return g
     }
@@ -108,10 +120,10 @@ class HomeActivity : AppCompatActivity() {
         val t = LinearLayout(this)
         t.orientation = LinearLayout.VERTICAL
         t.gravity = Gravity.CENTER
-        val ic = icon(res, 48, mute)
+        val ic = icon(res, 40, mute)
         t.addView(ic)
-        val tx = tv(label, 20f, mute, Typeface.SERIF)
-        tx.setPadding(0, dp(12), 0, 0)
+        val tx = tv(label, 17f, mute, Typeface.SERIF)
+        tx.setPadding(0, dp(10), 0, 0)
         tx.gravity = Gravity.CENTER_HORIZONTAL
         t.addView(tx)
         t.isFocusable = true
@@ -123,12 +135,12 @@ class HomeActivity : AppCompatActivity() {
             val c = if (f) brassLight else mute
             ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
             tx.setTextColor(c)
-            val s = if (f) 1.07f else 1f
-            t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(8).toFloat() else 0f).setDuration(220).start()
+            val s = if (f) 1.05f else 1f
+            t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(5).toFloat() else 0f).setDuration(220).start()
             if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(700).start()
         }
-        val lp = LinearLayout.LayoutParams(dp(190), dp(150))
-        lp.setMargins(dp(10), 0, dp(10), 0)
+        val lp = LinearLayout.LayoutParams(dp(150), dp(112))
+        lp.setMargins(dp(8), 0, dp(8), 0)
         t.layoutParams = lp
         return t
     }
@@ -137,12 +149,38 @@ class HomeActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        skin = Themes.pick(this)
+        brass = skin.accent
+        brassLight = skin.accentLight
         val root = FrameLayout(this)
-        root.setBackgroundColor(0xFF121110.toInt())
+        root.setBackgroundColor(skin.bg)
         bgView = ImageView(this)
         root.addView(bgView, FrameLayout.LayoutParams(-1, -1))
+        glow = View(this)
+        val gd = GradientDrawable()
+        gd.shape = GradientDrawable.OVAL
+        gd.gradientType = GradientDrawable.RADIAL_GRADIENT
+        gd.gradientRadius = dp(520).toFloat()
+        gd.colors = intArrayOf(skin.glow, skin.glow and 0x00FFFFFF)
+        glow.background = gd
+        root.addView(glow, FrameLayout.LayoutParams(dp(1040), dp(1040)))
+        glow.translationX = -dp(300).toFloat()
+        glow.translationY = -dp(520).toFloat()
+        glowAnim = ValueAnimator.ofFloat(0f, 1f)
+        glowAnim.duration = 40000L
+        glowAnim.repeatCount = ValueAnimator.INFINITE
+        glowAnim.repeatMode = ValueAnimator.REVERSE
+        glowAnim.interpolator = LinearInterpolator()
+        glowAnim.addUpdateListener {
+            val f = it.animatedValue as Float
+            glow.translationX = -dp(300) + dp(900) * f
+            glow.translationY = -dp(520) + dp(180) * f
+        }
+        decoLayer = FrameLayout(this)
+        root.addView(decoLayer, FrameLayout.LayoutParams(-1, -1))
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
+        col.clipChildren = false
         col.setPadding(dp(56), dp(32), dp(56), dp(20))
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
 
@@ -150,11 +188,11 @@ class HomeActivity : AppCompatActivity() {
         val top = LinearLayout(this)
         val left = LinearLayout(this)
         left.orientation = LinearLayout.VERTICAL
-        val welcome = tv("SELAMAT DATANG", 13f, brass, Typeface.SANS_SERIF)
-        welcome.letterSpacing = 0.25f
+        tvWelcome = tv("SELAMAT DATANG", 13f, brass, Typeface.SANS_SERIF)
+        tvWelcome.letterSpacing = 0.25f
         tvGreet = tv("", 36f, ivory, Typeface.SERIF)
         tvName = tv(prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda", 36f, brass, Typeface.create(Typeface.SERIF, Typeface.ITALIC))
-        left.addView(welcome)
+        left.addView(tvWelcome)
         left.addView(tvGreet)
         left.addView(tvName)
         val right = LinearLayout(this)
@@ -203,18 +241,27 @@ class HomeActivity : AppCompatActivity() {
         wlp.topMargin = dp(14)
         col.addView(wx, wlp)
 
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.2f))
 
         // Menu
         tiles = LinearLayout(this)
         tiles.gravity = Gravity.CENTER
+        tiles.clipChildren = false
+        tiles.clipToPadding = false
+        tiles.setPadding(0, dp(14), 0, dp(14))
         tiles.addView(tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) })
+        val antenna = tile("TV Antena", R.drawable.ic_antenna) { openAntenna(false) }
+        antenna.setOnLongClickListener {
+            openAntenna(true)
+            true
+        }
+        tiles.addView(antenna)
         tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
         tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
         tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) })
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
 
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
 
         // Jadwal sholat
         val pray = LinearLayout(this)
@@ -279,6 +326,7 @@ class HomeActivity : AppCompatActivity() {
         tvGreet.text = if (h < 4) "Selamat Malam," else if (h < 11) "Selamat Pagi," else if (h < 15) "Selamat Siang," else if (h < 18) "Selamat Sore," else "Selamat Malam,"
         tvDate.text = SimpleDateFormat("EEEE, d MMMM yyyy", Locale("id", "ID")).format(now)
         tvHijri.text = hijri(now)
+        tvWelcome.text = welcomeText()
         val today = SimpleDateFormat("dd-MM-yyyy", Locale.US).format(now)
         if (today != prayerDay && System.currentTimeMillis() - prayerTryAt > 60000L) loadPrayer()
         updatePrayerUI(h * 60 + m)
@@ -302,7 +350,7 @@ class HomeActivity : AppCompatActivity() {
             cells[i].second.setTextColor(if (hi) brassLight else ivory)
             cells[i].second.text = fmt(times[i])
         }
-        tvCd.text = prayNames[nx] + " dalam " + (diff / 60) + " jam " + (diff % 60) + " menit"
+        tvCd.text = extraLine(nowMin) + prayNames[nx] + " dalam " + (diff / 60) + " jam " + (diff % 60) + " menit"
     }
 
     private fun httpGet(u: String): String? {
@@ -507,9 +555,247 @@ class HomeActivity : AppCompatActivity() {
         startActivity(i)
     }
 
+    private fun dur(m: Int): String = (m / 60).toString() + " jam " + (m % 60) + " menit"
+
+    private fun welcomeText(): String {
+        if (skin.id == "ramadan") {
+            val h = Themes.hijri()
+            return if (h[0] == 8) "RAMADAN KAREEM  \u00B7  HARI KE-" + h[1] else "MARHABAN YA RAMADAN"
+        }
+        if (skin.id == "newyear") {
+            val c = Calendar.getInstance()
+            val y = if (c.get(Calendar.MONTH) == Calendar.DECEMBER) c.get(Calendar.YEAR) + 1 else c.get(Calendar.YEAR)
+            return "SELAMAT TAHUN BARU " + y
+        }
+        return "SELAMAT DATANG"
+    }
+
+    private fun extraLine(nowMin: Int): String {
+        val sep = "   \u00B7   "
+        if (skin.id == "ramadan") {
+            val imsak = times[0] - 10
+            val magrib = times[3]
+            return if (nowMin < imsak) "Imsak dalam " + dur(imsak - nowMin) + sep
+            else if (nowMin < magrib) "Berbuka dalam " + dur(magrib - nowMin) + sep
+            else "Imsak besok dalam " + dur(imsak + 1440 - nowMin) + sep
+        }
+        if (skin.id == "newyear") {
+            val c = Calendar.getInstance()
+            if (c.get(Calendar.MONTH) == Calendar.DECEMBER) {
+                val left = 31 - c.get(Calendar.DAY_OF_MONTH)
+                val y = c.get(Calendar.YEAR) + 1
+                return (if (left == 0) "Malam pergantian tahun menuju " + y else "Menuju " + y + ": " + left + " hari lagi") + sep
+            }
+            return "Selamat Tahun Baru!" + sep
+        }
+        return ""
+    }
+
+    private fun buildDeco() {
+        for (a in decoAnims) a.cancel()
+        decoAnims.clear()
+        decoLayer.removeAllViews()
+        if (skin.id == "ramadan") {
+            val cr = ImageView(this)
+            cr.setImageResource(R.drawable.ic_crescent)
+            cr.setColorFilter(skin.accent, PorterDuff.Mode.SRC_IN)
+            cr.alpha = 0.10f
+            val clp = FrameLayout.LayoutParams(dp(300), dp(300), Gravity.BOTTOM or Gravity.END)
+            clp.setMargins(0, 0, dp(40), dp(30))
+            decoLayer.addView(cr, clp)
+            val offs = intArrayOf(-110, 0, 110)
+            val lens = intArrayOf(34, 58, 42)
+            for (i in 0..2) {
+                val ll = LinearLayout(this)
+                ll.orientation = LinearLayout.VERTICAL
+                ll.gravity = Gravity.CENTER_HORIZONTAL
+                val str = View(this)
+                str.setBackgroundColor((skin.accent and 0x00FFFFFF) or 0x66000000)
+                ll.addView(str, LinearLayout.LayoutParams(dp(1), dp(lens[i])))
+                val lan = ImageView(this)
+                lan.setImageResource(R.drawable.ic_lantern)
+                lan.setColorFilter(skin.accentLight, PorterDuff.Mode.SRC_IN)
+                ll.addView(lan, LinearLayout.LayoutParams(dp(40), dp(40)))
+                ll.translationX = dp(offs[i]).toFloat()
+                decoLayer.addView(ll, FrameLayout.LayoutParams(dp(40), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+                ll.pivotX = dp(20).toFloat()
+                ll.pivotY = 0f
+                val a = ObjectAnimator.ofFloat(ll, "rotation", -4f, 4f)
+                a.duration = 3400L + i * 500L
+                a.repeatCount = ValueAnimator.INFINITE
+                a.repeatMode = ValueAnimator.REVERSE
+                a.start()
+                decoAnims.add(a)
+            }
+        } else if (skin.id == "newyear") {
+            val dm = resources.displayMetrics
+            val rnd = java.util.Random(2027L)
+            for (i in 0 until 14) {
+                val sz = dp(10 + rnd.nextInt(14))
+                val sp = ImageView(this)
+                sp.setImageResource(R.drawable.ic_spark)
+                sp.setColorFilter(if (i % 3 == 0) 0xFFFFFFFF.toInt() else skin.accentLight, PorterDuff.Mode.SRC_IN)
+                sp.alpha = 0.2f
+                val lp = FrameLayout.LayoutParams(sz, sz)
+                lp.leftMargin = rnd.nextInt(dm.widthPixels - sz)
+                lp.topMargin = rnd.nextInt(dm.heightPixels - sz)
+                decoLayer.addView(sp, lp)
+                val tw = ObjectAnimator.ofFloat(sp, "alpha", 0.15f, 0.75f)
+                tw.duration = 1800L + rnd.nextInt(1600)
+                tw.repeatCount = ValueAnimator.INFINITE
+                tw.repeatMode = ValueAnimator.REVERSE
+                tw.startDelay = rnd.nextInt(2000).toLong()
+                tw.start()
+                val fl = ObjectAnimator.ofFloat(sp, "translationY", 0f, -dp(40).toFloat())
+                fl.duration = 7000L + rnd.nextInt(4000)
+                fl.repeatCount = ValueAnimator.INFINITE
+                fl.repeatMode = ValueAnimator.REVERSE
+                fl.start()
+                decoAnims.add(tw)
+                decoAnims.add(fl)
+            }
+        }
+    }
+
+    // Uji: apakah aplikasi ini bisa melihat dan membaca tuner antena bawaan TV?
+    private fun runTunerTest() {
+        val sb = StringBuilder()
+        try {
+            val granted = checkSelfPermission("android.permission.READ_TV_LISTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED
+            sb.append("Izin baca daftar TV: " + (if (granted) "diberikan" else "TIDAK diberikan") + "\n")
+            if (!granted) {
+                try {
+                    requestPermissions(arrayOf("android.permission.READ_TV_LISTINGS"), 77)
+                } catch (e: Exception) {
+                }
+            }
+            val tim = getSystemService(Context.TV_INPUT_SERVICE) as android.media.tv.TvInputManager
+            val inputs = tim.tvInputList
+            sb.append("Input TV terlihat: " + inputs.size + "\n")
+            for (i in inputs) {
+                val type = when (i.type) {
+                    TvInputInfo.TYPE_TUNER -> "TUNER"
+                    TvInputInfo.TYPE_HDMI -> "HDMI"
+                    TvInputInfo.TYPE_OTHER -> "LAINNYA"
+                    else -> "tipe " + i.type
+                }
+                sb.append("- " + type + ": " + i.loadLabel(this) + "\n")
+            }
+            val tuner = inputs.firstOrNull { it.type == TvInputInfo.TYPE_TUNER }
+            if (tuner == null) {
+                sb.append("\nTidak ada input bertipe TUNER yang terlihat.\n")
+            } else {
+                try {
+                    val cur = contentResolver.query(
+                        TvContract.buildChannelsUriForInput(tuner.id),
+                        arrayOf(android.provider.BaseColumns._ID, TvContract.Channels.COLUMN_DISPLAY_NAME),
+                        null, null, null
+                    )
+                    if (cur == null) {
+                        sb.append("\nDaftar channel antena: tidak bisa dibaca.\n")
+                    } else {
+                        sb.append("\nChannel antena terbaca: " + cur.count + "\n")
+                        var n = 0
+                        while (cur.moveToNext() && n < 8) {
+                            sb.append("  " + cur.getString(1) + "\n")
+                            n++
+                        }
+                        cur.close()
+                    }
+                } catch (e: SecurityException) {
+                    sb.append("\nDaftar channel antena DITOLAK sistem (SecurityException).\n")
+                } catch (e: Exception) {
+                    sb.append("\nGagal membaca channel: " + e.javaClass.simpleName + "\n")
+                }
+            }
+        } catch (e: Exception) {
+            sb.append("Gagal: " + e.javaClass.simpleName)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Hasil uji tuner")
+            .setMessage(sb.toString())
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun tryLiveTv(): Boolean {
+        return try {
+            val i = Intent(Intent.ACTION_VIEW, TvContract.Channels.CONTENT_URI)
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun launchComponent(flat: String): Boolean {
+        return try {
+            val cn = ComponentName.unflattenFromString(flat) ?: return false
+            val i = Intent(Intent.ACTION_MAIN)
+            i.addCategory("android.intent.category.LEANBACK_LAUNCHER")
+            i.component = cn
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // Membuka aplikasi antena / Live TV bawaan TV. Aplikasi pihak ketiga tidak bisa memutar tuner langsung.
+    private fun openAntenna(choose: Boolean) {
+        val saved = prefs.getString("antenna", null)
+        if (!choose && saved != null) {
+            val ok = if (saved == "system") tryLiveTv() else launchComponent(saved)
+            if (ok) return
+            notice.show("Tidak terbuka", "Tahan tombol OK pada menu TV Antena untuk memilih aplikasi antena lagi.", 5000L)
+            return
+        }
+        val pm = packageManager
+        val q = Intent(Intent.ACTION_MAIN)
+        q.addCategory("android.intent.category.LEANBACK_LAUNCHER")
+        val apps = pm.queryIntentActivities(q, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .sortedBy { it.loadLabel(pm).toString().lowercase() }
+        val names = ArrayList<String>()
+        names.add("Live TV bawaan sistem (coba)")
+        names.add("Uji tuner antena (diagnostik)")
+        for (a in apps) names.add(a.loadLabel(pm).toString())
+        AlertDialog.Builder(this)
+            .setTitle("Pilih aplikasi antena atau Live TV")
+            .setItems(names.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    prefs.edit().putString("antenna", "system").apply()
+                    if (!tryLiveTv()) notice.show("Tidak terbuka", "Live TV bawaan tidak bisa dibuka langsung. Pilih aplikasi dari daftar (tahan OK pada menu TV Antena).", 6000L)
+                } else if (which == 1) {
+                    runTunerTest()
+                } else {
+                    val ri = apps[which - 2]
+                    val cn = ComponentName(ri.activityInfo.packageName, ri.activityInfo.name)
+                    prefs.edit().putString("antenna", cn.flattenToString()).apply()
+                    launchComponent(cn.flattenToString())
+                }
+            }
+            .show()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        glowAnim.cancel()
+        for (a in decoAnims) a.cancel()
+    }
+
     private fun applyBackground() {
         val mode = prefs.getString("bg", "none")
         bgView.clearColorFilter()
+        val wantGlow = mode == "none"
+        glow.visibility = if (wantGlow) View.VISIBLE else View.GONE
+        if (wantGlow) {
+            if (!glowAnim.isStarted) glowAnim.start()
+        } else {
+            glowAnim.cancel()
+        }
         if (mode == "senja") {
             val sky = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xFF14121A.toInt(), 0xFF4A2F33.toInt(), 0xFF9C6038.toInt()))
             val shade = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x90121110.toInt(), 0xE0121110.toInt()))
@@ -537,6 +823,11 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (Themes.pick(this).id != skin.id) {
+            recreate()
+            return
+        }
+        buildDeco()
         tvName.text = prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda"
         applyBackground()
         val sig = lat.toString() + lon.toString() + tzName
