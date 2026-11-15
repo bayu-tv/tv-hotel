@@ -31,6 +31,14 @@ TV Live membaca channel antena DVB-T2 yang sudah dipindai oleh pengaturan TV (An
 
 Beberapa TV (termasuk sebagian Xiaomi) tidak mengizinkan aplikasi pihak ketiga membaca daftar channel antena. Bila begitu, kategori Antena berisi pintasan **Buka aplikasi TV Antena**. Cek kemampuan TV Anda lewat Beranda, TV Antena, **Uji tuner antena**.
 
+### Satu channel, beberapa sumber
+
+Channel dengan nama sama digabung menjadi satu entri dan dicoba berurutan: **antena → alamat internet → aplikasi resmi**.
+RCTI, MNCTV, GTV, iNews (RCTI+) serta SCTV dan Indosiar (Vidio) selalu ada di daftar. Bila antena/internet tidak tersedia,
+memilih channel itu membuka aplikasi resminya (langsung ke siaran bila aplikasinya mendukung). Saat berpindah dengan atas/bawah,
+aplikasi tidak langsung dibuka: tekan **OK** untuk membukanya. Tekan **Back** di aplikasi tersebut untuk kembali; daftar channel langsung terbuka.
+Cek dukungan di TV lewat Beranda, TV Antena, **Uji pintasan RCTI+ / Vidio**.
+
 ## Film
 
 - Katalog TMDB: Populer, Sedang tayang, Film Indonesia, Anime, Akan tayang, Daftar saya (isi kunci TMDB gratis di Pengaturan lewat HP).

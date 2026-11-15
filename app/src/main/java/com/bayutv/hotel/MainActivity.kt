@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
         numBuf = ""
         if (n != null) {
             val k = numberOf.entries.firstOrNull { it.value == n }?.key
-            if (k != null) play(k, zapKeys) else showBanner("Channel " + n + " tidak ada", 1500L)
+            if (k != null) play(k, zapKeys, true) else showBanner("Channel " + n + " tidak ada", 1500L)
         }
     }
 
@@ -274,7 +274,15 @@ class MainActivity : AppCompatActivity() {
                 (row.getChildAt(0) as TextView).text = (numberOf[ch.key] ?: 0).toString()
                 Images.loadUrl(ch.logo, row.getChildAt(1) as ImageView, 128, true)
                 val nm = row.getChildAt(2) as TextView
-                val extra = if (ch.isAntenna) "  · antena " + ch.number else if (ch.status == "geo") "  · belum dicek" else ""
+                val srcs = groups[ch.key] ?: emptyList()
+                val hasInet = srcs.any { !it.isAntenna && !it.isApp }
+                val extra = when {
+                    ch.isAntenna && hasInet -> "  · antena+internet"
+                    ch.isAntenna -> "  · antena " + ch.number
+                    ch.isApp -> "  · ↗ " + (ch.group ?: "")
+                    ch.status == "geo" -> "  · belum dicek"
+                    else -> ""
+                }
                 nm.text = Playlist.display(ch.name) + extra
                 nm.setTextColor(if (ch.key == curKey) brassLight else ivory)
                 (row.getChildAt(3) as TextView).text = if (favs.contains(ch.key)) "★" else ""
@@ -351,30 +359,79 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().remove("trying").apply()
         val vis = visibleKeys()
         val start = if (last != null && last != trying && byKey.containsKey(last) && last !in hidden) last
-        else vis.firstOrNull { it != trying && byKey[it]?.isAntenna != true && it != Antenna.OPEN_KEY } ?: vis.firstOrNull()
-        if (start != null) play(start, vis)
+        else vis.firstOrNull { it != trying && byKey[it]?.isAntenna != true && byKey[it]?.isApp != true && it != Antenna.OPEN_KEY }
+            ?: vis.firstOrNull()
+        if (start != null) play(start, vis, true)
         if (trying != null) {
             val bad = byKey[trying]
             if (bad != null) notice.show("Dilewati", "Channel \"" + Playlist.display(bad.name) + "\" tadi membuat aplikasi tertutup, jadi tidak diputar otomatis.", 7000L)
         }
     }
 
+    private fun appChannel(t: AppLinks.Target): Channel =
+        Channel(t.name, "app:" + t.name, null, t.provider, null, null, "Indonesia", "Nasional", "app")
+
+    // Satu entri bisa punya beberapa sumber: antena -> internet -> aplikasi resmi (RCTI+/Vidio)
     private fun setData(list: List<Channel>) {
         scan = Playlist.loadScan(this)
         val g = Playlist.group(list)
-        val reps = ArrayList<Channel>()
-        for ((k, members) in g) {
-            val want = scan[k]
-            reps.add(if (!want.isNullOrEmpty()) (members.firstOrNull { it.url == want } ?: members[0]) else members[0])
+        val inetByMk = HashMap<String, String>()
+        for (k in g.keys) {
+            val mk = AppLinks.mergeKey(k)
+            if (!inetByMk.containsKey(mk)) inetByMk[mk] = k
         }
         val gm = HashMap<String, List<Channel>>()
-        for ((k, v) in g) gm[k] = v
-        for (a in antenna) gm[a.key] = listOf(a)
+        val consumed = HashSet<String>()
+        val appUsed = HashSet<String>()
+        val antReps = ArrayList<Channel>()
+        for (a in antenna) {
+            antReps.add(a)
+            if (a.key == Antenna.OPEN_KEY) {
+                gm[a.key] = listOf(a)
+                continue
+            }
+            val c = ArrayList<Channel>()
+            c.add(a)
+            val ik = inetByMk[AppLinks.mergeKey(a.name)]
+            val members = if (ik != null) g[ik] else null
+            if (ik != null && members != null) {
+                c.addAll(members)
+                consumed.add(ik)
+            }
+            val t = AppLinks.targetFor(a.name)
+            if (t != null && !appUsed.contains(t.name)) {
+                c.add(appChannel(t))
+                appUsed.add(t.name)
+            }
+            gm[a.key] = c
+        }
+        val inetReps = ArrayList<Channel>()
+        for ((k, members) in g) {
+            if (consumed.contains(k)) continue
+            val want = scan[k]
+            inetReps.add(if (!want.isNullOrEmpty()) (members.firstOrNull { it.url == want } ?: members[0]) else members[0])
+            val c = ArrayList<Channel>(members)
+            val t = AppLinks.targetFor(k)
+            if (t != null && !appUsed.contains(t.name)) {
+                c.add(appChannel(t))
+                appUsed.add(t.name)
+            }
+            gm[k] = c
+        }
+        val appReps = ArrayList<Channel>()
+        for (t in AppLinks.TARGETS) {
+            if (appUsed.contains(t.name)) continue
+            val c = appChannel(t)
+            appReps.add(c)
+            gm[c.key] = listOf(c)
+        }
         groups = gm
-        all = antenna + reps
+        all = antReps + appReps + inetReps
         byKey = all.associateBy { it.key }
         hidden.clear()
-        for ((k, v) in scan) if (v.isEmpty() && byKey.containsKey(k)) hidden.add(k)
+        for ((k, v) in scan) {
+            if (v.isEmpty() && byKey.containsKey(k) && groups[k]?.any { it.isAntenna || it.isApp } != true) hidden.add(k)
+        }
         rebuild()
     }
 
@@ -495,6 +552,10 @@ class MainActivity : AppCompatActivity() {
         status.text = ""
         val k = curKey ?: return
         val ch = byKey[k] ?: return
+        if (groups[k]?.any { it.isAntenna || it.isApp } == true) {
+            status.text = "Semua sumber " + Playlist.display(ch.name) + " gagal: " + why
+            return
+        }
         failStreak++
         if (failStreak >= 3) {
             // Beberapa gagal beruntun: kemungkinan internet TV bermasalah, jangan sembunyikan apa pun
@@ -510,6 +571,20 @@ class MainActivity : AppCompatActivity() {
         ui.postDelayed({ if (panel.visibility != View.VISIBLE && curKey == k) zap(lastDir) }, 2600L)
     }
 
+    private val antTimeout = Runnable { nextOrStatus("Sinyal antena lemah.") }
+
+    // Sumber sekarang gagal: coba sumber berikutnya, bila habis tampilkan pesan saja
+    private fun nextOrStatus(msg: String) {
+        ui.removeCallbacks(antTimeout)
+        if (candPos + 1 < cands.size) {
+            candPos++
+            status.text = msg + " Mencoba sumber lain..."
+            startCandidate()
+        } else {
+            status.text = msg
+        }
+    }
+
     private fun ensureTvView(): TvView? {
         tvView?.let { return it }
         return try {
@@ -518,10 +593,11 @@ class MainActivity : AppCompatActivity() {
             root.addView(t, 1, FrameLayout.LayoutParams(-1, -1))
             t.setCallback(object : TvView.TvInputCallback() {
                 override fun onConnectionFailed(inputId: String?) {
-                    status.text = "Gagal tersambung ke tuner antena."
+                    nextOrStatus("Gagal tersambung ke tuner antena.")
                 }
 
                 override fun onVideoAvailable(inputId: String?) {
+                    ui.removeCallbacks(antTimeout)
                     status.text = ""
                     notice.hide()
                     curKey?.let { prefs.edit().putString("last", it).remove("trying").apply() }
@@ -544,7 +620,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun play(key: String, list: List<String>) {
+    private fun stopTv() {
+        ui.removeCallbacks(antTimeout)
+        tvView?.let {
+            try {
+                it.reset()
+            } catch (e: Exception) {
+            }
+            it.visibility = View.GONE
+        }
+    }
+
+    private var viaZap = false
+    private var pendingApp: String? = null
+    private var returnFromApp = false
+
+    private fun play(key: String, list: List<String>, zapped: Boolean = false) {
         val ch = byKey[key] ?: return
         if (key == Antenna.OPEN_KEY) {
             if (!Antenna.openSaved(this)) {
@@ -554,65 +645,104 @@ class MainActivity : AppCompatActivity() {
             return
         }
         curKey = key
+        pendingApp = null
+        viaZap = zapped
         if (list.isNotEmpty()) zapKeys = list
         val num = numberOf[key]
         showBanner((if (num != null) num.toString() + "   " else "") + Playlist.display(ch.name), 3000L)
         notice.hide()
         chanAdapter.notifyDataSetChanged()
-        prefs.edit().putString("trying", key).commit()
+        if (!ch.isApp) prefs.edit().putString("trying", key).commit()
 
-        if (ch.isAntenna) {
-            player?.stop()
-            playerView.visibility = View.INVISIBLE
-            val t = ensureTvView()
-            if (t == null) {
-                notice.show("Antena", "Tuner tidak bisa dipakai di dalam aplikasi.", 5000L)
-                return
-            }
-            t.visibility = View.VISIBLE
-            status.text = "Menyetel antena..."
-            val input = ch.tunerInput ?: return
-            try {
-                t.tune(input, TvContract.buildChannelUri(ch.tunerId))
-            } catch (e: Exception) {
-                status.text = "Gagal menyetel: " + e.javaClass.simpleName
-            }
-            return
-        }
-        tvView?.let {
-            try {
-                it.reset()
-            } catch (e: Exception) {
-            }
-            it.visibility = View.GONE
-        }
-        playerView.visibility = View.VISIBLE
         val members = groups[key] ?: listOf(ch)
+        val inet = members.filter { !it.isAntenna && !it.isApp }
         val pref = scan[key]
-        val first = if (!pref.isNullOrEmpty()) members.firstOrNull { it.url == pref } ?: ch else ch
-        cands = (listOf(first) + members.filter { it.url != first.url }).take(5)
+        val first = if (!pref.isNullOrEmpty()) inet.firstOrNull { it.url == pref } else null
+        // Bila ada aplikasi resmi sebagai cadangan, jangan lama mencoba alamat internet
+        val maxInet = if (members.any { it.isApp }) 2 else 5
+        val inetOrdered = (if (first != null) listOf(first) + inet.filter { it !== first } else inet).take(maxInet)
+        cands = members.filter { it.isAntenna } + inetOrdered + members.filter { it.isApp }
         candPos = 0
-        status.text = "Memuat..."
         startCandidate()
     }
 
     private fun startCandidate() {
+        ui.removeCallbacks(antTimeout)
+        val c = cands.getOrNull(candPos) ?: return
+        when {
+            c.isAntenna -> playAntenna(c)
+            c.isApp -> openApp(c)
+            else -> playInternet(c)
+        }
+    }
+
+    private fun playAntenna(c: Channel) {
+        player?.stop()
+        playerView.visibility = View.INVISIBLE
+        val t = ensureTvView()
+        val input = c.tunerInput
+        if (t == null || input == null) {
+            nextOrStatus("Tuner tidak bisa dipakai di dalam aplikasi.")
+            return
+        }
+        t.visibility = View.VISIBLE
+        status.text = "Menyetel antena..."
+        try {
+            t.tune(input, TvContract.buildChannelUri(c.tunerId))
+        } catch (e: Exception) {
+            nextOrStatus("Gagal menyetel antena.")
+            return
+        }
+        // Ada sumber internet/aplikasi cadangan: pindah bila gambar tak muncul dalam 10 detik
+        if (candPos + 1 < cands.size) ui.postDelayed(antTimeout, 10000L)
+    }
+
+    private fun openApp(c: Channel) {
+        player?.stop()
+        stopTv()
+        status.text = ""
+        val t = AppLinks.targetFor(c.name) ?: return
+        if (viaZap) {
+            // Saat pindah channel dengan atas/bawah, jangan langsung melompat ke aplikasi lain
+            pendingApp = curKey
+            notice.show(Playlist.display(c.name), "Tekan OK untuk menonton di " + t.provider + ".\nAtas/bawah: lanjut ganti channel", 6000L)
+            return
+        }
+        launchApp(t)
+    }
+
+    private fun launchApp(t: AppLinks.Target) {
+        pendingApp = null
+        prefs.edit().remove("trying").apply()
+        returnFromApp = true
+        when (AppLinks.open(this, t)) {
+            0 -> {
+                returnFromApp = false
+                notice.show(t.name, "Aplikasi " + t.provider + " belum terpasang di TV. Pasang dari Play Store, lalu coba lagi.", 6000L)
+            }
+            1 -> android.widget.Toast.makeText(this, "Pilih " + t.name + " di menu Live " + t.provider, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun playInternet(c: Channel) {
+        stopTv()
+        playerView.visibility = View.VISIBLE
+        status.text = "Memuat..."
         val p = player ?: return
-        val ch = cands.getOrNull(candPos) ?: return
         try {
             val dsf = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(8000)
                 .setReadTimeoutMs(8000)
-            val ua = Playlist.clean(ch.userAgent)
-            val ref = Playlist.clean(ch.referrer)
+            val ua = Playlist.clean(c.userAgent)
+            val ref = Playlist.clean(c.referrer)
             if (ua != null) dsf.setUserAgent(ua)
             if (ref != null) dsf.setDefaultRequestProperties(mapOf("Referer" to ref))
-            p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(ch.url)))
+            p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(c.url)))
             p.prepare()
             p.playWhenReady = true
         } catch (e: Exception) {
-            onChannelFailed(e.javaClass.simpleName)
+            if (candPos + 1 < cands.size) nextOrStatus("Sumber rusak.") else onChannelFailed(e.javaClass.simpleName)
         }
     }
 
@@ -623,7 +753,7 @@ class MainActivity : AppCompatActivity() {
         if (list.isEmpty()) return
         val i = list.indexOf(curKey)
         val next = if (i < 0) 0 else ((i + d) % list.size + list.size) % list.size
-        play(list[next], zapKeys)
+        play(list[next], zapKeys, true)
     }
 
     private fun showBanner(t: String, ms: Long) {
@@ -697,7 +827,18 @@ class MainActivity : AppCompatActivity() {
                 zap(1)
                 return true
             }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT -> {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                val pa = pendingApp
+                val t = if (pa != null && pa == curKey) AppLinks.targetFor(byKey[pa]?.name ?: "") else null
+                if (t != null) {
+                    notice.hide()
+                    launchApp(t)
+                } else {
+                    showPanel()
+                }
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
                 showPanel()
                 return true
             }
@@ -732,7 +873,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (all.isNotEmpty() && byKey[curKey ?: ""]?.isAntenna != true) player?.playWhenReady = true
+        val c = cands.getOrNull(candPos)
+        if (all.isNotEmpty() && c != null && !c.isAntenna && !c.isApp && !returnFromApp) player?.playWhenReady = true
     }
 
     override fun onStop() {
@@ -746,8 +888,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRestart() {
         super.onRestart()
-        val k = curKey
-        if (k != null && byKey[k]?.isAntenna == true) play(k, zapKeys)
+        if (returnFromApp) {
+            // Kembali dari RCTI+/Vidio: langsung buka daftar di posisi channel tadi
+            returnFromApp = false
+            ui.post { showPanel() }
+            return
+        }
+        val c = cands.getOrNull(candPos)
+        if (c != null && c.isAntenna) startCandidate()
     }
 
     override fun onDestroy() {

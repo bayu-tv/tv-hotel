@@ -22,6 +22,8 @@ data class Channel(
 ) {
     val key: String = if (tunerInput != null) "ant:" + tunerId else Playlist.key(name)
     val isAntenna: Boolean get() = tunerInput != null
+    // Pintasan ke aplikasi resmi (RCTI+/Vidio); url berbentuk "app:NAMA"
+    val isApp: Boolean get() = url.startsWith("app:")
 }
 
 object Playlist {

@@ -777,18 +777,37 @@ class HomeActivity : AppCompatActivity() {
     // Menu TV Antena: buka, ganti aplikasi, atau uji tuner. Tahan OK = langsung buka.
     private fun openAntennaMenu() {
         val label = savedLabel()
-        if (label == null) {
-            chooseAntennaApp()
-            return
-        }
         AlertDialog.Builder(this)
             .setTitle("TV Antena")
-            .setItems(arrayOf("Antena di dalam aplikasi (uji hybrid)", "Buka " + label, "Ganti aplikasi antena", "Uji tuner antena (info)")) { _, which ->
-                if (which == 0) startActivity(Intent(this, AntennaActivity::class.java))
-                else if (which == 1) launchSaved()
-                else if (which == 2) chooseAntennaApp()
-                else runTunerTest()
+            .setItems(arrayOf(
+                "Antena di dalam aplikasi (uji hybrid)",
+                if (label != null) "Buka " + label else "Pilih aplikasi antena",
+                "Ganti aplikasi antena",
+                "Uji tuner antena (info)",
+                "Uji pintasan RCTI+ / Vidio"
+            )) { _, which ->
+                when (which) {
+                    0 -> startActivity(Intent(this, AntennaActivity::class.java))
+                    1 -> if (label != null) launchSaved() else chooseAntennaApp()
+                    2 -> chooseAntennaApp()
+                    3 -> runTunerTest()
+                    else -> testAppLinks()
+                }
             }
+            .show()
+    }
+
+    // Menampilkan apakah RCTI+/Vidio di TV ini bisa dibuka langsung ke siaran tiap channel
+    private fun testAppLinks() {
+        val r = try {
+            AppLinks.report(this)
+        } catch (e: Exception) {
+            "Gagal memeriksa: " + e.javaClass.simpleName
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Uji pintasan RCTI+ / Vidio")
+            .setMessage(r + "\n\n\u2713 = aplikasi menerima alamat siaran channel itu. Selain itu aplikasi dibuka di halaman utama.")
+            .setPositiveButton("OK", null)
             .show()
     }
 
