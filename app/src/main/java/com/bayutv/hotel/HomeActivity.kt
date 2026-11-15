@@ -797,17 +797,54 @@ class HomeActivity : AppCompatActivity() {
             .show()
     }
 
-    // Menampilkan apakah RCTI+/Vidio di TV ini bisa dibuka langsung ke siaran tiap channel
+    // Uji pintasan: tampilkan format alamat/layar yang diterima RCTI+ dan Vidio, lalu bisa dicoba satu per satu
     private fun testAppLinks() {
-        val r = try {
-            AppLinks.report(this)
+        val res = try {
+            AppLinks.diagnose(this)
         } catch (e: Exception) {
-            "Gagal memeriksa: " + e.javaClass.simpleName
+            Pair("Gagal memeriksa: " + e.javaClass.simpleName, emptyList<AppLinks.Trial>())
         }
-        AlertDialog.Builder(this)
+        val b = AlertDialog.Builder(this)
             .setTitle("Uji pintasan RCTI+ / Vidio")
-            .setMessage(r + "\n\n\u2713 = aplikasi menerima alamat siaran channel itu. Selain itu aplikasi dibuka di halaman utama.")
-            .setPositiveButton("OK", null)
+            .setMessage(res.first + "\n\nPilih \"Coba satu per satu\" untuk mencari cara yang langsung membuka siaran.")
+            .setNegativeButton("Tutup", null)
+        if (res.second.isNotEmpty()) b.setPositiveButton("Coba satu per satu") { _, _ -> chooseTrial(res.second) }
+        b.show()
+    }
+
+    private fun chooseTrial(trials: List<AppLinks.Trial>) {
+        AlertDialog.Builder(this)
+            .setTitle("Pilih lalu lihat hasilnya")
+            .setItems(trials.map { it.label }.toTypedArray()) { _, w ->
+                val t = trials[w]
+                prefs.edit().putInt("trial_last", w).apply()
+                val ok = if (t.url != null) AppLinks.openUrl(this, t.pkg, t.url) else AppLinks.openActivity(this, t.pkg, t.cls ?: "")
+                if (!ok) {
+                    notice.show("Tidak bisa dibuka", t.label, 4000L)
+                } else if (t.url != null && t.target != null) {
+                    // Simpan sebagai kandidat; dikonfirmasi saat kembali ke Beranda
+                    pendingTrial = t
+                }
+            }
+            .show()
+    }
+
+    private var pendingTrial: AppLinks.Trial? = null
+
+    // Kembali dari percobaan alamat: tanya apakah siaran langsung terbuka
+    private fun confirmTrial() {
+        val t = pendingTrial ?: return
+        pendingTrial = null
+        val target = t.target ?: return
+        val url = t.url ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Hasil percobaan")
+            .setMessage("Tadi " + target.provider + " langsung menampilkan siaran " + target.name + "?\n\n" + url)
+            .setPositiveButton("Ya, pakai cara ini") { _, _ ->
+                AppLinks.savePattern(this, target, url)
+                notice.show(null, "Disimpan. Channel " + target.provider + " akan langsung membuka siarannya.", 4000L)
+            }
+            .setNegativeButton("Tidak", null)
             .show()
     }
 
@@ -887,6 +924,7 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (pendingTrial != null) ui.postDelayed({ confirmTrial() }, 600L)
         if (Themes.pick(this).id != skin.id) {
             recreate()
             return

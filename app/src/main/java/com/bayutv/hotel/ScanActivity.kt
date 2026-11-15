@@ -36,6 +36,8 @@ class ScanActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
     private var groups: Map<String, List<Channel>> = emptyMap()
     private var regionOf: Map<String, String> = emptyMap()
+    private var failHidden: Set<String> = emptySet()
+    private val revived = HashSet<String>()
     private var scan: MutableMap<String, String> = HashMap()
     private var scope = 1
     private var running = false
@@ -171,16 +173,20 @@ class ScanActivity : AppCompatActivity() {
         for (c in list) r[c.key] = c.region
         regionOf = r
         scan = Playlist.loadScan(this)
+        val f = Playlist.loadFails(this)
+        failHidden = f.filterValues { Playlist.hiddenByFails(it) }.keys
     }
 
-    private fun deadCount(): Int = groups.keys.count { scan[it] == "" }
+    private fun isHidden(k: String): Boolean = scan[k] == "" || failHidden.contains(k)
+
+    private fun deadCount(): Int = groups.keys.count { isHidden(it) }
 
     private fun keysFor(s: Int): List<String> {
         if (s == 0) {
             val last = prefs.getString("last", null)
             return if (last != null && groups.containsKey(last)) listOf(last) else emptyList()
         }
-        if (s == 1) return groups.keys.filter { scan[it] == "" }
+        if (s == 1) return groups.keys.filter { isHidden(it) }
         if (s == 2) return groups.keys.filter { regionOf[it] == "Indonesia" || regionOf[it] == "Playlist Saya" }
         return groups.keys.toList()
     }
@@ -313,8 +319,9 @@ class ScanActivity : AppCompatActivity() {
     private fun onResult(k: String, name: String, found: String?, first: Boolean) {
         if (!running) return
         doneN++
-        val wasDead = scan[k] == ""
+        val wasDead = isHidden(k)
         synchronized(scan) { scan[k] = found ?: "" }
+        if (found != null) revived.add(k)
         if (found == null) {
             badN++
             addLog("\u2715 " + name + ": tidak ada sumber aktif (disembunyikan)", red)
@@ -342,6 +349,7 @@ class ScanActivity : AppCompatActivity() {
         pool?.shutdown()
         stopAnims()
         Playlist.saveScan(this, scan)
+        Playlist.clearFails(this, revived)
         title.text = "Pindai selesai"
         btn.text = "OK untuk pindai lagi"
         addLog("Selesai: " + (okN + fixN) + " siap ditonton, " + badN + " disembunyikan.", ivory)
@@ -353,6 +361,7 @@ class ScanActivity : AppCompatActivity() {
         pool?.shutdownNow()
         stopAnims()
         synchronized(scan) { Playlist.saveScan(this, scan) }
+        Playlist.clearFails(this, revived)
         title.text = "Dihentikan"
         btn.text = "OK untuk melanjutkan pindai"
         renderOptions()

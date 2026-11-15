@@ -2,6 +2,7 @@ package com.bayutv.hotel
 
 import android.content.Context
 import java.io.File
+import java.util.TimeZone
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -18,7 +19,8 @@ data class Channel(
     // Diisi hanya untuk channel antena (tuner DVB-T2 bawaan TV)
     val tunerInput: String? = null,
     val tunerId: Long = -1L,
-    val number: String = ""
+    val number: String = "",
+    val origin: String? = null
 ) {
     val key: String = if (tunerInput != null) "ant:" + tunerId else Playlist.key(name)
     val isAntenna: Boolean get() = tunerInput != null
@@ -27,6 +29,56 @@ data class Channel(
 }
 
 object Playlist {
+    // Identitas browser Android TV, dipakai bila playlist tidak mencantumkan User-Agent
+    const val DEFAULT_UA = "Mozilla/5.0 (Linux; Android 11; MiTV-MOOQ0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Safari/537.36"
+
+    /** Header permintaan untuk satu channel: User-Agent, Referer, dan Origin (diturunkan dari Referer bila kosong). */
+    fun headers(ch: Channel): Map<String, String> {
+        val m = LinkedHashMap<String, String>()
+        m["User-Agent"] = clean(ch.userAgent) ?: DEFAULT_UA
+        val ref = clean(ch.referrer)
+        if (ref != null) m["Referer"] = ref
+        val org = clean(ch.origin) ?: ref?.let { originOf(it) }
+        if (org != null) m["Origin"] = org
+        return m
+    }
+
+    private fun originOf(url: String): String? {
+        return try {
+            val u = URL(url)
+            u.protocol + "://" + u.host + (if (u.port > 0) ":" + u.port else "")
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Format "alamat|Referer=...&User-Agent=..." yang umum di playlist komunitas.
+     * Mengembalikan (alamat bersih, referer, user-agent, origin).
+     */
+    fun splitPipe(raw: String): Array<String?> {
+        val i = raw.indexOf('|')
+        if (i < 0) return arrayOf(raw, null, null, null)
+        var ref: String? = null
+        var ua: String? = null
+        var org: String? = null
+        for (part in raw.substring(i + 1).split('&')) {
+            val eq = part.indexOf('=')
+            if (eq <= 0) continue
+            val k = part.substring(0, eq).trim().lowercase()
+            val v = try {
+                java.net.URLDecoder.decode(part.substring(eq + 1).trim(), "UTF-8")
+            } catch (e: Exception) {
+                part.substring(eq + 1).trim()
+            }
+            when (k) {
+                "referer", "referrer" -> ref = v
+                "user-agent", "useragent" -> ua = v
+                "origin" -> org = v
+            }
+        }
+        return arrayOf(raw.substring(0, i).trim(), ref, ua, org)
+    }
     // Daftar yang sudah diperiksa GitHub Actions (branch "data" di repo aplikasi ini)
     fun serverUrl(): String = "https://raw.githubusercontent.com/" + BuildConfig.REPO + "/data/channels.m3u"
 
@@ -100,6 +152,7 @@ object Playlist {
         var group: String? = null
         var ref: String? = null
         var ua: String? = null
+        var org: String? = null
         var status = ""
         for (raw in text.lineSequence()) {
             val line = raw.trim()
@@ -111,6 +164,9 @@ object Playlist {
                 status = attr(line, "bayu-status") ?: ""
                 ref = null
                 ua = null
+                org = null
+            } else if (line.startsWith("#EXTVLCOPT:http-origin=")) {
+                org = line.substringAfter("=")
             } else if (line.startsWith("#EXTVLCOPT:http-referrer=")) {
                 ref = line.substringAfter("=")
             } else if (line.startsWith("#EXTVLCOPT:http-user-agent=")) {
@@ -126,7 +182,14 @@ object Playlist {
                     cat = mapCategory(g)
                 }
                 if (cat.isEmpty()) cat = "Lainnya"
-                out.add(Channel(name, line, logo, group, ref, ua, region, cat, status))
+                val sp = splitPipe(line)
+                val url = sp[0] ?: line
+                out.add(
+                    Channel(
+                        name, url, logo, group, sp[1] ?: ref, sp[2] ?: ua, region, cat, status,
+                        null, -1L, "", sp[3] ?: org
+                    )
+                )
                 name = null
             }
         }
@@ -218,6 +281,63 @@ object Playlist {
         f.renameTo(File(ctx.filesDir, "scan.txt"))
     }
 
+    // ---- Catatan gagal putar ----
+    // Channel baru disembunyikan setelah gagal pada 2 hari berbeda, lalu dicoba lagi otomatis setelah 3 hari.
+    // Nilai: [jumlah hari gagal, hari terakhir gagal, waktu mulai disembunyikan (ms)]
+    private const val RETRY_MS = 3L * 24L * 3600000L
+
+    fun today(): Long {
+        val now = System.currentTimeMillis()
+        return (now + TimeZone.getDefault().getOffset(now)) / 86400000L
+    }
+
+    fun loadFails(ctx: Context): MutableMap<String, LongArray> {
+        val m = HashMap<String, LongArray>()
+        val f = File(ctx.filesDir, "fails.txt")
+        if (!f.exists()) return m
+        for (line in f.readLines()) {
+            val p = line.split('\t')
+            if (p.size < 4) continue
+            val a = p[1].toLongOrNull() ?: continue
+            val b = p[2].toLongOrNull() ?: continue
+            val c = p[3].toLongOrNull() ?: continue
+            m[p[0]] = longArrayOf(a, b, c)
+        }
+        return m
+    }
+
+    @Synchronized
+    fun saveFails(ctx: Context, m: Map<String, LongArray>) {
+        val f = File(ctx.filesDir, "fails.txt.tmp")
+        f.writeText(m.entries.joinToString("\n") { it.key + "\t" + it.value[0] + "\t" + it.value[1] + "\t" + it.value[2] })
+        f.renameTo(File(ctx.filesDir, "fails.txt"))
+    }
+
+    fun recordFail(m: MutableMap<String, LongArray>, key: String) {
+        val v = m[key] ?: longArrayOf(0L, 0L, 0L)
+        val d = today()
+        if (v[1] != d) {
+            v[0] = v[0] + 1
+            v[1] = d
+        }
+        val now = System.currentTimeMillis()
+        if (v[0] >= 2 && (v[2] == 0L || now - v[2] >= RETRY_MS)) v[2] = now
+        m[key] = v
+    }
+
+    fun hiddenByFails(v: LongArray?): Boolean {
+        if (v == null || v[0] < 2 || v[2] == 0L) return false
+        return System.currentTimeMillis() - v[2] < RETRY_MS
+    }
+
+    fun clearFails(ctx: Context, keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        val m = loadFails(ctx)
+        var changed = false
+        for (k in keys) if (m.remove(k) != null) changed = true
+        if (changed) saveFails(ctx, m)
+    }
+
     // ---- Favorit ----
     fun favorites(ctx: Context): MutableSet<String> = HashSet(prefs(ctx).getStringSet("fav", emptySet()) ?: emptySet())
 
@@ -239,12 +359,10 @@ object Playlist {
         var url = u
         for (hop in 0..4) {
             val c = URL(url).openConnection() as HttpURLConnection
-            c.connectTimeout = 5000
-            c.readTimeout = 5000
+            c.connectTimeout = 6000
+            c.readTimeout = 6000
             c.instanceFollowRedirects = false
-            c.setRequestProperty("User-Agent", clean(ch.userAgent) ?: "Mozilla/5.0 (Linux; Android 11) BayuTV")
-            val ref = clean(ch.referrer)
-            if (ref != null) c.setRequestProperty("Referer", ref)
+            for ((k, v) in headers(ch)) c.setRequestProperty(k, v)
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location")

@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private var byKey: Map<String, Channel> = emptyMap()
     private var groups: Map<String, List<Channel>> = emptyMap()
     private var scan: MutableMap<String, String> = HashMap()
+    private var fails: MutableMap<String, LongArray> = HashMap()
     private val hidden = HashSet<String>()
     private val pendingDead = ArrayList<String>()
     private var numberOf: Map<String, Int> = emptyMap()
@@ -374,6 +375,14 @@ class MainActivity : AppCompatActivity() {
     // Satu entri bisa punya beberapa sumber: antena -> internet -> aplikasi resmi (RCTI+/Vidio)
     private fun setData(list: List<Channel>) {
         scan = Playlist.loadScan(this)
+        if (!prefs.getBoolean("fails_v1", false)) {
+            // Versi lama menyimpan channel gagal sebagai mati permanen; mulai bersih sekali
+            val cleaned = HashMap(scan.filterValues { it.isNotEmpty() })
+            Playlist.saveScan(this, cleaned)
+            scan = cleaned
+            prefs.edit().putBoolean("fails_v1", true).apply()
+        }
+        fails = Playlist.loadFails(this)
         val g = Playlist.group(list)
         val inetByMk = HashMap<String, String>()
         for (k in g.keys) {
@@ -429,8 +438,9 @@ class MainActivity : AppCompatActivity() {
         all = antReps + appReps + inetReps
         byKey = all.associateBy { it.key }
         hidden.clear()
-        for ((k, v) in scan) {
-            if (v.isEmpty() && byKey.containsKey(k) && groups[k]?.any { it.isAntenna || it.isApp } != true) hidden.add(k)
+        for (k in byKey.keys) {
+            if (groups[k]?.any { it.isAntenna || it.isApp } == true) continue
+            if (scan[k] == "" || Playlist.hiddenByFails(fails[k])) hidden.add(k)
         }
         rebuild()
     }
@@ -531,17 +541,20 @@ class MainActivity : AppCompatActivity() {
         val k = curKey ?: return
         prefs.edit().putString("last", k).remove("trying").apply()
         val ch = cands.getOrNull(candPos) ?: return
-        var changed = false
+        // Internet terbukti jalan: catat kegagalan channel sebelumnya (bukan langsung mati permanen)
+        var failsChanged = false
         if (pendingDead.isNotEmpty()) {
-            for (d in pendingDead) scan[d] = ""
+            for (d in pendingDead) Playlist.recordFail(fails, d)
             pendingDead.clear()
-            changed = true
+            failsChanged = true
+        }
+        if (fails.remove(k) != null) failsChanged = true
+        if (failsChanged) {
+            val fcopy = HashMap(fails)
+            Thread { Playlist.saveFails(this, fcopy) }.start()
         }
         if (scan[k] != ch.url) {
             scan[k] = ch.url
-            changed = true
-        }
-        if (changed) {
             val copy = HashMap(scan)
             Thread { Playlist.saveScan(this, copy) }.start()
         }
@@ -567,7 +580,7 @@ class MainActivity : AppCompatActivity() {
         pendingDead.add(k)
         rebuild()
         if (panel.visibility == View.VISIBLE) applyFilter()
-        notice.show("Siaran tidak tersedia", Playlist.display(ch.name) + ": " + why + ".\nChannel disembunyikan. Pindai Sinyal untuk mencarinya lagi.", 3500L)
+        notice.show("Siaran tidak tersedia", Playlist.display(ch.name) + ": " + why + ".\nDisembunyikan sementara dan akan dicoba lagi otomatis.", 3500L)
         ui.postDelayed({ if (panel.visibility != View.VISIBLE && curKey == k) zap(lastDir) }, 2600L)
     }
 
@@ -730,14 +743,14 @@ class MainActivity : AppCompatActivity() {
         status.text = "Memuat..."
         val p = player ?: return
         try {
+            val h = Playlist.headers(c)
             val dsf = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(8000)
-                .setReadTimeoutMs(8000)
-            val ua = Playlist.clean(c.userAgent)
-            val ref = Playlist.clean(c.referrer)
-            if (ua != null) dsf.setUserAgent(ua)
-            if (ref != null) dsf.setDefaultRequestProperties(mapOf("Referer" to ref))
+                .setConnectTimeoutMs(10000)
+                .setReadTimeoutMs(10000)
+                .setUserAgent(h["User-Agent"])
+            val extra = h.filterKeys { it != "User-Agent" }
+            if (extra.isNotEmpty()) dsf.setDefaultRequestProperties(extra)
             p.setMediaSource(DefaultMediaSourceFactory(dsf).createMediaSource(MediaItem.fromUri(c.url)))
             p.prepare()
             p.playWhenReady = true

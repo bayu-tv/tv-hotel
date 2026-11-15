@@ -25,7 +25,47 @@ import urllib.parse
 import urllib.request
 
 RAW = "https://raw.githubusercontent.com/iptv-org"
-UA = "Mozilla/5.0 (Linux; Android 11; MiTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+UA = "Mozilla/5.0 (Linux; Android 11; MiTV-MOOQ0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Safari/537.36"
+
+# Urutan teratas untuk kategori Nasional (sisanya alfabetis)
+NATIONAL_ORDER = ["tvri", "rcti", "sctv", "indosiar", "mnctv", "gtv", "antv", "trans tv", "trans7", "trans 7", "tvone", "tv one",
+                  "metro tv", "kompas tv", "inews", "net", "rtv", "cnn indonesia", "cnbc indonesia", "beritasatu", "moji",
+                  "mdtv", "nusantara tv", "garuda tv", "magna", "btv", "jak tv", "daai"]
+
+
+def national_rank(name):
+    low = name.lower()
+    for i, k in enumerate(NATIONAL_ORDER):
+        if low == k or low.startswith(k + " ") or low.startswith(k + "("):
+            return i
+    return len(NATIONAL_ORDER)
+
+
+def split_pipe(url):
+    """Format komunitas: alamat|Referer=...&User-Agent=...&Origin=..."""
+    if "|" not in url:
+        return url, None, None, None
+    base, _, rest = url.partition("|")
+    ref = ua = org = None
+    for part in rest.split("&"):
+        k, _, v = part.partition("=")
+        k = k.strip().lower()
+        v = urllib.parse.unquote(v.strip())
+        if k in ("referer", "referrer"):
+            ref = v
+        elif k in ("user-agent", "useragent"):
+            ua = v
+        elif k == "origin":
+            org = v
+    return base.strip(), ref, ua, org
+
+
+def origin_of(url):
+    try:
+        u = urllib.parse.urlsplit(url)
+        return u.scheme + "://" + u.netloc if u.scheme and u.netloc else None
+    except Exception:
+        return None
 
 # Kategori iptv-org -> nama kategori di aplikasi (urutan = urutan tampil)
 CATEGORY_MAP = [
@@ -117,15 +157,22 @@ def parse_m3u(text, origin):
             attrs = dict(ATTR.findall(line.split(",", 1)[0]))
             name = line.rsplit(",", 1)[-1].strip() if "," in line else "?"
             cur = {"name": name, "tvg_id": attrs.get("tvg-id", ""), "logo": attrs.get("tvg-logo", ""),
-                   "group": attrs.get("group-title", ""), "ref": None, "ua": None, "origin": origin}
+                   "group": attrs.get("group-title", ""), "ref": None, "ua": None, "org": None, "origin": origin}
         elif line.startswith("#EXTVLCOPT:http-referrer="):
             if cur is not None:
                 cur["ref"] = line.split("=", 1)[1]
         elif line.startswith("#EXTVLCOPT:http-user-agent="):
             if cur is not None:
                 cur["ua"] = line.split("=", 1)[1]
+        elif line.startswith("#EXTVLCOPT:http-origin="):
+            if cur is not None:
+                cur["org"] = line.split("=", 1)[1]
         elif not line.startswith("#") and cur is not None:
-            cur["url"] = line
+            url, ref, ua, org = split_pipe(line)
+            cur["url"] = url
+            cur["ref"] = ref or cur["ref"]
+            cur["ua"] = ua or cur["ua"]
+            cur["org"] = org or cur["org"]
             out.append(cur)
             cur = None
     return out
@@ -149,10 +196,13 @@ def quality(n):
 
 # ---------- Pemeriksa alamat ----------
 
-def fetch(url, ref, ua, limit, timeout):
+def fetch(url, ref, ua, limit, timeout, org=None):
     h = {"User-Agent": ua or UA}
     if ref:
         h["Referer"] = ref
+    o = org or (origin_of(ref) if ref else None)
+    if o:
+        h["Origin"] = o
     req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.geturl(), r.read(limit)
@@ -160,11 +210,11 @@ def fetch(url, ref, ua, limit, timeout):
 
 def check(stream, timeout):
     """Hasil: 'ok', 'geo' (ditolak, mungkin hanya untuk IP Indonesia) atau 'dead'."""
-    url, ref, ua = stream["url"], stream["ref"], stream["ua"]
+    url, ref, ua, org = stream["url"], stream["ref"], stream["ua"], stream.get("org")
     if not url.startswith("http"):
         return "dead"
     try:
-        final, body = fetch(url, ref, ua, 65536, timeout)
+        final, body = fetch(url, ref, ua, 65536, timeout, org)
         text = body.decode("latin-1", "replace")
         for _ in range(3):
             if not text.lstrip().startswith("#EXTM3U"):
@@ -177,7 +227,7 @@ def check(stream, timeout):
                 return "dead"
             master = "#EXT-X-STREAM-INF" in text
             full = urllib.parse.urljoin(final, nxt)
-            final, body = fetch(full, ref, ua, 65536 if master else 4096, timeout)
+            final, body = fetch(full, ref, ua, 65536 if master else 4096, timeout, org)
             if not master:
                 return "ok" if len(body) > 0 else "dead"
             text = body.decode("latin-1", "replace")
@@ -344,7 +394,11 @@ def main():
         cats = sorted({c for (r, c) in by_cat if r == region}, key=lambda c: seen_order.index(c) if c in seen_order else 99)
         for c in cats:
             gs = by_cat[(region, c)]
-            gs.sort(key=lambda g: (rank.get(g[0]["status"], 2), g[0]["name"].lower()))
+            if region == "Indonesia":
+                # Stasiun nasional utama di atas, lalu yang terverifikasi, lalu alfabetis
+                gs.sort(key=lambda g: (national_rank(g[0]["name"]), rank.get(g[0]["status"], 2), g[0]["name"].lower()))
+            else:
+                gs.sort(key=lambda g: (rank.get(g[0]["status"], 2), g[0]["name"].lower()))
             if region == "Internasional":
                 gs = gs[:limit]
             stats.append((region, c, len(gs), sum(1 for g in gs if g[0]["status"] == "ok")))
@@ -357,6 +411,8 @@ def main():
                         lines.append("#EXTVLCOPT:http-referrer=" + e["ref"])
                     if e["ua"]:
                         lines.append("#EXTVLCOPT:http-user-agent=" + e["ua"])
+                    if e.get("org"):
+                        lines.append("#EXTVLCOPT:http-origin=" + e["org"])
                     lines.append(e["url"])
 
     with open(os.path.join(args.out, "channels.m3u"), "w", encoding="utf-8") as f:
