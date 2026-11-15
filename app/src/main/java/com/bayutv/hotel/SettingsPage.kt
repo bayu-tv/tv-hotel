@@ -41,6 +41,14 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <label>Sandi Wi-Fi</label><input id="wifipass">
 <label>Aturan rumah</label><textarea id="rules" rows="3"></textarea>
 <label>Catatan</label><textarea id="note" rows="3"></textarea>
+<h2>Arah Antena</h2>
+<div class="s">Cari tower TV digital terdekat lewat aplikasi resmi <b>SinyalTVDigital</b> (atau Google Maps), lalu salin koordinatnya. Bisa tempel langsung format "lintang, bujur" (contoh bentuknya: -0.12345, 117.12345) ke kolom Lintang.</div>
+<label>Nama tower (opsional)</label><input id="tower_name" placeholder="mis. Tower Trans / TVRI">
+<label>Lintang tower (latitude)</label><input id="tower_lat" placeholder="contoh: -0.12345" oninput="splitCoord()">
+<label>Bujur tower (longitude)</label><input id="tower_lon" placeholder="contoh: 117.12345">
+<button type="button" onclick="openCompass()">Buka kompas di HP</button>
+<div class="s">Kompas memakai sensor HP. Simpan dulu ke TV agar layar "Arah &amp; Sinyal Antena" di TV ikut menampilkan arahnya.</div>
+<div id="cmsg" class="s"></div>
 <h2>Tema</h2>
 <label>Tema tampilan</label>
 <select id="theme"><option value="auto">Otomatis (Ramadan dan Tahun Baru)</option><option value="default">Standar</option><option value="ramadan">Ramadan</option><option value="newyear">Tahun Baru</option></select>
@@ -68,7 +76,18 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 </div>
 <script>
 var PIN='';
-var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme','tmdb','jf_url','jf_user','jf_pass'];
+var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme','tmdb','jf_url','jf_user','jf_pass','tower_name','tower_lat','tower_lon'];
+var REPO='';
+function splitCoord(){var v=g('tower_lat').value;if(v.indexOf(',')>0&&v.split(',').length==2){var p=v.split(',');g('tower_lat').value=p[0].trim();g('tower_lon').value=p[1].trim()}}
+function openCompass(){
+ var la=g('lat').value,lo=g('lon').value,tl=g('tower_lat').value,tn=g('tower_lon').value;
+ if(!la||!lo){g('cmsg').textContent='Isi dulu lokasi rumah di bagian Kota.';return}
+ if(!tl||!tn){g('cmsg').textContent='Isi dulu lintang dan bujur tower.';return}
+ if(!REPO){g('cmsg').textContent='Alamat repo belum diketahui.';return}
+ var p=REPO.split('/');
+ var u='https://'+p[0].toLowerCase()+'.github.io/'+p[1]+'/kompas.html?lat='+encodeURIComponent(la)+'&lon='+encodeURIComponent(lo)+'&tlat='+encodeURIComponent(tl)+'&tlon='+encodeURIComponent(tn)+'&name='+encodeURIComponent(g('tower_name').value);
+ window.open(u,'_blank');
+}
 function g(i){return document.getElementById(i)}
 function api(p,o){o=o||{};o.headers=o.headers||{};o.headers['X-Pin']=PIN;return fetch(p,o)}
 function login(){
@@ -80,6 +99,7 @@ function login(){
   if(!d)return;
   g('lock').style.display='none';g('main').style.display='block';
   F.forEach(function(k){if(d[k]!==undefined)g(k).value=d[k]});
+  if(d.repo)REPO=d.repo;
  }).catch(function(){g('err').textContent='Tidak bisa terhubung ke TV. Pastikan HP satu Wi-Fi dengan TV.'})
 }
 function findCity(){

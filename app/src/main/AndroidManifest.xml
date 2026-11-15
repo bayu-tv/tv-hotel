@@ -55,6 +55,11 @@
             android:screenOrientation="landscape" />
 
         <activity
+            android:name=".AntennaAimActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+
+        <activity
             android:name=".VodPlayerActivity"
             android:exported="false"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout"

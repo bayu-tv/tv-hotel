@@ -292,7 +292,7 @@ class HomeActivity : AppCompatActivity() {
         tvCd = tv("", 15f, mute, Typeface.SANS_SERIF)
         tvCd.setPadding(dp(8), dp(8), 0, 0)
         col.addView(tvCd)
-        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat: Aladhan (Kemenag RI).", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF)
+        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF)
         tvNote.setPadding(dp(8), dp(4), 0, 0)
         col.addView(tvNote)
 
@@ -780,6 +780,7 @@ class HomeActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("TV Antena")
             .setItems(arrayOf(
+                "Arah & sinyal antena",
                 "Antena di dalam aplikasi (uji hybrid)",
                 if (label != null) "Buka " + label else "Pilih aplikasi antena",
                 "Ganti aplikasi antena",
@@ -787,10 +788,11 @@ class HomeActivity : AppCompatActivity() {
                 "Uji pintasan RCTI+ / Vidio"
             )) { _, which ->
                 when (which) {
-                    0 -> startActivity(Intent(this, AntennaActivity::class.java))
-                    1 -> if (label != null) launchSaved() else chooseAntennaApp()
-                    2 -> chooseAntennaApp()
-                    3 -> runTunerTest()
+                    0 -> startActivity(Intent(this, AntennaAimActivity::class.java))
+                    1 -> startActivity(Intent(this, AntennaActivity::class.java))
+                    2 -> if (label != null) launchSaved() else chooseAntennaApp()
+                    3 -> chooseAntennaApp()
+                    4 -> runTunerTest()
                     else -> testAppLinks()
                 }
             }

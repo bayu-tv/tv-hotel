@@ -21,7 +21,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
     private var fails = 0
     var port = 0
     private val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
-    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass")
+    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass", "tower_name", "tower_lat", "tower_lon")
 
     fun start(): Boolean {
         for (p in 8080..8090) {
@@ -148,6 +148,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if ((o.getString("bg")).isEmpty()) o.put("bg", "none")
             if ((o.getString("theme")).isEmpty()) o.put("theme", "auto")
             o.put("jf_pass", "")
+            o.put("repo", BuildConfig.REPO)
             respond(s, 200, "application/json", o.toString().toByteArray())
         } else if (m == "POST" && path == "/api/save") {
             save(JSONObject(String(body, Charsets.UTF_8)))
@@ -175,10 +176,15 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
         for (k in keys) {
             if (!o.has(k)) continue
             var v = o.getString(k).trim().take(500)
-            if (k == "lat" || k == "lon") {
+            if (k == "lat" || k == "lon" || k == "tower_lat" || k == "tower_lon") {
+                if (k.startsWith("tower") && v.isEmpty()) {
+                    e.putString(k, "")
+                    continue
+                }
+                v = v.replace(',', '.')
                 val d = v.toDoubleOrNull() ?: continue
-                if (k == "lat" && (d < -90.0 || d > 90.0)) continue
-                if (k == "lon" && (d < -180.0 || d > 180.0)) continue
+                if (k.endsWith("lat") && (d < -90.0 || d > 90.0)) continue
+                if (k.endsWith("lon") && (d < -180.0 || d > 180.0)) continue
             }
             if (k == "tz" && !Regex("^[A-Za-z_/+-]{3,40}$").matches(v)) continue
             if (k == "country") v = v.lowercase().filter { it in 'a'..'z' }.take(2)

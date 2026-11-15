@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Kompas Antena · Bayu TV</title>
+<style>
+  body{margin:0;background:#121110;color:#efe8da;font-family:system-ui,-apple-system,sans-serif;text-align:center}
+  h1{font-family:Georgia,serif;color:#b8975a;font-weight:normal;margin:18px 0 4px;font-size:24px}
+  .s{color:#a79f90;font-size:14px;margin:6px 18px}
+  #dial{position:relative;width:280px;height:280px;margin:18px auto}
+  #ring{position:absolute;inset:0;border:3px solid #3a352e;border-radius:50%}
+  #arrow{position:absolute;left:50%;top:50%;width:0;height:0;transition:transform .15s linear}
+  #arrow:before{content:"";position:absolute;left:-14px;top:-118px;border-left:14px solid transparent;border-right:14px solid transparent;border-bottom:40px solid #e6c88f}
+  #arrow:after{content:"";position:absolute;left:-4px;top:-80px;width:8px;height:80px;background:#e6c88f;border-radius:4px}
+  #dot{position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px;background:#e6c88f;border-radius:50%}
+  #mark{position:absolute;left:50%;top:-6px;width:4px;height:22px;margin-left:-2px;background:#efe8da;border-radius:2px}
+  #big{font-size:34px;color:#e6c88f;margin:4px}
+  #state{font-size:18px;margin:8px}
+  .ok{color:#8fc79a}.warn{color:#c9706a}
+  button{background:#b8975a;color:#121110;border:0;border-radius:10px;font-size:17px;padding:12px 22px;margin:12px}
+  a{color:#e6c88f}
+</style>
+</head>
+<body>
+<h1>Kompas Antena</h1>
+<div class="s" id="info">Memuat...</div>
+<div id="dial"><div id="ring"></div><div id="mark"></div><div id="arrow"></div><div id="dot"></div></div>
+<div id="big">-</div>
+<div id="state" class="s">Tekan tombol di bawah untuk menyalakan kompas.</div>
+<button id="go" onclick="start()">Nyalakan kompas</button>
+<div class="s">Pegang HP mendatar setinggi dada, jauhi benda logam dan speaker. Putar badan sampai panah lurus ke atas (garis putih): itulah arah tower. Arahkan muka antena ke sana.</div>
+<div class="s"><a id="map" target="_blank">Lihat garis rumah ke tower di Google Maps</a></div>
+<script>
+var q={};location.search.substring(1).split('&').forEach(function(p){var i=p.indexOf('=');if(i>0)q[p.substring(0,i)]=decodeURIComponent(p.substring(i+1).replace(/\+/g,' '))});
+var la=parseFloat(q.lat),lo=parseFloat(q.lon),tla=parseFloat(q.tlat),tlo=parseFloat(q.tlon);
+function r(d){return d*Math.PI/180}
+function deg(x){return x*180/Math.PI}
+var names=['Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'];
+var target=null;
+if(isNaN(la)||isNaN(lo)||isNaN(tla)||isNaN(tlo)){
+  document.getElementById('info').textContent='Koordinat belum lengkap. Buka halaman ini dari tombol "Buka kompas" di Pengaturan Bayu TV.';
+}else{
+  var y=Math.sin(r(tlo-lo))*Math.cos(r(tla));
+  var x=Math.cos(r(la))*Math.sin(r(tla))-Math.sin(r(la))*Math.cos(r(tla))*Math.cos(r(tlo-lo));
+  target=(deg(Math.atan2(y,x))+360)%360;
+  var a=Math.sin(r(tla-la)/2)*Math.sin(r(tla-la)/2)+Math.cos(r(la))*Math.cos(r(tla))*Math.sin(r(tlo-lo)/2)*Math.sin(r(tlo-lo)/2);
+  var km=6371*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  document.getElementById('info').textContent=(q.name?q.name+': ':'Tower: ')+km.toFixed(1).replace('.',',')+' km ke arah '+names[Math.round(target/45)%8]+' ('+Math.round(target)+'°)';
+  document.getElementById('big').textContent=Math.round(target)+'° '+names[Math.round(target/45)%8];
+  document.getElementById('map').href='https://www.google.com/maps/dir/?api=1&origin='+la+','+lo+'&destination='+tla+','+tlo+'&travelmode=walking';
+  document.getElementById('arrow').style.transform='rotate('+target+'deg)';
+}
+var got=false;
+function onOri(e){
+  var h=null;
+  if(e.webkitCompassHeading!=null)h=e.webkitCompassHeading;
+  else if((e.absolute||e.type==='deviceorientationabsolute')&&e.alpha!=null)h=360-e.alpha;
+  if(h==null||target==null)return;
+  var ang=(screen.orientation&&screen.orientation.angle)||window.orientation||0;
+  h=(h+ang+360)%360;
+  got=true;
+  var rel=(target-h+360)%360;
+  document.getElementById('arrow').style.transform='rotate('+rel+'deg)';
+  var off=rel>180?rel-360:rel;
+  var st=document.getElementById('state');
+  if(Math.abs(off)<=8){st.textContent='✓ Tepat menghadap tower';st.className='ok'}
+  else{st.textContent=(off>0?'Putar ke kanan ':'Putar ke kiri ')+Math.abs(Math.round(off))+'°';st.className='s'}
+}
+function listen(){
+  window.addEventListener('deviceorientationabsolute',onOri,true);
+  window.addEventListener('deviceorientation',onOri,true);
+  document.getElementById('go').style.display='none';
+  document.getElementById('state').textContent='Menunggu sensor kompas...';
+  setTimeout(function(){if(!got){var st=document.getElementById('state');st.className='warn';st.textContent='Sensor kompas tidak terbaca di browser ini. Pakai aplikasi Kompas HP dan arahkan ke '+(target==null?'-':Math.round(target)+'°')+'.'}},4000);
+}
+function start(){
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+    DeviceOrientationEvent.requestPermission().then(function(s){if(s==='granted')listen();else document.getElementById('state').textContent='Izin sensor ditolak.'}).catch(listen);
+  }else listen();
+}
+</script>
+</body>
+</html>

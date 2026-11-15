@@ -39,6 +39,12 @@ memilih channel itu membuka aplikasi resminya (langsung ke siaran bila aplikasin
 aplikasi tidak langsung dibuka: tekan **OK** untuk membukanya. Tekan **Back** di aplikasi tersebut untuk kembali; daftar channel langsung terbuka.
 Cek dukungan di TV lewat Beranda, TV Antena, **Uji pintasan RCTI+ / Vidio**.
 
+### Arah & sinyal antena
+
+Beranda, TV Antena, **Arah & sinyal antena**: arah dan jarak ke tower (koordinat tower diisi di Pengaturan lewat HP)
+dan meter sinyal per mux yang terus diperbarui saat antena diputar. Tombol **Buka kompas di HP** membuka
+`https://<akun>.github.io/<repo>/kompas.html`, jadi aktifkan GitHub Pages: Settings, Pages, Deploy from a branch, `data`, `/ (root)`.
+
 ## Film
 
 - Katalog TMDB: Populer, Sedang tayang, Film Indonesia, Anime, Akan tayang, Daftar saya (isi kunci TMDB gratis di Pengaturan lewat HP).
