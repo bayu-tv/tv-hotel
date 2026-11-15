@@ -1,0 +1,48 @@
+name: Perbarui daftar channel
+
+# Mengumpulkan, memeriksa, dan mengelompokkan channel, lalu menaruh hasilnya
+# di branch "data". TV mengunduh daftar ini, jadi tidak perlu build APK baru.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "tools/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: channels
+  cancel-in-progress: true
+
+jobs:
+  channels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kumpulkan dan periksa channel
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/build_channels.py --out out
+
+      - name: Terbitkan ke branch data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd out
+          git init -q
+          git checkout -q -b data
+          git config user.name "bayu-tv-bot"
+          git config user.email "bayu-tv-bot@users.noreply.github.com"
+          git add .
+          git commit -q -m "Daftar channel $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
