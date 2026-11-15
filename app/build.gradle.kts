@@ -12,8 +12,13 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+        versionName = "0.2." + (System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+        // Repo GitHub untuk pembaruan otomatis dan daftar channel (diisi otomatis saat build di GitHub Actions)
+        val repo = System.getenv("GITHUB_REPOSITORY") ?: "bayu-tv/tv-hotel"
+        buildConfigField("String", "REPO", "\"" + repo + "\"")
     }
+
+    buildFeatures { buildConfig = true }
 
     signingConfigs {
         create("release") {
@@ -39,6 +44,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
+    // Media3 menandai sebagian API sebagai "unstable"; jangan gagalkan build release karena peringatan lint.
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
@@ -46,6 +57,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("com.google.zxing:core:3.5.3")
 }

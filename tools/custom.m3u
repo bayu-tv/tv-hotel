@@ -1,0 +1,5 @@
+#EXTM3U
+# Tambahkan channel sendiri di sini (alamat yang Anda berhak menontonnya).
+# Contoh:
+# #EXTINF:-1 tvg-id="NamaChannel.id" tvg-logo="https://contoh/logo.png" group-title="news",Nama Channel
+# https://contoh.com/live/index.m3u8

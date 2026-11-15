@@ -21,7 +21,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
     private var fails = 0
     var port = 0
     private val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
-    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme")
+    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass")
 
     fun start(): Boolean {
         for (p in 8080..8090) {
@@ -147,6 +147,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if ((o.getString("country")).isEmpty()) o.put("country", "id")
             if ((o.getString("bg")).isEmpty()) o.put("bg", "none")
             if ((o.getString("theme")).isEmpty()) o.put("theme", "auto")
+            o.put("jf_pass", "")
             respond(s, 200, "application/json", o.toString().toByteArray())
         } else if (m == "POST" && path == "/api/save") {
             save(JSONObject(String(body, Charsets.UTF_8)))
@@ -169,6 +170,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
     private fun save(o: JSONObject) {
         val oldLoc = prefs.getString("lat", "") + prefs.getString("lon", "") + prefs.getString("tz", "")
         val oldSrc = prefs.getString("playlist", "") + prefs.getString("country", "")
+        val oldJf = prefs.getString("jf_url", "") + prefs.getString("jf_user", "") + prefs.getString("jf_pass", "")
         val e = prefs.edit()
         for (k in keys) {
             if (!o.has(k)) continue
@@ -181,6 +183,12 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if (k == "tz" && !Regex("^[A-Za-z_/+-]{3,40}$").matches(v)) continue
             if (k == "country") v = v.lowercase().filter { it in 'a'..'z' }.take(2)
             if (k == "playlist" && v.isNotEmpty() && !(v.startsWith("http://") || v.startsWith("https://"))) v = ""
+            if (k == "tmdb") v = v.filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+            if (k == "jf_pass" && v.isEmpty()) continue
+            if (k == "jf_url" && v.isNotEmpty()) {
+                if (!(v.startsWith("http://") || v.startsWith("https://"))) v = "http://" + v
+                v = v.trimEnd('/')
+            }
             if (k == "theme" && v != "auto" && v != "default" && v != "ramadan" && v != "newyear") v = "auto"
             if (k == "bg") {
                 if (v != "none" && v != "plain" && v != "senja" && v != "photo") v = "none"
@@ -192,6 +200,11 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
         val newLoc = prefs.getString("lat", "") + prefs.getString("lon", "") + prefs.getString("tz", "")
         val newSrc = prefs.getString("playlist", "") + prefs.getString("country", "")
         if (oldLoc != newLoc) prefs.edit().remove("wx").remove("aq").remove("pray").remove("pray_date").commit()
-        if (oldSrc != newSrc) File(ctx.filesDir, "channels.m3u").delete()
+        if (oldSrc != newSrc) {
+            prefs.edit().putLong("list_at", 0L).commit()
+            File(ctx.filesDir, "custom.m3u").delete()
+        }
+        val newJf = prefs.getString("jf_url", "") + prefs.getString("jf_user", "") + prefs.getString("jf_pass", "")
+        if (oldJf != newJf) prefs.edit().remove("jf_token").remove("jf_uid").commit()
     }
 }

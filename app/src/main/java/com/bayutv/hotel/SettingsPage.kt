@@ -50,16 +50,25 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <select id="bg"><option value="none">Cahaya lembut bergerak (bawaan)</option><option value="plain">Polos</option><option value="senja">Senja</option><option value="photo">Foto saya</option></select>
 <label>Pilih foto dari HP (otomatis dikecilkan)</label>
 <input id="file" type="file" accept="image/*" onchange="photo()">
+<h2>Film (TMDB)</h2>
+<label>Kunci API TMDB (gratis)</label><input id="tmdb" placeholder="tempel kunci di sini">
+<div class="s">Daftar gratis di themoviedb.org, lalu buka Pengaturan, API, dan salin kunci (API Key) atau Read Access Token. Dipakai untuk katalog film, sinopsis Indonesia, trailer, dan daftar layanan resmi.</div>
+<h2>Koleksi Saya (Jellyfin)</h2>
+<label>Alamat server Jellyfin</label><input id="jf_url" placeholder="http://192.168.1.10:8096">
+<label>Nama pengguna</label><input id="jf_user" autocomplete="off">
+<label>Sandi (kosongkan bila tidak diubah)</label><input id="jf_pass" type="password" autocomplete="off">
+<div class="s">Jellyfin gratis dipasang di PC/laptop/NAS. Film dan anime milik Anda diputar tanpa iklan; letakkan subtitle Indonesia (.srt, mis. Judul.id.srt) di samping file video.</div>
 <h2>Sumber channel</h2>
-<label>Kode negara iptv-org (2 huruf, mis. id, my, sg)</label><input id="country" maxlength="2">
-<label>Alamat playlist M3U sendiri (opsional, menggantikan kode negara)</label><input id="playlist" placeholder="https://...">
+<div class="s">Daftar utama diperbarui otomatis oleh GitHub Actions setiap 6 jam (Indonesia + internasional, sudah diperiksa).</div>
+<label>Kode negara cadangan bila daftar utama belum siap (2 huruf, mis. id)</label><input id="country" maxlength="2">
+<label>Playlist M3U tambahan (opsional, tampil sebagai "Playlist Saya")</label><input id="playlist" placeholder="https://...">
 <div class="s">Gunakan hanya sumber yang Anda berhak menontonnya.</div>
 <button onclick="save()">Simpan ke TV</button>
 <div id="msg"></div>
 </div>
 <script>
 var PIN='';
-var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme'];
+var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme','tmdb','jf_url','jf_user','jf_pass'];
 function g(i){return document.getElementById(i)}
 function api(p,o){o=o||{};o.headers=o.headers||{};o.headers['X-Pin']=PIN;return fetch(p,o)}
 function login(){

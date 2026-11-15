@@ -51,7 +51,7 @@ class HomeActivity : AppCompatActivity() {
     private val lat: Double get() = prefs.getString("lat", null)?.toDoubleOrNull() ?: -0.0263
     private val lon: Double get() = prefs.getString("lon", null)?.toDoubleOrNull() ?: 109.3425
     private val tzName: String get() = prefs.getString("tz", null) ?: "Asia/Pontianak"
-    private val repoApi = "https://api.github.com/repos/bayu-tv/tv-hotel/releases/latest"
+    private val repoApi = "https://api.github.com/repos/" + BuildConfig.REPO + "/releases/latest"
 
     private var brass = 0xFFB8975A.toInt()
     private var brassLight = 0xFFE6C88F.toInt()
@@ -139,8 +139,8 @@ class HomeActivity : AppCompatActivity() {
             t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(5).toFloat() else 0f).setDuration(220).start()
             if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(700).start()
         }
-        val lp = LinearLayout.LayoutParams(dp(150), dp(112))
-        lp.setMargins(dp(8), 0, dp(8), 0)
+        val lp = LinearLayout.LayoutParams(dp(136), dp(108))
+        lp.setMargins(dp(6), 0, dp(6), 0)
         t.layoutParams = lp
         return t
     }
@@ -192,7 +192,14 @@ class HomeActivity : AppCompatActivity() {
         tvWelcome.letterSpacing = 0.25f
         tvGreet = tv("", 36f, ivory, Typeface.SERIF)
         tvName = tv(prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda", 36f, brass, Typeface.create(Typeface.SERIF, Typeface.ITALIC))
-        left.addView(tvWelcome)
+        val brand = LinearLayout(this)
+        brand.gravity = Gravity.CENTER_VERTICAL
+        val logo = ImageView(this)
+        logo.setImageResource(R.drawable.logo_mark)
+        brand.addView(logo, LinearLayout.LayoutParams(dp(30), dp(30)))
+        tvWelcome.setPadding(dp(10), 0, 0, 0)
+        brand.addView(tvWelcome)
+        left.addView(brand)
         left.addView(tvGreet)
         left.addView(tvName)
         val right = LinearLayout(this)
@@ -250,12 +257,13 @@ class HomeActivity : AppCompatActivity() {
         tiles.clipToPadding = false
         tiles.setPadding(0, dp(14), 0, dp(14))
         tiles.addView(tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) })
-        val antenna = tile("TV Antena", R.drawable.ic_antenna) { openAntenna(false) }
+        val antenna = tile("TV Antena", R.drawable.ic_antenna) { openAntennaMenu() }
         antenna.setOnLongClickListener {
-            openAntenna(true)
+            launchSaved()
             true
         }
         tiles.addView(antenna)
+        tiles.addView(tile("Film", R.drawable.ic_film) { startActivity(Intent(this, FilmActivity::class.java)) })
         tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
         tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
         tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) })
@@ -517,6 +525,7 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun askUpdate(tag: Int, url: String) {
+        if (isFinishing || isDestroyed) return
         AlertDialog.Builder(this)
             .setTitle("Ada versi baru (v" + tag + ")")
             .setMessage("Tekan Perbarui untuk mengunduh dan memasang. Aplikasi akan tertutup sebentar saat pemasangan.")
@@ -535,11 +544,15 @@ class HomeActivity : AppCompatActivity() {
         Thread {
             try {
                 val f = File(cacheDir, "update.apk")
+                f.delete()
                 val c = URL(url).openConnection() as HttpURLConnection
                 c.connectTimeout = 10000
                 c.readTimeout = 30000
+                c.setRequestProperty("User-Agent", "BayuTV")
+                val expect = c.contentLength
                 c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
-                ui.post { installApk(f) }
+                if (f.length() < 100000L || (expect > 0 && f.length() != expect.toLong())) throw java.io.IOException("unduhan tidak lengkap")
+                ui.post { if (!isFinishing) installApk(f) }
             } catch (e: Exception) {
                 ui.post { notice.show("Pembaruan gagal", "Tidak bisa mengunduh: " + e.javaClass.simpleName, 6000L) }
             }
@@ -743,15 +756,44 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Membuka aplikasi antena / Live TV bawaan TV. Aplikasi pihak ketiga tidak bisa memutar tuner langsung.
-    private fun openAntenna(choose: Boolean) {
-        val saved = prefs.getString("antenna", null)
-        if (!choose && saved != null) {
-            val ok = if (saved == "system") tryLiveTv() else launchComponent(saved)
-            if (ok) return
-            notice.show("Tidak terbuka", "Tahan tombol OK pada menu TV Antena untuk memilih aplikasi antena lagi.", 5000L)
+    private fun launchSaved(): Boolean {
+        val saved = prefs.getString("antenna", null) ?: return false
+        val ok = if (saved == "system") tryLiveTv() else launchComponent(saved)
+        if (!ok) notice.show("Tidak terbuka", "Pilih aplikasi antena lagi dari menu TV Antena.", 4000L)
+        return ok
+    }
+
+    private fun savedLabel(): String? {
+        val saved = prefs.getString("antenna", null) ?: return null
+        if (saved == "system") return "Live TV bawaan sistem"
+        return try {
+            val cn = ComponentName.unflattenFromString(saved) ?: return null
+            packageManager.getActivityInfo(cn, 0).loadLabel(packageManager).toString()
+        } catch (e: Exception) {
+            "aplikasi antena pilihan"
+        }
+    }
+
+    // Menu TV Antena: buka, ganti aplikasi, atau uji tuner. Tahan OK = langsung buka.
+    private fun openAntennaMenu() {
+        val label = savedLabel()
+        if (label == null) {
+            chooseAntennaApp()
             return
         }
+        AlertDialog.Builder(this)
+            .setTitle("TV Antena")
+            .setItems(arrayOf("Antena di dalam aplikasi (uji hybrid)", "Buka " + label, "Ganti aplikasi antena", "Uji tuner antena (info)")) { _, which ->
+                if (which == 0) startActivity(Intent(this, AntennaActivity::class.java))
+                else if (which == 1) launchSaved()
+                else if (which == 2) chooseAntennaApp()
+                else runTunerTest()
+            }
+            .show()
+    }
+
+    // Aplikasi pihak ketiga tidak bisa memutar tuner langsung; kita hanya membuka aplikasi antena bawaan.
+    private fun chooseAntennaApp() {
         val pm = packageManager
         val q = Intent(Intent.ACTION_MAIN)
         q.addCategory("android.intent.category.LEANBACK_LAUNCHER")
@@ -759,19 +801,22 @@ class HomeActivity : AppCompatActivity() {
             .filter { it.activityInfo.packageName != packageName }
             .sortedBy { it.loadLabel(pm).toString().lowercase() }
         val names = ArrayList<String>()
+        names.add("Antena di dalam aplikasi (uji hybrid)")
         names.add("Live TV bawaan sistem (coba)")
-        names.add("Uji tuner antena (diagnostik)")
+        names.add("Uji tuner antena (info)")
         for (a in apps) names.add(a.loadLabel(pm).toString())
         AlertDialog.Builder(this)
             .setTitle("Pilih aplikasi antena atau Live TV")
             .setItems(names.toTypedArray()) { _, which ->
                 if (which == 0) {
+                    startActivity(Intent(this, AntennaActivity::class.java))
+                } else if (which == 1) {
                     prefs.edit().putString("antenna", "system").apply()
                     if (!tryLiveTv()) notice.show("Tidak terbuka", "Live TV bawaan tidak bisa dibuka langsung. Pilih aplikasi dari daftar (tahan OK pada menu TV Antena).", 6000L)
-                } else if (which == 1) {
+                } else if (which == 2) {
                     runTunerTest()
                 } else {
-                    val ri = apps[which - 2]
+                    val ri = apps[which - 3]
                     val cn = ComponentName(ri.activityInfo.packageName, ri.activityInfo.name)
                     prefs.edit().putString("antenna", cn.flattenToString()).apply()
                     launchComponent(cn.flattenToString())

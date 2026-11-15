@@ -35,6 +35,7 @@ class ScanActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
     private var groups: Map<String, List<Channel>> = emptyMap()
+    private var regionOf: Map<String, String> = emptyMap()
     private var scan: MutableMap<String, String> = HashMap()
     private var scope = 1
     private var running = false
@@ -155,17 +156,21 @@ class ScanActivity : AppCompatActivity() {
             anims.add(a)
         }
 
-        val text = Playlist.loadCached(this)
-        if (text != null) {
-            groups = Playlist.group(Playlist.parse(text))
-            scan = Playlist.loadScan(this)
-            scope = if (deadCount() > 0) 1 else 2
-        } else {
-            notice.show("Belum ada daftar channel", "Buka TV Live dulu satu kali agar daftar channel diunduh, lalu kembali ke sini.")
-        }
+        reloadGroups()
+        scope = if (deadCount() > 0) 1 else 2
+        if (groups.isEmpty()) notice.show("Belum ada daftar channel", "Tekan OK untuk mengunduh daftar terbaru lalu memindai.", 5000L)
         renderOptions()
         renderStats()
         btn.text = "Tekan OK untuk mulai pindai"
+    }
+
+    private fun reloadGroups() {
+        val list = Playlist.loadAll(this)
+        groups = Playlist.group(list)
+        val r = HashMap<String, String>()
+        for (c in list) r[c.key] = c.region
+        regionOf = r
+        scan = Playlist.loadScan(this)
     }
 
     private fun deadCount(): Int = groups.keys.count { scan[it] == "" }
@@ -176,6 +181,7 @@ class ScanActivity : AppCompatActivity() {
             return if (last != null && groups.containsKey(last)) listOf(last) else emptyList()
         }
         if (s == 1) return groups.keys.filter { scan[it] == "" }
+        if (s == 2) return groups.keys.filter { regionOf[it] == "Indonesia" || regionOf[it] == "Playlist Saya" }
         return groups.keys.toList()
     }
 
@@ -184,11 +190,12 @@ class ScanActivity : AppCompatActivity() {
         val lastName = if (last != null) groups[last]?.firstOrNull()?.name else null
         val labels = arrayOf(
             "Channel terakhir" + (if (lastName != null) " (" + lastName + ")" else ""),
-            "Yang hilang (" + deadCount() + ")",
+            "Tersembunyi (" + deadCount() + ")",
+            "Indonesia (" + groups.keys.count { regionOf[it] == "Indonesia" || regionOf[it] == "Playlist Saya" } + ")",
             "Semua (" + groups.size + ")"
         )
         opts.removeAllViews()
-        for (i in 0..2) {
+        for (i in labels.indices) {
             val t = tv(labels[i], 15f, if (i == scope) brass else mute, Typeface.SANS_SERIF)
             t.setPadding(dp(16), dp(8), dp(16), dp(8))
             val g = GradientDrawable()
@@ -220,14 +227,46 @@ class ScanActivity : AppCompatActivity() {
         logView.text = sb
     }
 
+    // Langkah 1: unduh daftar alamat terbaru (alamat baru bisa menggantikan yang mati)
     private fun startScan() {
-        if (groups.isEmpty()) return
-        val keys = keysFor(scope)
-        if (keys.isEmpty()) {
-            notice.show("Tidak ada yang perlu dipindai", "Belum ada channel yang ditandai hilang. Pilih Semua untuk memeriksa seluruh channel.", 4000L)
+        running = true
+        title.text = "Mengambil alamat terbaru..."
+        btn.text = "OK untuk berhenti"
+        for (i in 0..2) anims[i].start()
+        Thread {
+            val ok = if (scope == 0 && groups.isNotEmpty()) false else Playlist.download(this)
+            ui.post {
+                if (!running) return@post
+                val saved = HashMap(scan)
+                reloadGroups()
+                // pertahankan hasil pindai yang belum tersimpan
+                for ((k, v) in saved) if (!scan.containsKey(k)) scan[k] = v
+                if (!ok && scope != 0) addLog("Daftar terbaru tidak terunduh, memakai daftar tersimpan.", mute)
+                beginCheck()
+            }
+        }.start()
+    }
+
+    // Langkah 2: periksa setiap channel
+    private fun beginCheck() {
+        if (groups.isEmpty()) {
+            running = false
+            stopAnims()
+            title.text = "Pindai Sinyal"
+            btn.text = "Tekan OK untuk mencoba lagi"
+            notice.show("Tidak ada daftar", "Periksa koneksi internet TV.", 4000L)
             return
         }
-        running = true
+        val keys = keysFor(scope)
+        if (keys.isEmpty()) {
+            running = false
+            stopAnims()
+            title.text = "Pindai Sinyal"
+            btn.text = "Tekan OK untuk mulai pindai"
+            renderOptions()
+            notice.show("Tidak ada yang perlu dipindai", "Tidak ada channel tersembunyi. Pilih Indonesia atau Semua untuk memeriksa ulang.", 4000L)
+            return
+        }
         okN = 0
         fixN = 0
         badN = 0
@@ -236,17 +275,19 @@ class ScanActivity : AppCompatActivity() {
         lines.clear()
         logView.text = ""
         title.text = "Mencari sinyal..."
-        btn.text = "OK untuk berhenti"
-        for (i in 0..2) anims[i].start()
         renderStats()
-        val p = Executors.newFixedThreadPool(3)
+        val p = Executors.newFixedThreadPool(8)
         pool = p
         for (k in keys) p.execute { work(k) }
     }
 
     private fun work(k: String) {
         if (!running) return
-        val list = groups[k] ?: return
+        val list = groups[k]
+        if (list.isNullOrEmpty()) {
+            ui.post { onResult(k, k, null, false) }
+            return
+        }
         val pref = synchronized(scan) { scan[k] }
         val ordered = ArrayList<Channel>()
         if (!pref.isNullOrEmpty()) list.firstOrNull { it.url == pref }?.let { ordered.add(it) }
@@ -254,7 +295,7 @@ class ScanActivity : AppCompatActivity() {
         var found: String? = null
         var first = false
         var i = 0
-        for (c in ordered.take(4)) {
+        for (c in ordered.take(5)) {
             if (!running) return
             if (Playlist.check(c)) {
                 found = c.url
@@ -276,10 +317,10 @@ class ScanActivity : AppCompatActivity() {
         synchronized(scan) { scan[k] = found ?: "" }
         if (found == null) {
             badN++
-            addLog("\u2715 " + name + ": tidak ada sumber aktif", red)
+            addLog("\u2715 " + name + ": tidak ada sumber aktif (disembunyikan)", red)
         } else if (wasDead) {
             fixN++
-            addLog("\u21BB " + name + ": pulih", brass)
+            addLog("\u21BB " + name + ": pulih, tampil lagi", brass)
         } else if (first) {
             okN++
             addLog("\u2713 " + name + " aktif", green)
@@ -303,7 +344,7 @@ class ScanActivity : AppCompatActivity() {
         Playlist.saveScan(this, scan)
         title.text = "Pindai selesai"
         btn.text = "OK untuk pindai lagi"
-        addLog("Selesai: " + (okN + fixN) + " siap ditonton, " + badN + " tidak ditemukan.", ivory)
+        addLog("Selesai: " + (okN + fixN) + " siap ditonton, " + badN + " disembunyikan.", ivory)
         renderOptions()
     }
 
@@ -324,14 +365,14 @@ class ScanActivity : AppCompatActivity() {
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
             if (!running) {
-                scope = (scope + 2) % 3
+                scope = (scope + 3) % 4
                 renderOptions()
             }
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             if (!running) {
-                scope = (scope + 1) % 3
+                scope = (scope + 1) % 4
                 renderOptions()
             }
             return true
