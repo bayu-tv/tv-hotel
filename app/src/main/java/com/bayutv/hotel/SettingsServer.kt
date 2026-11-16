@@ -32,8 +32,12 @@ class SettingsServer(
     private var fails = 0
     var port = 0
     private val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
-    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass", "tower_name", "tower_lat", "tower_lon",
-        "adzan", "adzan_url", "adzan_min", "pin_anak", "lock_intl", "lock_custom", "lock_film", "limit_min", "autostart")
+    private val keys = arrayOf(
+        "family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist",
+        "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass", "tower_name", "tower_lat", "tower_lon",
+        "adzan", "adzan_offset", "adzan_url", "adzan_min", "pin_anak", "lock_intl", "lock_custom", "lock_film",
+        "limit_min", "autostart"
+    )
 
     fun start(): Boolean {
         for (p in (if (remote != null) 8091..8099 else 8080..8090)) {
@@ -176,12 +180,18 @@ class SettingsServer(
             o.put("pin_anak", "")
             o.put("pin_anak_set", if ((prefs.getString("pin_anak", "") ?: "").length >= 4) "Ya" else "")
             if ((o.getString("adzan")).isEmpty()) o.put("adzan", "Ya")
+            if ((o.getString("adzan_offset")).isEmpty()) o.put("adzan_offset", "0")
             if ((o.getString("adzan_min")).isEmpty()) o.put("adzan_min", "4")
             if ((o.getString("autostart")).isEmpty()) o.put("autostart", "Mati")
             o.put("repo", BuildConfig.REPO)
             respond(s, 200, "application/json", o.toString().toByteArray())
         } else if (m == "POST" && path == "/api/save") {
             save(JSONObject(String(body, Charsets.UTF_8)))
+            respond(s, 200, "text/plain", "ok".toByteArray())
+            onSaved()
+        } else if (m == "POST" && path == "/api/refresh") {
+            prefs.edit().putLong("list_at", 0L).commit()
+            File(ctx.filesDir, "fails.txt").delete()
             respond(s, 200, "text/plain", "ok".toByteArray())
             onSaved()
         } else if (m == "POST" && path == "/api/bg") {
@@ -227,6 +237,10 @@ class SettingsServer(
             }
             if (k == "limit_min" || k == "adzan_min") v = v.filter { it.isDigit() }.take(4)
             if (k == "adzan_min" && (v.toIntOrNull() ?: 0) !in 1..30) v = "4"
+            if (k == "adzan_offset") {
+                val off = v.toIntOrNull()?.coerceIn(-15, 15) ?: 0
+                v = off.toString()
+            }
             if (k == "adzan_url" && v.isNotEmpty() && !(v.startsWith("http://") || v.startsWith("https://"))) v = ""
             if ((k == "adzan" || k.startsWith("lock_")) && v != "Ya") v = "Tidak"
             if (k == "autostart" && v != "Beranda" && v != "TV Live") v = "Mati"
