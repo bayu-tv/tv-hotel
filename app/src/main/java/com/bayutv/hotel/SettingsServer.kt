@@ -189,7 +189,19 @@ class SettingsServer(
             save(JSONObject(String(body, Charsets.UTF_8)))
             respond(s, 200, "text/plain", "ok".toByteArray())
             onSaved()
-        } else if (m == "POST" && path == "/api/refresh") {
+        } 
+        else if (path == "/api/clear-history") {
+            for (entry in ContinueWatch.load(ctx)) {
+                ContinueWatch.remove(ctx, entry.key)
+            }
+            val ed = prefs.edit()
+            for (k in prefs.all.keys) {
+                if (k.startsWith("pos_")) ed.remove(k)
+            }
+            ed.apply()
+            return jsonResponse(200, """{"ok":true}""")
+        }
+        else if (m == "POST" && path == "/api/refresh") {
             prefs.edit().putLong("list_at", 0L).commit()
             File(ctx.filesDir, "fails.txt").delete()
             respond(s, 200, "text/plain", "ok".toByteArray())
