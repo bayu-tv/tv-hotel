@@ -167,7 +167,6 @@ class VodPlayerActivity : AppCompatActivity() {
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
 
-    // Komponen Overlay Adzan, Countdown 5 Detik & Doa/Dzikir Ramadan
     private lateinit var countdownBanner: TextView
     private lateinit var adzanOverlay: FrameLayout
     private lateinit var adzanTitleView: TextView
@@ -222,7 +221,6 @@ class VodPlayerActivity : AppCompatActivity() {
         notice = Notice(this, root)
         setContentView(root)
 
-        // Muat jadwal sholat untuk pengingat Adzan & Ramadan
         Thread {
             val pt = Prayer.fetch(this)
             ui.post {
@@ -325,13 +323,10 @@ class VodPlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- Overlay Countdown 5 Detik Adzan, Doa Setelah Adzan & Doa/Dzikir Ramadan ----------
-
     private fun buildAdzanAndRamadanOverlays() {
         val isPhone = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
 
-        // 1. Pill Countdown 5 detik di pojok kanan atas
         countdownBanner = tv("", if (isPhone) 14.5f else 18f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             setPadding(dp(20), dp(11), dp(20), dp(11))
             background = GradientDrawable().apply {
@@ -345,7 +340,6 @@ class VodPlayerActivity : AppCompatActivity() {
         cdlp.setMargins(dp(20), dp(24), dp(24), 0)
         root.addView(countdownBanner, cdlp)
 
-        // 2. Kartu Lengkap Waktu Adzan + Doa Setelah Adzan + Doa Berbuka Puasa (Ramadan)
         adzanOverlay = FrameLayout(this).apply {
             setBackgroundColor(0xCC0A0908.toInt())
             visibility = View.GONE
@@ -376,7 +370,6 @@ class VodPlayerActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
         val contentCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        // Blok Khusus Ramadan (Doa Berbuka Puasa saat Magrib)
         ramadanBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(12))
@@ -417,7 +410,6 @@ class VodPlayerActivity : AppCompatActivity() {
         rblp.bottomMargin = dp(12)
         contentCol.addView(ramadanBox, rblp)
 
-        // Blok Menjawab Adzan & Doa Setelah Adzan
         val doaBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(12))
@@ -481,7 +473,7 @@ class VodPlayerActivity : AppCompatActivity() {
             }
             setOnClickListener { endAdzan() }
         }
-        val blp = LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL).apply {
+        val blp = LinearLayout.LayoutParams(-2, -2).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = dp(14)
         }
@@ -499,12 +491,27 @@ class VodPlayerActivity : AppCompatActivity() {
     }
 
     private fun isRamadanNow(): Boolean {
-        if (Themes.pick(this).id == "ramadan") return true
-        return try {
-            Themes.hijri()[0] == 8
-        } catch (_: Exception) {
-            false
+        for ((_, v) in prefs.all) {
+            if (v is String && v.equals("ramadan", ignoreCase = true)) return true
         }
+        val cal = Calendar.getInstance()
+        val day = cal.get(Calendar.DAY_OF_MONTH)
+        var m = cal.get(Calendar.MONTH) + 1
+        var y = cal.get(Calendar.YEAR)
+        if (m < 3) {
+            y -= 1
+            m += 12
+        }
+        val a = y / 100
+        val b = 2 - a + (a / 4)
+        val jd = (365.25 * (y + 4716)).toInt() + (30.6001 * (m + 1)).toInt() + day + b - 1524
+        val l = jd - 1948440 + 10632
+        val n = (l - 1) / 10631
+        val l2 = l - 10631 * n + 354
+        val j = ((10985 - l2) / 5316) * ((50 * l2) / 17719) + (l2 / 5670) * ((43 * l2) / 15238)
+        val l3 = l2 - ((30 - j) / 15) * ((17719 * j) / 50) - (j / 16) * ((15238 * j) / 43) + 29
+        val hijriMonth = (24 * l3) / 709
+        return hijriMonth == 9
     }
 
     private fun prayerOffset(): Int =
@@ -537,7 +544,6 @@ class VodPlayerActivity : AppCompatActivity() {
         val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
         val day = Prayer.todayStr()
 
-        // Pengingat Dzikir Menjelang Berbuka Puasa (15 menit sebelum Magrib saat Ramadan)
         if (isRamadanNow()) {
             val magrib = t[3] + off
             if (now >= magrib - 15 && now < magrib - 1 && prefs.getString("ramadan_dzikir_done", "") != day) {
