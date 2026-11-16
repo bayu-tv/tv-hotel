@@ -3,7 +3,7 @@
 Penyusun daftar channel Bayu TV.
 
 Dijalankan oleh GitHub Actions (lihat .github/workflows/channels.yml) beberapa kali sehari:
-  1. Mengambil daftar alamat siaran dari iptv-org (database + folder streams).
+  1. Mengambil daftar alamat siaran dari extra_playlists (dhanytv, tvdigital) dan iptv-org.
   2. Menggabungkan alamat cadangan untuk channel yang sama.
   3. Memeriksa setiap alamat (apakah benar mengirim video).
   4. Mengelompokkan per wilayah dan kategori (Indonesia / Internasional).
@@ -34,9 +34,9 @@ NATIONAL_ORDER = ["tvri", "rcti", "sctv", "indosiar", "mnctv", "gtv", "antv", "t
 
 
 def national_rank(name):
-    low = name.lower()
+    low = key_of(name)
     for i, k in enumerate(NATIONAL_ORDER):
-        if low == k or low.startswith(k + " ") or low.startswith(k + "("):
+        if low == k or low.startswith(k + " "):
             return i
     return len(NATIONAL_ORDER)
 
@@ -67,29 +67,47 @@ def origin_of(url):
     except Exception:
         return None
 
-# Kategori iptv-org -> nama kategori di aplikasi (urutan = urutan tampil)
+
+# Kategori iptv-org & bahasa Indonesia -> nama kategori di aplikasi (urutan = urutan tampil)
 CATEGORY_MAP = [
     ("news", "Berita"),
+    ("berita", "Berita"),
     ("general", "Nasional"),
+    ("nasional", "Nasional"),
+    ("lokal", "Nasional"),
+    ("indonesia", "Nasional"),
     ("sports", "Olahraga"),
+    ("sport", "Olahraga"),
+    ("olahraga", "Olahraga"),
     ("kids", "Anak & Kartun"),
+    ("anak", "Anak & Kartun"),
     ("animation", "Anak & Kartun"),
+    ("kartun", "Anak & Kartun"),
     ("family", "Anak & Kartun"),
     ("movies", "Film & Serial"),
+    ("movie", "Film & Serial"),
+    ("film", "Film & Serial"),
     ("series", "Film & Serial"),
+    ("drama", "Film & Serial"),
     ("classic", "Film & Serial"),
     ("comedy", "Hiburan"),
     ("entertainment", "Hiburan"),
+    ("hiburan", "Hiburan"),
     ("lifestyle", "Hiburan"),
     ("cooking", "Hiburan"),
     ("travel", "Dokumenter"),
     ("outdoor", "Dokumenter"),
     ("documentary", "Dokumenter"),
+    ("dokumenter", "Dokumenter"),
     ("science", "Dokumenter"),
     ("education", "Edukasi"),
+    ("edukasi", "Edukasi"),
     ("culture", "Edukasi"),
     ("music", "Musik"),
+    ("musik", "Musik"),
     ("religious", "Religi"),
+    ("religi", "Religi"),
+    ("islam", "Religi"),
     ("legislative", "Pemerintahan"),
     ("business", "Berita"),
     ("weather", "Berita"),
@@ -102,9 +120,11 @@ CAT = {k: v for k, v in CATEGORY_MAP}
 # Stasiun jaringan nasional Indonesia (sisanya dianggap TV daerah)
 NATIONAL = re.compile(r"\b(tvri( nasional| world| sport)?|rcti|sctv|indosiar|antv|trans ?tv|trans ?7|gtv|mnctv|inews|"
                       r"metro ?tv|tv ?one|kompas ?tv|net\.? ?tv|net\b|rtv|rajawali|moji|mdtv|btv|nusantara ?tv|garuda ?tv|"
-                      r"magna|jak ?tv|daai|cnn indonesia|cnbc indonesia|beritasatu|o channel|elshinta|idtv)\b")
+                      r"magna|jak ?tv|daai|cnn indonesia|cnbc indonesia|beritasatu|o channel|elshinta|idtv|sea today)\b", re.I)
 RELIGI = re.compile(r"\b(rodja|surau|salam tv|tv ?mu|tv9|ajwa|al-?bahjah|ahsan|madani|aswaja|insan|wesal|dai tv|tv al|"
-                    r"nabawi|risalah|ummat|quran|muslim)\b")
+                    r"nabawi|risalah|ummat|quran|muslim|muhammadiyah|nu channel)\b", re.I)
+ID_HINTS = re.compile(r"\b(indonesia|nasional|daerah|lokal|jakarta|jawa|sumatra|kalimantan|sulawesi|bali|papua|"
+                      r"rcti|sctv|indosiar|mnctv|gtv|trans|tvri|kompas|metro|antv|net|rtv|moji|vidio|vision)\b", re.I)
 
 
 def log(*a):
@@ -268,6 +288,22 @@ def main():
     blocked = [w.lower() for w in cfg.get("exclude_keywords", [])]
 
     streams = []
+
+    custom = os.path.join(os.path.dirname(args.config), "custom.m3u")
+    if os.path.exists(custom):
+        items = parse_m3u(open(custom, encoding="utf-8").read(), "Tambahan")
+        log("  custom.m3u: %d" % len(items))
+        streams.extend(items)
+
+    for url in cfg.get("extra_playlists", []):
+        try:
+            text = http_get(url).decode("utf-8", "replace")
+            items = parse_m3u(text, "Tambahan")
+            log("  tambahan %s: %d" % (url, len(items)))
+            streams.extend(items)
+        except Exception as e:
+            log("  playlist tambahan gagal:", url, e)
+
     for region, countries in (("Indonesia", local), ("Internasional", intl)):
         for cc in countries:
             for fn in files_for(cc, all_files):
@@ -279,21 +315,6 @@ def main():
                 items = parse_m3u(text, region)
                 log("  %-22s %4d alamat" % (fn, len(items)))
                 streams.extend(items)
-
-    for url in cfg.get("extra_playlists", []):
-        try:
-            text = http_get(url).decode("utf-8", "replace")
-            items = parse_m3u(text, "Tambahan")
-            log("  tambahan %s: %d" % (url, len(items)))
-            streams.extend(items)
-        except Exception as e:
-            log("  playlist tambahan gagal:", url, e)
-
-    custom = os.path.join(os.path.dirname(args.config), "custom.m3u")
-    if os.path.exists(custom):
-        items = parse_m3u(open(custom, encoding="utf-8").read(), "Tambahan")
-        log("  custom.m3u: %d" % len(items))
-        streams.extend(items)
 
     # Lengkapi metadata dari database
     entries = []
@@ -316,12 +337,20 @@ def main():
             cats = [g.strip().lower() for g in s["group"].split(";")]
         if "shop" in cats and len(cats) == 1:
             continue
+
+        is_extra = (s["origin"] == "Tambahan")
         region = s["origin"]
-        if region == "Tambahan":
+        if is_extra:
             country = (meta.get("country", "") if meta else "").upper()
-            region = "Indonesia" if country == "ID" else "Internasional"
-        if region == "Internasional" and intl_cats and not (set(cats) & intl_cats):
+            combined_hint = name + " " + s["group"] + " " + s["tvg_id"]
+            if country == "ID" or s["tvg_id"].lower().endswith(".id") or ID_HINTS.search(combined_hint):
+                region = "Indonesia"
+            else:
+                region = "Internasional"
+
+        if region == "Internasional" and not is_extra and intl_cats and not (set(cats) & intl_cats):
             continue
+
         cat = None
         for c in cats:
             if CAT.get(c):
@@ -339,12 +368,14 @@ def main():
                 cat = "Daerah"
         if cat is None:
             cat = "Lainnya"
+
         s["name"] = name
         s["cat"] = cat
         s["region"] = region
+        s["is_extra"] = is_extra
         s["logo"] = s["logo"] or logos.get(cid, "")
         s["key"] = key_of(name)
-        s["q"] = quality(s["name"] + " " + s.get("name", ""))
+        s["q"] = quality(s["name"])
         entries.append(s)
     log("Alamat unik: %d" % len(entries))
 
@@ -369,13 +400,13 @@ def main():
     keep_geo = cfg.get("keep_geo_blocked", True)
     alive = [e for e in entries if e["status"] == "ok" or (keep_geo and e["status"] == "geo")]
 
-    # Kelompokkan per channel, urutkan sumber terbaik dulu
+    # Kelompokkan per channel, urutkan sumber terbaik dulu (extra_playlists/dhanytv diprioritaskan)
     groups = {}
     for e in alive:
         groups.setdefault((e["region"], e["key"]), []).append(e)
     rank = {"ok": 0, "geo": 1}
     for g in groups.values():
-        g.sort(key=lambda e: (rank.get(e["status"], 2), -e["q"]))
+        g.sort(key=lambda e: (0 if e.get("is_extra") else 1, rank.get(e["status"], 2), -e["q"]))
 
     # Batasi jumlah internasional per kategori agar ringan di TV RAM 2 GB
     limit = int(cfg.get("max_international_per_category", 120))
@@ -395,7 +426,6 @@ def main():
         for c in cats:
             gs = by_cat[(region, c)]
             if region == "Indonesia":
-                # Stasiun nasional utama di atas, lalu yang terverifikasi, lalu alfabetis
                 gs.sort(key=lambda g: (national_rank(g[0]["name"]), rank.get(g[0]["status"], 2), g[0]["name"].lower()))
             else:
                 gs.sort(key=lambda g: (rank.get(g[0]["status"], 2), g[0]["name"].lower()))
