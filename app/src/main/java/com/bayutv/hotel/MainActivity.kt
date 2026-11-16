@@ -349,12 +349,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isRamadanNow(): Boolean {
-        if (Themes.pick(this).id == "ramadan") return true
-        return try {
-            Themes.hijri()[0] == 8
-        } catch (_: Exception) {
-            false
+        for ((_, v) in prefs.all) {
+            if (v is String && v.equals("ramadan", ignoreCase = true)) return true
         }
+        val cal = Calendar.getInstance()
+        val day = cal.get(Calendar.DAY_OF_MONTH)
+        var m = cal.get(Calendar.MONTH) + 1
+        var y = cal.get(Calendar.YEAR)
+        if (m < 3) {
+            y -= 1
+            m += 12
+        }
+        val a = y / 100
+        val b = 2 - a + (a / 4)
+        val jd = (365.25 * (y + 4716)).toInt() + (30.6001 * (m + 1)).toInt() + day + b - 1524
+        val l = jd - 1948440 + 10632
+        val n = (l - 1) / 10631
+        val l2 = l - 10631 * n + 354
+        val j = ((10985 - l2) / 5316) * ((50 * l2) / 17719) + (l2 / 5670) * ((43 * l2) / 15238)
+        val l3 = l2 - ((30 - j) / 15) * ((17719 * j) / 50) - (j / 16) * ((15238 * j) / 43) + 29
+        val hijriMonth = (24 * l3) / 709
+        return hijriMonth == 9
     }
 
     // ---------- Tampilan daftar (kategori + channel) ----------
