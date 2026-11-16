@@ -81,6 +81,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
     // Mesin pemutar global berbasis Media3 ExoPlayer agar lagu tetap jalan saat pindah layar atau layar HP mati
     object MusicEngine {
+        private const val WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         private val mainHandler = Handler(Looper.getMainLooper())
         var player: ExoPlayer? = null
         var currentTrack: Track? = null
@@ -125,7 +126,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     val resolved: ResolvedStream? = when {
                         track.isYtMusic && track.streamUrl.isEmpty() -> resolveYtAudioUrl(track.id)
                         track.isLive -> resolveRadioUrl(track.streamUrl)
-                        else -> ResolvedStream(track.streamUrl, Playlist.DEFAULT_UA, "Lokal")
+                        else -> ResolvedStream(track.streamUrl, WEB_UA, "Lokal")
                     }
 
                     if (seq != playSeq) return@Thread
@@ -288,7 +289,6 @@ class RadioMusicActivity : AppCompatActivity() {
         private fun resolveRadioUrl(rawUrl: String): ResolvedStream? {
             var cur = rawUrl.trim()
             if (!cur.startsWith("http", ignoreCase = true)) return null
-            val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
             for (hop in 0..4) {
                 try {
@@ -296,7 +296,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     conn.instanceFollowRedirects = false
                     conn.connectTimeout = 6000
                     conn.readTimeout = 6000
-                    conn.setRequestProperty("User-Agent", ua)
+                    conn.setRequestProperty("User-Agent", WEB_UA)
                     conn.setRequestProperty("Icy-MetaData", "1")
                     val code = conn.responseCode
                     if (code in 301..308) {
@@ -332,12 +332,12 @@ class RadioMusicActivity : AppCompatActivity() {
                         ctype.contains("ogg") -> "OGG Live"
                         else -> "Stream Live"
                     }
-                    return ResolvedStream(cur, ua, fmt)
+                    return ResolvedStream(cur, WEB_UA, fmt)
                 } catch (_: Exception) {
                     return null
                 }
             }
-            return ResolvedStream(cur, ua, "Stream Live")
+            return ResolvedStream(cur, WEB_UA, "Stream Live")
         }
 
         private fun extractStreamFromPlaylist(body: String, baseUrl: String): String? {
@@ -799,7 +799,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
 
         val artFrame = FrameLayout(this).apply {
-            padding = 0
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(0xFF23201C.toInt())
