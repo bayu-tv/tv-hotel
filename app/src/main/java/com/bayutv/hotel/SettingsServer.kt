@@ -9,8 +9,19 @@ import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
 
-// Server kecil di TV. Hanya aktif selama layar Pengaturan terbuka dan dilindungi PIN.
-class SettingsServer(private val ctx: Context, private val pin: String, private val onSaved: () -> Unit) {
+/** Remote HP untuk TV Live: daftar channel (JSON) dan perintah. Dipanggil dari thread server. */
+interface Remote {
+    fun channelsJson(): String
+    fun command(cmd: String, arg: String)
+}
+
+// Server kecil di TV, dilindungi PIN. Mode Pengaturan (layar Pengaturan terbuka) atau mode Remote (TV Live terbuka).
+class SettingsServer(
+    private val ctx: Context,
+    private val pin: String,
+    private val remote: Remote? = null,
+    private val onSaved: () -> Unit
+) {
 
     private var server: ServerSocket? = null
 
@@ -21,10 +32,11 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
     private var fails = 0
     var port = 0
     private val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
-    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass", "tower_name", "tower_lat", "tower_lon")
+    private val keys = arrayOf("family", "city", "lat", "lon", "tz", "wifi", "wifipass", "rules", "note", "country", "playlist", "bg", "theme", "tmdb", "jf_url", "jf_user", "jf_pass", "tower_name", "tower_lat", "tower_lon",
+        "adzan", "adzan_url", "adzan_min", "pin_anak", "lock_intl", "lock_custom", "lock_film", "limit_min", "autostart")
 
     fun start(): Boolean {
-        for (p in 8080..8090) {
+        for (p in (if (remote != null) 8091..8099 else 8080..8090)) {
             try {
                 server = ServerSocket(p)
                 port = p
@@ -122,7 +134,7 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
 
     private fun route(s: Socket, m: String, path: String, h: Map<String, String>, body: ByteArray) {
         if (m == "GET" && path == "/") {
-            respond(s, 200, "text/html", SettingsPage.HTML.toByteArray())
+            respond(s, 200, "text/html", (if (remote != null) RemotePage.HTML else SettingsPage.HTML).toByteArray())
             return
         }
         if (!path.startsWith("/api/")) {
@@ -139,6 +151,19 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             return
         }
         fails = 0
+        val r = remote
+        if (r != null) {
+            if (m == "GET" && path == "/api/channels") {
+                respond(s, 200, "application/json", r.channelsJson().toByteArray())
+            } else if (m == "POST" && path == "/api/cmd") {
+                val o = JSONObject(String(body, Charsets.UTF_8))
+                r.command(o.optString("cmd"), o.optString("arg"))
+                respond(s, 200, "text/plain", "ok".toByteArray())
+            } else {
+                respond(s, 404, "text/plain", "Tidak ada".toByteArray())
+            }
+            return
+        }
         if (m == "GET" && path == "/api/get") {
             val o = JSONObject()
             for (k in keys) o.put(k, prefs.getString(k, "") ?: "")
@@ -148,6 +173,11 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if ((o.getString("bg")).isEmpty()) o.put("bg", "none")
             if ((o.getString("theme")).isEmpty()) o.put("theme", "auto")
             o.put("jf_pass", "")
+            o.put("pin_anak", "")
+            o.put("pin_anak_set", if ((prefs.getString("pin_anak", "") ?: "").length >= 4) "Ya" else "")
+            if ((o.getString("adzan")).isEmpty()) o.put("adzan", "Ya")
+            if ((o.getString("adzan_min")).isEmpty()) o.put("adzan_min", "4")
+            if ((o.getString("autostart")).isEmpty()) o.put("autostart", "Mati")
             o.put("repo", BuildConfig.REPO)
             respond(s, 200, "application/json", o.toString().toByteArray())
         } else if (m == "POST" && path == "/api/save") {
@@ -191,6 +221,15 @@ class SettingsServer(private val ctx: Context, private val pin: String, private 
             if (k == "playlist" && v.isNotEmpty() && !(v.startsWith("http://") || v.startsWith("https://"))) v = ""
             if (k == "tmdb") v = v.filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
             if (k == "jf_pass" && v.isEmpty()) continue
+            if (k == "pin_anak") {
+                if (v.isEmpty()) continue
+                if (v == "hapus") v = "" else if (!Regex("^[0-9]{4,6}$").matches(v)) continue
+            }
+            if (k == "limit_min" || k == "adzan_min") v = v.filter { it.isDigit() }.take(4)
+            if (k == "adzan_min" && (v.toIntOrNull() ?: 0) !in 1..30) v = "4"
+            if (k == "adzan_url" && v.isNotEmpty() && !(v.startsWith("http://") || v.startsWith("https://"))) v = ""
+            if ((k == "adzan" || k.startsWith("lock_")) && v != "Ya") v = "Tidak"
+            if (k == "autostart" && v != "Beranda" && v != "TV Live") v = "Mati"
             if (k == "jf_url" && v.isNotEmpty()) {
                 if (!(v.startsWith("http://") || v.startsWith("https://"))) v = "http://" + v
                 v = v.trimEnd('/')

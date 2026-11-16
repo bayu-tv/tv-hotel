@@ -41,8 +41,27 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <label>Sandi Wi-Fi</label><input id="wifipass">
 <label>Aturan rumah</label><textarea id="rules" rows="3"></textarea>
 <label>Catatan</label><textarea id="note" rows="3"></textarea>
+<h2>Waktu Sholat di TV Live</h2>
+<label>Tampilkan pemberitahuan dan kecilkan volume saat masuk waktu sholat</label>
+<select id="adzan"><option>Ya</option><option>Tidak</option></select>
+<label>Lama volume dikecilkan (menit)</label><input id="adzan_min" inputmode="numeric" placeholder="4">
+<label>Alamat file suara adzan (opsional, .mp3)</label><input id="adzan_url" placeholder="https://.../adzan.mp3">
+<div class="s">Bila diisi, suara adzan diputar lalu siaran kembali normal setelah selesai. Tekan OK di remote untuk menghentikan lebih cepat.</div>
+<h2>Kunci Anak</h2>
+<label>PIN kunci anak (4-6 angka). Ketik <b>hapus</b> untuk mematikan kunci.</label>
+<input id="pin_anak" inputmode="numeric" maxlength="6" placeholder="kosongkan bila tidak diubah" autocomplete="off">
+<div id="pinset" class="s"></div>
+<label>Kunci channel Internasional</label><select id="lock_intl"><option>Tidak</option><option>Ya</option></select>
+<label>Kunci Playlist Saya</label><select id="lock_custom"><option>Tidak</option><option>Ya</option></select>
+<label>Kunci menu Film</label><select id="lock_film"><option>Tidak</option><option>Ya</option></select>
+<label>Batas menonton TV Live per hari (menit, 0 = tanpa batas)</label><input id="limit_min" inputmode="numeric" placeholder="0">
+<div class="s">Saat batas tercapai, TV Live berhenti sampai PIN dimasukkan (berlaku sampai besok).</div>
+<h2>Saat TV Menyala</h2>
+<label>Buka Bayu TV otomatis</label>
+<select id="autostart"><option>Mati</option><option>Beranda</option><option>TV Live</option></select>
+<div class="s">Berlaku saat TV dinyalakan dari kondisi mati total. Di TV, izinkan "Tampilkan di atas aplikasi lain" bila diminta.</div>
 <h2>Arah Antena</h2>
-<div class="s">Cari tower TV digital terdekat lewat aplikasi resmi <b>SinyalTVDigital</b> (atau Google Maps), lalu salin koordinatnya. Bisa tempel langsung format "lintang, bujur" (contoh bentuknya: -0.12345, 117.12345) ke kolom Lintang.</div>
+<div class="s">Cari tower di <b>Google Maps</b>: ketik "pemancar TVRI" atau "tower TV" di sekitar kota Anda, lalu <b>tekan lama</b> titik tower sampai koordinatnya muncul di kotak pencarian, salin. Bisa tempel langsung format "lintang, bujur" (contoh bentuknya: -0.12345, 117.12345) ke kolom Lintang.</div>
 <label>Nama tower (opsional)</label><input id="tower_name" placeholder="mis. Tower Trans / TVRI">
 <label>Lintang tower (latitude)</label><input id="tower_lat" placeholder="contoh: -0.12345" oninput="splitCoord()">
 <label>Bujur tower (longitude)</label><input id="tower_lon" placeholder="contoh: 117.12345">
@@ -76,7 +95,7 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 </div>
 <script>
 var PIN='';
-var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme','tmdb','jf_url','jf_user','jf_pass','tower_name','tower_lat','tower_lon'];
+var F=['family','city','lat','lon','tz','wifi','wifipass','rules','note','country','playlist','bg','theme','tmdb','jf_url','jf_user','jf_pass','tower_name','tower_lat','tower_lon','adzan','adzan_url','adzan_min','pin_anak','lock_intl','lock_custom','lock_film','limit_min','autostart'];
 var REPO='';
 function splitCoord(){var v=g('tower_lat').value;if(v.indexOf(',')>0&&v.split(',').length==2){var p=v.split(',');g('tower_lat').value=p[0].trim();g('tower_lon').value=p[1].trim()}}
 function openCompass(){
@@ -100,6 +119,7 @@ function login(){
   g('lock').style.display='none';g('main').style.display='block';
   F.forEach(function(k){if(d[k]!==undefined)g(k).value=d[k]});
   if(d.repo)REPO=d.repo;
+  g('pinset').textContent=d.pin_anak_set?'PIN kunci anak sudah diatur.':'PIN kunci anak belum diatur (kunci tidak aktif).';
  }).catch(function(){g('err').textContent='Tidak bisa terhubung ke TV. Pastikan HP satu Wi-Fi dengan TV.'})
 }
 function findCity(){

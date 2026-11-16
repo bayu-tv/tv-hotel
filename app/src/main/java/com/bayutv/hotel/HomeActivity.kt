@@ -263,7 +263,10 @@ class HomeActivity : AppCompatActivity() {
             true
         }
         tiles.addView(antenna)
-        tiles.addView(tile("Film", R.drawable.ic_film) { startActivity(Intent(this, FilmActivity::class.java)) })
+        tiles.addView(tile("Film", R.drawable.ic_film) {
+            if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
+            else startActivity(Intent(this, FilmActivity::class.java))
+        })
         tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
         tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
         tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) })
@@ -305,6 +308,7 @@ class HomeActivity : AppCompatActivity() {
         loadPrayer()
         ui.post(tick)
         Thread { checkUpdate() }.start()
+        checkWorkflow()
     }
 
     private val tick = object : Runnable {
@@ -501,6 +505,66 @@ class HomeActivity : AppCompatActivity() {
     }
 
     // ---- Pembaruan otomatis ----
+    // Beri tahu bila jadwal "Perbarui daftar channel" di GitHub berhenti atau lama tidak berhasil
+    private fun checkWorkflow() {
+        val now = System.currentTimeMillis()
+        if (now - prefs.getLong("wf_check", 0L) < 6L * 3600000L) return
+        Thread {
+            val base = "https://api.github.com/repos/" + BuildConfig.REPO
+            val wf = Net.get(base + "/actions/workflows/channels.yml")
+            val cm = Net.get(base + "/commits/data")
+            var msg: String? = null
+            try {
+                if (wf != null && JSONObject(wf).optString("state").startsWith("disabled")) {
+                    msg = "Pembaruan daftar channel otomatis BERHENTI karena GitHub menonaktifkan jadwalnya.\n\n" +
+                        "Cara menyalakan lagi: buka repo di GitHub, tab Actions, pilih \"Perbarui daftar channel\", lalu tekan Enable workflow."
+                }
+                if (msg == null && cm != null) {
+                    val d = JSONObject(cm).getJSONObject("commit").getJSONObject("committer").getString("date")
+                    val f = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                    f.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    val t = f.parse(d)?.time ?: 0L
+                    val days = (now - t) / 86400000L
+                    if (t > 0L && days >= 2L) {
+                        msg = "Daftar channel terakhir diperbarui " + days + " hari lalu.\n\n" +
+                            "Buka repo di GitHub, tab Actions, pilih \"Perbarui daftar channel\" untuk melihat penyebabnya (tanda merah = gagal), lalu tekan Run workflow."
+                    }
+                }
+            } catch (e: Exception) {
+            }
+            if (wf != null || cm != null) prefs.edit().putLong("wf_check", now).apply()
+            val m = msg ?: return@Thread
+            ui.post {
+                if (!isFinishing && !isDestroyed) {
+                    AlertDialog.Builder(this).setTitle("Perlu perhatian").setMessage(m).setPositiveButton("OK", null).show()
+                }
+            }
+        }.start()
+    }
+
+    // Buka otomatis saat TV menyala butuh izin "Tampilkan di atas aplikasi lain" (Android 10+)
+    private fun checkAutostartPermission() {
+        val mode = prefs.getString("autostart", "Mati") ?: "Mati"
+        if (mode == "Mati" || Build.VERSION.SDK_INT < 29) return
+        if (Settings.canDrawOverlays(this)) return
+        if (prefs.getString("overlay_asked", "") == mode) return
+        prefs.edit().putString("overlay_asked", mode).apply()
+        AlertDialog.Builder(this)
+            .setTitle("Buka otomatis saat TV menyala")
+            .setMessage("Agar Bayu TV bisa terbuka sendiri saat TV dinyalakan, izinkan \"Tampilkan di atas aplikasi lain\" untuk Bayu TV.")
+            .setPositiveButton("Buka pengaturan") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
+                } catch (e: Exception) {
+                    AlertDialog.Builder(this)
+                        .setMessage("TV ini tidak menyediakan pengaturan izin tersebut, jadi buka otomatis mungkin tidak berjalan.")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+            .setNegativeButton("Nanti", null)
+            .show()
+    }
+
     private fun checkUpdate() {
         try {
             val c = URL(repoApi).openConnection() as HttpURLConnection
@@ -927,6 +991,7 @@ class HomeActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (pendingTrial != null) ui.postDelayed({ confirmTrial() }, 600L)
+        ui.postDelayed({ if (!isFinishing) checkAutostartPermission() }, 1500L)
         if (Themes.pick(this).id != skin.id) {
             recreate()
             return

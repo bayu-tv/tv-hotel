@@ -45,6 +45,16 @@ Beranda, TV Antena, **Arah & sinyal antena**: arah dan jarak ke tower (koordinat
 dan meter sinyal per mux yang terus diperbarui saat antena diputar. Tombol **Buka kompas di HP** membuka
 `https://<akun>.github.io/<repo>/kompas.html`, jadi aktifkan GitHub Pages: Settings, Pages, Deploy from a branch, `data`, `/ (root)`.
 
+### Fitur keluarga di TV Live
+
+- **Waktu sholat**: saat masuk waktu sholat muncul pemberitahuan dan volume dikecilkan (opsional memutar file adzan). OK = kembali normal.
+- **Jadwal acara (EPG)**: "sedang tayang" dan "berikutnya" dari vidio.com, mncvision.id, tivie.id (diambil workflow channel, `epg_sites` di `tools/sources.json`).
+- **Kunci anak**: PIN, kunci Internasional / Playlist Saya / menu Film, batas menit menonton per hari.
+- **Timer tidur**: baris paling atas di kolom kategori; OK untuk mengganti 30/60/90/120 menit/mati.
+- **Remote HP**: tekan kanan di TV Live untuk melihat alamat dan PIN remote.
+- **Buka otomatis saat TV menyala** (Pengaturan, "Saat TV Menyala"): butuh izin "Tampilkan di atas aplikasi lain"; berlaku saat TV dinyalakan dari mati total.
+- **Pengingat workflow**: Beranda memberi tahu bila jadwal "Perbarui daftar channel" dinonaktifkan GitHub atau daftar tidak diperbarui lebih dari 2 hari.
+
 ## Film
 
 - Katalog TMDB: Populer, Sedang tayang, Film Indonesia, Anime, Akan tayang, Daftar saya (isi kunci TMDB gratis di Pengaturan lewat HP).

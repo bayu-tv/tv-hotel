@@ -1,11 +1,56 @@
 {
-  "local_countries": ["id"],
-  "international_countries": ["my", "sg", "us", "gb", "au", "jp", "kr", "qa", "de", "fr", "cn", "in", "ph", "th", "ae", "sa", "tr", "int"],
-  "international_categories": ["news", "sports", "kids", "animation", "family", "movies", "series", "classic", "music", "documentary", "science", "travel", "outdoor", "entertainment", "religious", "cooking", "comedy", "education"],
+  "local_countries": [
+    "id"
+  ],
+  "international_countries": [
+    "my",
+    "sg",
+    "us",
+    "gb",
+    "au",
+    "jp",
+    "kr",
+    "qa",
+    "de",
+    "fr",
+    "cn",
+    "in",
+    "ph",
+    "th",
+    "ae",
+    "sa",
+    "tr",
+    "int"
+  ],
+  "international_categories": [
+    "news",
+    "sports",
+    "kids",
+    "animation",
+    "family",
+    "movies",
+    "series",
+    "classic",
+    "music",
+    "documentary",
+    "science",
+    "travel",
+    "outdoor",
+    "entertainment",
+    "religious",
+    "cooking",
+    "comedy",
+    "education"
+  ],
   "max_international_per_category": 120,
   "keep_geo_blocked": true,
   "workers": 48,
   "timeout": 10,
   "exclude_keywords": [],
-  "extra_playlists": []
+  "extra_playlists": [],
+  "epg_sites": [
+    "vidio.com",
+    "mncvision.id",
+    "tivie.id"
+  ]
 }

@@ -39,11 +39,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import java.io.File
+import java.util.Calendar
+import org.json.JSONArray
+import org.json.JSONObject
 
 // TV Live hybrid: channel internet (ExoPlayer) dan channel antena (TvView) dalam satu daftar.
 class MainActivity : AppCompatActivity() {
 
-    private class Cat(val title: String, val keys: List<String>)
+    private class Cat(val title: String, val keys: List<String>, val action: String? = null)
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
@@ -81,6 +84,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chanList: ListView
     private lateinit var catAdapter: BaseAdapter
     private lateinit var chanAdapter: BaseAdapter
+    private lateinit var colLeft: LinearLayout
+    private lateinit var colRight: LinearLayout
+    private lateinit var catHead: TextView
+    private lateinit var chanHead: TextView
     private lateinit var notice: Notice
 
     private val brass = 0xFFB8975A.toInt()
@@ -178,13 +185,17 @@ class MainActivity : AppCompatActivity() {
 
         val left = LinearLayout(this)
         left.orientation = LinearLayout.VERTICAL
-        val head = tv("KATEGORI", 13f, brass, Typeface.SANS_SERIF)
-        head.letterSpacing = 0.2f
+        left.setPadding(dp(6), dp(8), dp(6), dp(6))
+        colLeft = left
+        val head = tv("KATEGORI", 14f, brass, Typeface.SANS_SERIF)
+        head.letterSpacing = 0.15f
         head.setPadding(dp(10), 0, 0, dp(8))
+        catHead = head
         left.addView(head)
         catList = ListView(this)
         catList.divider = null
-        catList.selector = ColorDrawable(0x44B8975A)
+        catList.selector = selectorBg()
+        catList.onFocusChangeListener = View.OnFocusChangeListener { _, _ -> styleFocus() }
         catList.isFocusable = true
         catAdapter = object : BaseAdapter() {
             override fun getCount(): Int = cats.size
@@ -197,7 +208,7 @@ class MainActivity : AppCompatActivity() {
                     it.ellipsize = TextUtils.TruncateAt.END
                 }
                 val c = cats[position]
-                v.text = c.title + "  (" + c.keys.size + ")"
+                v.text = if (c.action != null) c.title else c.title + "  (" + c.keys.size + ")"
                 v.setTextColor(if (position == catIdx) brassLight else mute)
                 return v
             }
@@ -211,15 +222,27 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
         catList.setOnItemClickListener { _, _, pos, _ ->
-            selectCat(pos, false)
-            chanList.requestFocus()
+            if (cats.getOrNull(pos)?.action == "sleep") {
+                cycleSleep()
+                catList.setSelection(pos)
+            } else {
+                selectCat(pos, false)
+                chanList.requestFocus()
+            }
         }
         left.addView(catList, LinearLayout.LayoutParams(-1, 0, 1f))
         panel.addView(left, LinearLayout.LayoutParams(dp(290), -1))
 
         val right = LinearLayout(this)
         right.orientation = LinearLayout.VERTICAL
-        right.setPadding(dp(12), 0, 0, 0)
+        right.setPadding(dp(12), dp(8), dp(6), dp(6))
+        colRight = right
+        chanHead = tv("CHANNEL", 14f, brass, Typeface.SANS_SERIF)
+        chanHead.letterSpacing = 0.15f
+        chanHead.maxLines = 1
+        chanHead.ellipsize = TextUtils.TruncateAt.END
+        chanHead.setPadding(dp(8), 0, 0, dp(4))
+        right.addView(chanHead)
         search = EditText(this)
         search.hint = "Cari channel"
         search.setHintTextColor(0xFF8D8678.toInt())
@@ -242,7 +265,9 @@ class MainActivity : AppCompatActivity() {
 
         chanList = ListView(this)
         chanList.divider = null
-        chanList.selector = ColorDrawable(0x55B8975A)
+        chanList.selector = selectorBg()
+        chanList.onFocusChangeListener = View.OnFocusChangeListener { _, _ -> styleFocus() }
+        search.onFocusChangeListener = View.OnFocusChangeListener { _, _ -> styleFocus() }
         chanList.isFocusable = true
         chanAdapter = object : BaseAdapter() {
             override fun getCount(): Int = shown.size
@@ -264,22 +289,35 @@ class MainActivity : AppCompatActivity() {
                     val llp = LinearLayout.LayoutParams(dp(56), dp(32))
                     llp.setMargins(dp(12), 0, dp(12), 0)
                     row.addView(logo, llp)
+                    val mid = LinearLayout(this@MainActivity)
+                    mid.orientation = LinearLayout.VERTICAL
                     val name = tv("", 18f, ivory, Typeface.SANS_SERIF)
                     name.maxLines = 1
                     name.ellipsize = TextUtils.TruncateAt.END
-                    row.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
+                    mid.addView(name)
+                    val nowT = tv("", 12f, mute, Typeface.SANS_SERIF)
+                    nowT.maxLines = 1
+                    nowT.ellipsize = TextUtils.TruncateAt.END
+                    mid.addView(nowT)
+                    row.addView(mid, LinearLayout.LayoutParams(0, -2, 1f))
                     val star = tv("", 16f, brass, Typeface.SANS_SERIF)
                     row.addView(star, LinearLayout.LayoutParams(-2, -2))
                 }
                 val ch = shown[position]
                 (row.getChildAt(0) as TextView).text = (numberOf[ch.key] ?: 0).toString()
                 Images.loadUrl(ch.logo, row.getChildAt(1) as ImageView, 128, true)
-                val nm = row.getChildAt(2) as TextView
+                val mid = row.getChildAt(2) as LinearLayout
+                val nm = mid.getChildAt(0) as TextView
+                val nowT = mid.getChildAt(1) as TextView
+                val (cur, _) = Epg.nowNext(ch.name)
+                nowT.text = cur?.title ?: ""
+                nowT.visibility = if (cur != null) View.VISIBLE else View.GONE
                 val srcs = groups[ch.key] ?: emptyList()
                 val hasInet = srcs.any { !it.isAntenna && !it.isApp }
                 val extra = when {
                     ch.isAntenna && hasInet -> "  · antena+internet"
                     ch.isAntenna -> "  · antena " + ch.number
+                    Lock.channelLocked(this@MainActivity, ch) -> "  · terkunci"
                     ch.isApp -> "  · ↗ " + (ch.group ?: "")
                     ch.status == "geo" -> "  · belum dicek"
                     else -> ""
@@ -312,6 +350,34 @@ class MainActivity : AppCompatActivity() {
 
     private var favs: Set<String> = emptySet()
 
+    // Sorotan yang jelas: bingkai emas pada baris terpilih
+    private fun selectorBg(): GradientDrawable {
+        val g = GradientDrawable()
+        g.cornerRadius = dp(8).toFloat()
+        g.setColor(0x66B8975A)
+        g.setStroke(dp(2), brassLight)
+        return g
+    }
+
+    // Kolom yang sedang aktif terang dan berlabel "\u25B6"; kolom lain diredupkan
+    private fun styleFocus() {
+        if (!::colLeft.isInitialized) return
+        val inCat = catList.hasFocus()
+        val active = GradientDrawable()
+        active.cornerRadius = dp(12).toFloat()
+        active.setColor(0x22FFFFFF)
+        active.setStroke(dp(1), 0x66E6C88F)
+        colLeft.background = if (inCat) active else null
+        colRight.background = if (inCat) null else active
+        colLeft.alpha = if (inCat) 1f else 0.5f
+        colRight.alpha = if (inCat) 0.5f else 1f
+        catHead.text = if (inCat) "\u25B6 KATEGORI" else "KATEGORI"
+        catHead.setTextColor(if (inCat) brassLight else mute)
+        val t = cats.getOrNull(catIdx)?.title ?: ""
+        chanHead.text = (if (inCat) "CHANNEL" else "\u25B6 CHANNEL") + (if (t.isNotEmpty()) "  \u00B7  " + t else "")
+        chanHead.setTextColor(if (inCat) mute else brassLight)
+    }
+
     private fun toggleFav(ch: Channel) {
         if (ch.key == Antenna.OPEN_KEY) return
         val added = Playlist.toggleFavorite(this, ch.key)
@@ -332,7 +398,16 @@ class MainActivity : AppCompatActivity() {
             list = Playlist.loadAll(this)
         }
         val ant = Antenna.load(this)
+        Epg.load(this)
         ui.post { onLoaded(list, ant, false) }
+        val pt = Prayer.fetch(this)
+        ui.post {
+            prayerTimes = pt
+            prayerDay = Prayer.todayStr()
+        }
+        Epg.refresh(this)
+        Epg.load(this)
+        ui.post { if (!isFinishing) chanAdapter.notifyDataSetChanged() }
         if (hadCache && Playlist.ageHours(this) >= 6) {
             if (Playlist.download(this)) {
                 val fresh = Playlist.loadAll(this)
@@ -360,7 +435,10 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().remove("trying").apply()
         val vis = visibleKeys()
         val start = if (last != null && last != trying && byKey.containsKey(last) && last !in hidden) last
-        else vis.firstOrNull { it != trying && byKey[it]?.isAntenna != true && byKey[it]?.isApp != true && it != Antenna.OPEN_KEY }
+        else vis.firstOrNull {
+            val c = byKey[it]
+            it != trying && c != null && !c.isAntenna && !c.isApp && it != Antenna.OPEN_KEY && !Lock.channelLocked(this, c)
+        }
             ?: vis.firstOrNull()
         if (start != null) play(start, vis, true)
         if (trying != null) {
@@ -459,6 +537,7 @@ class MainActivity : AppCompatActivity() {
         }
         numberOf = nums
         val out = ArrayList<Cat>()
+        out.add(Cat(sleepTitle(), emptyList(), "sleep"))
         val fav = vis.filter { favs.contains(it.key) }.map { it.key }
         if (fav.isNotEmpty()) out.add(Cat("Favorit", fav))
         out.add(Cat("Semua channel", vis.map { it.key }))
@@ -479,6 +558,18 @@ class MainActivity : AppCompatActivity() {
         }
         cats = out
         catAdapter.notifyDataSetChanged()
+        // Daftar untuk remote HP
+        val arr = JSONArray()
+        for (c in vis) {
+            val num = nums[c.key] ?: continue
+            val o = JSONObject()
+            o.put("k", c.key)
+            o.put("n", num)
+            o.put("name", Playlist.display(c.name))
+            o.put("cat", c.region + " / " + c.category)
+            arr.put(o)
+        }
+        remoteList = arr.toString()
     }
 
     private fun selectCat(i: Int, keepSel: Boolean) {
@@ -487,6 +578,7 @@ class MainActivity : AppCompatActivity() {
         catAdapter.notifyDataSetChanged()
         applyFilter()
         if (!keepSel) chanList.setSelection(0)
+        styleFocus()
     }
 
     private fun applyFilter() {
@@ -657,12 +749,20 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        if (Lock.channelLocked(this, ch)) {
+            Lock.ask(this, Playlist.display(ch.name) + " terkunci", { play(key, list, zapped) })
+            return
+        }
         curKey = key
         pendingApp = null
         viaZap = zapped
         if (list.isNotEmpty()) zapKeys = list
         val num = numberOf[key]
-        showBanner((if (num != null) num.toString() + "   " else "") + Playlist.display(ch.name), 3000L)
+        val epgLine = Epg.line(ch.name)
+        showBanner((if (num != null) num.toString() + "   " else "") + Playlist.display(ch.name) +
+            (if (epgLine.isNotEmpty()) "\n" + epgLine else ""), if (epgLine.isNotEmpty()) 5000L else 3000L)
+        remoteCur = (if (num != null) num.toString() + "  " else "") + Playlist.display(ch.name)
+        remoteNow = epgLine
         notice.hide()
         chanAdapter.notifyDataSetChanged()
         if (!ch.isApp) prefs.edit().putString("trying", key).commit()
@@ -761,7 +861,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun zap(d: Int) {
         lastDir = d
-        var list = zapKeys.filter { it !in hidden && it != Antenna.OPEN_KEY }
+        var list = zapKeys.filter { k -> k !in hidden && k != Antenna.OPEN_KEY && byKey[k]?.let { Lock.channelLocked(this, it) } != true }
         if (list.isEmpty()) list = visibleKeys().filter { it != Antenna.OPEN_KEY }
         if (list.isEmpty()) return
         val i = list.indexOf(curKey)
@@ -787,7 +887,7 @@ class MainActivity : AppCompatActivity() {
         if (cats.isEmpty()) return
         search.setText("")
         // Buka kategori tempat channel yang sedang diputar
-        var ci = cats.indexOfFirst { it.keys == zapKeys }
+        var ci = cats.indexOfFirst { it.action == null && it.keys == zapKeys }
         if (ci < 0) ci = cats.indexOfFirst { it.title == "Semua channel" }
         selectCat(if (ci >= 0) ci else 0, true)
         panel.visibility = View.VISIBLE
@@ -841,6 +941,15 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                if (ducked) {
+                    endAdzan()
+                    return true
+                }
+                if (sleepWarned) {
+                    setSleep(0)
+                    notice.hide()
+                    return true
+                }
                 val pa = pendingApp
                 val t = if (pa != null && pa == curKey) AppLinks.targetFor(byKey[pa]?.name ?: "") else null
                 if (t != null) {
@@ -857,8 +966,19 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_INFO -> {
                 val ch = curKey?.let { byKey[it] }
-                if (ch != null) showBanner((numberOf[ch.key]?.toString() ?: "") + "   " + Playlist.display(ch.name) +
-                    "\n" + ch.region + " · " + ch.category, 4000L)
+                if (ch != null) {
+                    val ep = Epg.line(ch.name)
+                    val ip = Net.localIp()
+                    val rs = remoteServer
+                    showBanner(
+                        (numberOf[ch.key]?.toString() ?: "") + "   " + Playlist.display(ch.name) +
+                            "\n" + ch.region + " · " + ch.category +
+                            (if (ep.isNotEmpty()) "\n" + ep else "") +
+                            (if (sleepAt > 0L) "\nTimer tidur: " + ((sleepAt - System.currentTimeMillis()) / 60000L + 1) + " menit lagi" else "") +
+                            (if (ip != null && rs != null) "\nRemote HP: http://" + ip + ":" + rs.port + "  ·  PIN " + remotePin() else ""),
+                        8000L
+                    )
+                }
                 return true
             }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_BOOKMARK -> {
@@ -871,6 +991,250 @@ class MainActivity : AppCompatActivity() {
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    // ================= Waktu sholat, batas tonton, timer tidur, remote HP =================
+
+    private var prayerTimes: IntArray? = null
+    private var prayerDay = ""
+    private var ducked = false
+    private var adzanPlayer: ExoPlayer? = null
+    private var sleepAt = 0L
+    private var sleepWarned = false
+    private var limitAsking = false
+    private var remoteServer: SettingsServer? = null
+
+    @Volatile
+    private var remoteList = "[]"
+
+    @Volatile
+    private var remoteCur = ""
+
+    @Volatile
+    private var remoteNow = ""
+
+    private val tick = object : Runnable {
+        override fun run() {
+            try {
+                onTick()
+            } catch (e: Exception) {
+            }
+            ui.postDelayed(this, 30000L)
+        }
+    }
+
+    private fun isWatching(): Boolean {
+        val c = cands.getOrNull(candPos) ?: return false
+        if (c.isApp) return false
+        if (c.isAntenna) return tvView?.visibility == View.VISIBLE
+        return player?.isPlaying == true
+    }
+
+    private fun onTick() {
+        // Jadwal sholat: muat ulang saat ganti hari
+        val today = Prayer.todayStr()
+        if (prayerDay != today) {
+            prayerDay = today
+            Thread {
+                val pt = Prayer.fetch(this)
+                ui.post { prayerTimes = pt }
+            }.start()
+        }
+        checkPrayer()
+        // Batas menonton per hari
+        if (isWatching() && Lock.addWatch(this, 30) && !limitAsking) onLimit()
+        // Timer tidur
+        if (sleepAt > 0L) {
+            val left = sleepAt - System.currentTimeMillis()
+            if (left <= 0L) {
+                doSleep()
+            } else if (left <= 70000L && !sleepWarned) {
+                sleepWarned = true
+                notice.show("Timer tidur", "TV Live berhenti dalam 1 menit. Tekan OK untuk membatalkan.", 60000L)
+            }
+            if (panel.visibility == View.VISIBLE) rebuildKeepCat()
+        }
+        // Perbarui teks "sedang tayang" di daftar
+        if (panel.visibility == View.VISIBLE && Epg.has()) chanAdapter.notifyDataSetChanged()
+    }
+
+    private fun checkPrayer() {
+        if (prefs.getString("adzan", "Ya") == "Tidak") return
+        val t = prayerTimes ?: return
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        val day = Prayer.todayStr()
+        for (i in 0..4) {
+            if (now >= t[i] && now < t[i] + 2) {
+                val tag = day + "#" + i
+                if (prefs.getString("adzan_done", "") == tag) return
+                prefs.edit().putString("adzan_done", tag).apply()
+                startAdzan(i, t[i])
+                return
+            }
+        }
+    }
+
+    private val adzanEnd = Runnable { endAdzan() }
+
+    private fun startAdzan(i: Int, minute: Int) {
+        if (!isWatching()) return
+        ducked = true
+        player?.volume = 0.12f
+        try {
+            tvView?.setStreamVolume(0.12f)
+        } catch (e: Exception) {
+        }
+        val mins = (prefs.getString("adzan_min", "4") ?: "4").toIntOrNull()?.coerceIn(1, 30) ?: 4
+        notice.show("Waktu " + Prayer.NAMES[i] + "  " + Prayer.fmt(minute), "Volume dikecilkan. Tekan OK untuk kembali normal.", mins * 60000L)
+        ui.removeCallbacks(adzanEnd)
+        ui.postDelayed(adzanEnd, mins * 60000L)
+        val url = (prefs.getString("adzan_url", "") ?: "").trim()
+        if (url.startsWith("http")) {
+            try {
+                val ap = ExoPlayer.Builder(this).build()
+                ap.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_ENDED) endAdzan()
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        // suara adzan gagal: volume tetap kecil sampai waktunya habis
+                    }
+                })
+                ap.setMediaItem(MediaItem.fromUri(url))
+                ap.prepare()
+                ap.playWhenReady = true
+                adzanPlayer = ap
+                // beri waktu sampai adzan selesai (maks. 10 menit)
+                ui.removeCallbacks(adzanEnd)
+                ui.postDelayed(adzanEnd, 10L * 60000L)
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private fun endAdzan() {
+        ui.removeCallbacks(adzanEnd)
+        adzanPlayer?.release()
+        adzanPlayer = null
+        if (!ducked) return
+        ducked = false
+        player?.volume = 1f
+        try {
+            tvView?.setStreamVolume(1f)
+        } catch (e: Exception) {
+        }
+        notice.hide()
+    }
+
+    private fun onLimit() {
+        limitAsking = true
+        player?.pause()
+        stopTv()
+        val lim = Lock.limitMinutes(this)
+        Lock.ask(this, "Waktu menonton hari ini habis (" + lim + " menit)", {
+            limitAsking = false
+            Lock.allowRestOfDay(this)
+            startCandidate()
+        }, {
+            limitAsking = false
+            finish()
+        })
+    }
+
+    private fun sleepTitle(): String {
+        if (sleepAt <= 0L) return "Timer tidur: mati"
+        val m = (sleepAt - System.currentTimeMillis()) / 60000L + 1
+        return "Timer tidur: " + m + " menit lagi"
+    }
+
+    private fun setSleep(minutes: Int) {
+        sleepWarned = false
+        sleepAt = if (minutes > 0) System.currentTimeMillis() + minutes * 60000L else 0L
+        if (::catAdapter.isInitialized) rebuildKeepCat()
+        showBanner(if (minutes > 0) "Timer tidur: " + minutes + " menit" else "Timer tidur dimatikan", 2500L)
+    }
+
+    private fun cycleSleep() {
+        val left = if (sleepAt > 0L) ((sleepAt - System.currentTimeMillis()) / 60000L + 1).toInt() else 0
+        val next = when {
+            sleepAt <= 0L -> 30
+            left <= 30 -> 60
+            left <= 60 -> 90
+            left <= 90 -> 120
+            else -> 0
+        }
+        setSleep(next)
+    }
+
+    private fun rebuildKeepCat() {
+        val keep = cats.getOrNull(catIdx)?.title
+        val sel = catList.selectedItemPosition
+        rebuild()
+        val i = if (keep != null && !keep.startsWith("Timer tidur")) cats.indexOfFirst { it.title == keep } else 0
+        if (i >= 0) catIdx = i
+        catAdapter.notifyDataSetChanged()
+        if (sel >= 0 && catList.hasFocus()) catList.setSelection(sel)
+    }
+
+    private fun doSleep() {
+        sleepAt = 0L
+        sleepWarned = false
+        player?.stop()
+        stopTv()
+        if (ducked) endAdzan()
+        notice.show("Selamat beristirahat", "TV Live dihentikan oleh timer tidur.", 4000L)
+        ui.postDelayed({
+            try {
+                val home = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                home.addCategory(android.content.Intent.CATEGORY_HOME)
+                home.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(home)
+            } catch (e: Exception) {
+            }
+            finish()
+        }, 3000L)
+    }
+
+    private fun remotePin(): String {
+        var p = prefs.getString("remote_pin", null)
+        if (p == null || p.length != 4) {
+            p = (java.security.SecureRandom().nextInt(9000) + 1000).toString()
+            prefs.edit().putString("remote_pin", p).apply()
+        }
+        return p
+    }
+
+    private fun startRemote() {
+        if (remoteServer != null) return
+        val r = object : Remote {
+            override fun channelsJson(): String =
+                "{\"cur\":" + JSONObject.quote(remoteCur) + ",\"now\":" + JSONObject.quote(remoteNow) + ",\"list\":" + remoteList + "}"
+
+            override fun command(cmd: String, arg: String) {
+                ui.post {
+                    if (isFinishing) return@post
+                    when (cmd) {
+                        "play" -> if (byKey.containsKey(arg)) {
+                            hidePanel()
+                            play(arg, zapKeys)
+                        }
+                        "zap" -> zap(if (arg == "-1") -1 else 1)
+                        "panel" -> if (panel.visibility == View.VISIBLE) hidePanel() else showPanel()
+                        "ok" -> onKeyDown(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER))
+                        "sleep" -> setSleep(arg.toIntOrNull()?.coerceIn(0, 240) ?: 0)
+                        else -> {}
+                    }
+                    Unit
+                }
+            }
+        }
+        try {
+            val s = SettingsServer(this, remotePin(), r) {}
+            if (s.start()) remoteServer = s
+        } catch (e: Exception) {
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -886,12 +1250,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        startRemote()
+        ui.removeCallbacks(tick)
+        ui.postDelayed(tick, 30000L)
         val c = cands.getOrNull(candPos)
         if (all.isNotEmpty() && c != null && !c.isAntenna && !c.isApp && !returnFromApp) player?.playWhenReady = true
     }
 
     override fun onStop() {
         super.onStop()
+        ui.removeCallbacks(tick)
+        remoteServer?.stop()
+        remoteServer = null
+        if (ducked) endAdzan()
         player?.pause()
         try {
             tvView?.reset()
@@ -913,6 +1284,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        remoteServer?.stop()
+        adzanPlayer?.release()
+        adzanPlayer = null
         player?.release()
         player = null
         try {

@@ -179,7 +179,7 @@ class AntennaAimActivity : AppCompatActivity() {
             val msg = if (home == null) "Lokasi rumah belum diisi." else "Lokasi tower belum diisi."
             left.addView(tv(msg, 22f, brassLight, Typeface.SANS_SERIF))
             val t = tv(
-                "Cari lokasi tower terdekat lewat aplikasi resmi SinyalTVDigital di HP (atau Google Maps), salin koordinatnya, " +
+                "Cari tower di Google Maps lewat HP (ketik \"pemancar TVRI\" atau \"tower TV\"), tekan lama titik tower sampai koordinatnya muncul, salin, " +
                     "lalu buka menu Pengaturan di Beranda dan isi bagian \"Arah Antena\" dari HP. " +
                     "Lokasi rumah diisi di bagian Kota.", 16f, mute, Typeface.SANS_SERIF
             )
