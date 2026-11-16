@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -32,7 +35,7 @@
         <activity
             android:name=".HomeActivity"
             android:exported="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -83,7 +86,8 @@
 
         <activity
             android:name=".RadioMusicActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:screenOrientation="unspecified" />
 
         <activity
             android:name=".SettingsActivity"
