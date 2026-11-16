@@ -606,6 +606,17 @@ class FilmActivity : AppCompatActivity() {
         addYoutubeRow(my, "Anime Sub Indo Resmi (Muse & Ani-One)", YoutubeCatalog.ANIME_PICKS)
         addYoutubeRow(my, "Drama China Sub Indo Resmi (WeTV, iQIYI & YOUKU)", YoutubeCatalog.DRACIN_PICKS)
         addYoutubeRow(my, "Semua Playlist Kanal Resmi", YoutubeCatalog.OFFICIAL_CHANNELS)
+
+        Thread {
+            val latest = YoutubeCatalog.fetchLatestRss(this)
+            if (latest.isNotEmpty() && my == token && !isFinishing) {
+                ui.post {
+                    if (my == token && tabIdx == 4 && !isFinishing) {
+                        addYoutubeRow(my, "Episode Terbaru Otomatis (RSS Resmi)", latest)
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun addYoutubeRow(my: Int, rowTitle: String, items: List<YoutubeCatalog.Entry>) {
@@ -696,6 +707,10 @@ class FilmActivity : AppCompatActivity() {
         }
         card.addView(title)
 
+        if (item.posterUrl != null) {
+            Images.load(item.posterUrl, img)
+        }
+
         if (item.tmdbId > 0) {
             Thread {
                 val ok = YoutubeCatalog.hydrateFromTmdb(this, item)
@@ -756,7 +771,7 @@ class FilmActivity : AppCompatActivity() {
         val yr = if (item.year.isNotEmpty()) item.year + "  ·  " else ""
         detailMeta.text = yr + item.category + r + "  ·  Subtitle Indonesia"
         detailOverview.text = item.overview.ifBlank {
-            "Tayangan resmi dari ${item.channelName}. Pilih tombol di bawah untuk langsung membuka daftar episode Sub Indo di aplikasi YouTube TV."
+            "Tayangan resmi dari ${item.channelName}. Pilih tombol di bawah untuk langsung membuka daftar episode Sub Indo di aplikasi YouTube."
         }
         detailProviders.text = "Kanal Resmi: ${item.channelName} (Gratis & Jernih di YouTube)"
 
@@ -776,21 +791,27 @@ class FilmActivity : AppCompatActivity() {
         }
 
         detailActions.removeAllViews()
-        if (item.searchQuery.isNotBlank()) {
+        if (!item.videoUrl.isNullOrBlank()) {
+            addDetailButton("▶  Putar Episode Ini di YouTube", true) {
+                YoutubeCatalog.openUrl(this, item.videoUrl) {
+                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
+                }
+            }
+        } else if (item.searchQuery.isNotBlank()) {
             addDetailButton("▶  Tonton di YouTube (Sub Indo)", true) {
                 YoutubeCatalog.openYoutubeSearch(this, item.searchQuery, item.channelUrl) {
-                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube sudah terpasang di TV.", 4000L)
+                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
             }
             addDetailButton("Playlist ${item.channelName}", false) {
                 YoutubeCatalog.openUrl(this, item.channelUrl) {
-                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube sudah terpasang di TV.", 4000L)
+                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
             }
         } else {
             addDetailButton("▶  Buka Semua Playlist", true) {
                 YoutubeCatalog.openUrl(this, item.channelUrl) {
-                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube sudah terpasang di TV.", 4000L)
+                    notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
             }
         }
