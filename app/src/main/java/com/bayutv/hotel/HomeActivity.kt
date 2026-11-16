@@ -22,6 +22,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
@@ -32,7 +33,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
@@ -75,6 +75,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var tvWx1: TextView
     private lateinit var tvWx2: TextView
     private lateinit var fc: LinearLayout
+    private lateinit var noteBox: LinearLayout
+    private lateinit var tvFamilyNote: TextView
     private lateinit var tvCd: TextView
     private lateinit var tvNote: TextView
     private lateinit var tiles: LinearLayout
@@ -248,6 +250,33 @@ class HomeActivity : AppCompatActivity() {
         wlp.topMargin = dp(14)
         col.addView(wx, wlp)
 
+        // Kartu Pengingat / Catatan Keluarga (otomatis muncul bila diisi dari HP)
+        noteBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor((brass and 0x00FFFFFF) or 0x1A000000)
+                setStroke(dp(1), (brass and 0x00FFFFFF) or 0x44000000)
+            }
+            visibility = View.GONE
+        }
+        noteBox.addView(icon(R.drawable.ic_book, 18, brassLight))
+        val noteTag = tv("CATATAN  ·  ", 12f, brassLight, Typeface.SANS_SERIF).apply {
+            letterSpacing = 0.08f
+            setPadding(dp(10), 0, 0, 0)
+        }
+        noteBox.addView(noteTag)
+        tvFamilyNote = tv("", 14f, ivory, Typeface.SANS_SERIF).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        noteBox.addView(tvFamilyNote, LinearLayout.LayoutParams(0, -2, 1f))
+        val nlp = LinearLayout.LayoutParams(-1, -2)
+        nlp.topMargin = dp(10)
+        col.addView(noteBox, nlp)
+
         col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.2f))
 
         // Menu
@@ -303,12 +332,23 @@ class HomeActivity : AppCompatActivity() {
         setContentView(root)
         tiles.getChildAt(0).requestFocus()
 
+        refreshFamilyNote()
         renderWeather()
         loadWeather()
         loadPrayer()
         ui.post(tick)
         Thread { checkUpdate() }.start()
         checkWorkflow()
+    }
+
+    private fun refreshFamilyNote() {
+        val raw = (prefs.getString("note", "") ?: "").trim()
+        if (raw.isEmpty()) {
+            noteBox.visibility = View.GONE
+        } else {
+            tvFamilyNote.text = raw.replace('\n', ' ')
+            noteBox.visibility = View.VISIBLE
+        }
     }
 
     private val tick = object : Runnable {
@@ -327,7 +367,10 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    private fun fmt(m: Int): String = if (m < 0) "--:--" else String.format(Locale.US, "%02d:%02d", m / 60, m % 60)
+    private fun fmt(m: Int): String = if (m < 0) "--:--" else String.format(Locale.US, "%02d:%02d", (m + 1440) % 1440 / 60, (m + 1440) % 60)
+
+    private fun prayerOffset(): Int =
+        (prefs.getString("adzan_offset", "0") ?: "0").toIntOrNull()?.coerceIn(-15, 15) ?: 0
 
     private fun refreshClock() {
         val now = Date()
@@ -349,18 +392,19 @@ class HomeActivity : AppCompatActivity() {
             tvCd.text = "Jadwal sholat sedang dimuat..."
             return
         }
-        var nx = times.indexOfFirst { it > nowMin }
+        val off = prayerOffset()
+        var nx = times.indexOfFirst { (it + off) > nowMin }
         val diff = if (nx < 0) {
             nx = 0
-            times[0] + 1440 - nowMin
+            (times[0] + off) + 1440 - nowMin
         } else {
-            times[nx] - nowMin
+            (times[nx] + off) - nowMin
         }
         for (i in 0..4) {
             val hi = i == nx
             cells[i].first.setTextColor(if (hi) brass else mute)
             cells[i].second.setTextColor(if (hi) brassLight else ivory)
-            cells[i].second.text = fmt(times[i])
+            cells[i].second.text = fmt(times[i] + off)
         }
         tvCd.text = extraLine(nowMin) + prayNames[nx] + " dalam " + (diff / 60) + " jam " + (diff % 60) + " menit"
     }
@@ -650,8 +694,9 @@ class HomeActivity : AppCompatActivity() {
     private fun extraLine(nowMin: Int): String {
         val sep = "   \u00B7   "
         if (skin.id == "ramadan") {
-            val imsak = times[0] - 10
-            val magrib = times[3]
+            val off = prayerOffset()
+            val imsak = times[0] + off - 10
+            val magrib = times[3] + off
             return if (nowMin < imsak) "Imsak dalam " + dur(imsak - nowMin) + sep
             else if (nowMin < magrib) "Berbuka dalam " + dur(magrib - nowMin) + sep
             else "Imsak besok dalam " + dur(imsak + 1440 - nowMin) + sep
@@ -888,7 +933,6 @@ class HomeActivity : AppCompatActivity() {
                 if (!ok) {
                     notice.show("Tidak bisa dibuka", t.label, 4000L)
                 } else if (t.url != null && t.target != null) {
-                    // Simpan sebagai kandidat; dikonfirmasi saat kembali ke Beranda
                     pendingTrial = t
                 }
             }
@@ -998,6 +1042,7 @@ class HomeActivity : AppCompatActivity() {
         }
         buildDeco()
         tvName.text = prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda"
+        refreshFamilyNote()
         applyBackground()
         val sig = lat.toString() + lon.toString() + tzName
         if (locSig != "" && sig != locSig) {
@@ -1007,6 +1052,7 @@ class HomeActivity : AppCompatActivity() {
             fetchWeather()
         }
         locSig = sig
+        refreshClock()
         renderWeather()
     }
 
