@@ -3,8 +3,8 @@ package com.bayutv.hotel
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -13,14 +13,14 @@ import android.os.Looper
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
-import android.view.ViewGroup
-import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.GridView
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
@@ -34,19 +34,41 @@ class FilmActivity : AppCompatActivity() {
     private val brassLight = 0xFFE6C88F.toInt()
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
+    private val bgDark = 0xFF0D0C0B.toInt()
+
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
 
-    private var movies: List<Movie> = emptyList()
-    private lateinit var grid: GridView
-    private lateinit var heading: TextView
-    private lateinit var notice: Notice
-    private lateinit var adapter: BaseAdapter
-    private val cats = arrayOf("Populer", "Sedang tayang", "Film Indonesia", "Anime", "Akan tayang", "Daftar saya", "Koleksi Saya", "Cari...")
-    private val searchIdx = 7
-    private val catViews = ArrayList<TextView>()
-    private var catIdx = -1
+    private val tabs = arrayOf("Beranda", "Film", "Anime & Serial", "Indonesia", "Koleksi Saya", "Daftar Saya", "Cari")
+    private val searchIdx = 6
+    private val tabViews = ArrayList<TextView>()
+    private var tabIdx = -1
     private var token = 0
+    private var jfTitles: Set<String> = emptySet()
+
+    // Hero Spotlight Views
+    private lateinit var heroBackdrop: ImageView
+    private lateinit var heroBadge: TextView
+    private lateinit var heroTitle: TextView
+    private lateinit var heroMeta: TextView
+    private lateinit var heroOverview: TextView
+
+    // Rows Container
+    private lateinit var rowsScroll: ScrollView
+    private lateinit var rowsBox: LinearLayout
+
+    // Detail Overlay Views
+    private lateinit var detailOverlay: FrameLayout
+    private lateinit var detailBackdrop: ImageView
+    private lateinit var detailPoster: ImageView
+    private lateinit var detailTitle: TextView
+    private lateinit var detailMeta: TextView
+    private lateinit var detailOverview: TextView
+    private lateinit var detailProviders: TextView
+    private lateinit var detailActions: LinearLayout
+
+    private lateinit var notice: Notice
+    private var focusedMovie: Movie? = null
 
     private fun dp(v: Int): Int = Ui.dp(this, v)
 
@@ -59,158 +81,284 @@ class FilmActivity : AppCompatActivity() {
         return v
     }
 
+    private val applyHeroRunnable = Runnable {
+        val m = focusedMovie ?: return@Runnable
+        renderHero(m)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         val root = FrameLayout(this)
-        root.setBackgroundColor(Themes.pick(this).bg)
-        val row = LinearLayout(this)
-        row.setPadding(dp(40), dp(28), dp(40), dp(16))
-        root.addView(row, FrameLayout.LayoutParams(-1, -1))
+        root.setBackgroundColor(bgDark)
 
-        val left = LinearLayout(this)
-        left.orientation = LinearLayout.VERTICAL
-        left.addView(tv("Film", 30f, brass, Typeface.SERIF))
-        for (i in cats.indices) {
-            val t = tv(cats[i], 18f, mute, Typeface.SERIF)
-            t.setPadding(dp(16), dp(12), dp(16), dp(12))
-            t.isFocusable = true
-            t.isClickable = true
-            t.setOnFocusChangeListener { _, f ->
-                if (f && i < searchIdx) select(i)
-                t.setTextColor(if (f) brassLight else if (i == catIdx) brass else mute)
-            }
-            t.setOnClickListener {
-                if (i == searchIdx) askSearch() else grid.requestFocus()
-            }
-            val lp = LinearLayout.LayoutParams(dp(190), -2)
-            lp.topMargin = dp(if (i == 0) 18 else 4)
-            left.addView(t, lp)
-            catViews.add(t)
+        // 1. Hero Backdrop (kanan atas) dengan gradasi ala Netflix
+        val heroFrame = FrameLayout(this)
+        heroBackdrop = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(0xFF151311.toInt())
         }
-        row.addView(left, LinearLayout.LayoutParams(dp(210), -1))
+        val bdLp = FrameLayout.LayoutParams(dp(640), dp(340), Gravity.TOP or Gravity.END)
+        heroFrame.addView(heroBackdrop, bdLp)
 
-        val right = LinearLayout(this)
-        right.orientation = LinearLayout.VERTICAL
-        heading = tv("", 20f, ivory, Typeface.SERIF)
-        heading.setPadding(0, 0, 0, dp(10))
-        right.addView(heading)
+        // Gradasi kiri -> kanan agar teks kiri tajam
+        val fadeLeft = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(bgDark, bgDark, 0xCC0D0C0B.toInt(), 0x220D0C0B)
+            )
+        }
+        heroFrame.addView(fadeLeft, FrameLayout.LayoutParams(dp(720), dp(340), Gravity.TOP or Gravity.END))
 
-        grid = GridView(this)
-        grid.numColumns = GridView.AUTO_FIT
-        grid.columnWidth = dp(132)
-        grid.stretchMode = GridView.STRETCH_COLUMN_WIDTH
-        grid.horizontalSpacing = dp(12)
-        grid.verticalSpacing = dp(12)
-        grid.isFocusable = true
-        val sel = GradientDrawable()
-        sel.cornerRadius = dp(8).toFloat()
-        sel.setColor(0x22B8975A)
-        sel.setStroke(dp(2), brass)
-        grid.selector = sel
-        adapter = object : BaseAdapter() {
-            override fun getCount(): Int = movies.size
-            override fun getItem(position: Int): Any = movies[position]
-            override fun getItemId(position: Int): Long = position.toLong()
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v: LinearLayout
-                if (convertView == null) {
-                    v = LinearLayout(this@FilmActivity)
-                    v.orientation = LinearLayout.VERTICAL
-                    v.setPadding(dp(4), dp(4), dp(4), dp(4))
-                    val img = ImageView(this@FilmActivity)
-                    img.scaleType = ImageView.ScaleType.CENTER_CROP
-                    img.setBackgroundColor(0xFF1A1816.toInt())
-                    v.addView(img, LinearLayout.LayoutParams(-1, dp(190)))
-                    val t = tv("", 13f, ivory, Typeface.SANS_SERIF)
-                    t.maxLines = 1
-                    t.ellipsize = TextUtils.TruncateAt.END
-                    t.setPadding(0, dp(4), 0, 0)
-                    v.addView(t)
-                    v.addView(tv("", 11f, mute, Typeface.SANS_SERIF))
-                } else {
-                    v = convertView as LinearLayout
+        // Gradasi atas -> bawah menyatu ke daftar baris
+        val fadeBottom = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x330D0C0B, 0x000D0C0B, 0xCC0D0C0B.toInt(), bgDark)
+            )
+        }
+        heroFrame.addView(fadeBottom, FrameLayout.LayoutParams(-1, dp(345), Gravity.TOP))
+        root.addView(heroFrame, FrameLayout.LayoutParams(-1, dp(345), Gravity.TOP))
+
+        // 2. Konten Utama: Top Nav + Hero Info + Baris Horizontal
+        val mainCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Top Navigation Bar
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(42), dp(20), dp(42), dp(8))
+        }
+        val brand = tv("BAYU CINEMA", 20f, brassLight, Typeface.SERIF).apply {
+            letterSpacing = 0.14f
+            setPadding(0, 0, dp(24), 0)
+        }
+        topBar.addView(brand)
+
+        for (i in tabs.indices) {
+            val label = if (i == searchIdx) "\uD83D\uDD0D  " + tabs[i] else tabs[i]
+            val t = tv(label, 15f, mute, Typeface.SANS_SERIF).apply {
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                isFocusable = true
+                isClickable = true
+                setOnFocusChangeListener { _, hasFocus ->
+                    styleTab(this, i, hasFocus)
+                    if (hasFocus && i < searchIdx) selectTab(i)
                 }
-                val m = movies[position]
-                Images.load(m.poster, v.getChildAt(0) as ImageView)
-                (v.getChildAt(1) as TextView).text = m.title
-                val r = if (m.rating > 0) String.format(Locale.US, "%.1f", m.rating) else "-"
-                (v.getChildAt(2) as TextView).text = (if (m.year.isEmpty()) "" else m.year + "  \u00B7  ") + "\u2605 " + r
-                return v
+                setOnClickListener {
+                    if (i == searchIdx) askSearch() else selectTab(i)
+                }
             }
+            val lp = LinearLayout.LayoutParams(-2, -2)
+            lp.rightMargin = dp(6)
+            topBar.addView(t, lp)
+            tabViews.add(t)
         }
-        grid.adapter = adapter
-        grid.setOnItemClickListener { _, _, pos, _ -> if (pos < movies.size) showDetail(movies[pos]) }
-        right.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
-        val foot = tv("Katalog: TMDB (tidak didukung atau disertifikasi oleh TMDB). Ketersediaan layanan: JustWatch. Koleksi Saya: server Jellyfin Anda.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF)
-        foot.setPadding(0, dp(6), 0, 0)
-        right.addView(foot)
-        row.addView(right, LinearLayout.LayoutParams(0, -1, 1f))
+        mainCol.addView(topBar)
+
+        // Hero Info Box
+        val heroInfo = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(42), dp(6), dp(42), dp(10))
+        }
+        heroBadge = tv("STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.SANS_SERIF).apply {
+            letterSpacing = 0.12f
+        }
+        heroTitle = tv("Pilih Film atau Anime", 30f, ivory, Typeface.SERIF).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        heroMeta = tv("", 13f, brass, Typeface.SANS_SERIF)
+        heroOverview = tv(
+            "Geser remote ke poster di bawah untuk melihat sinopsis, lalu tekan OK untuk menonton lengkap dengan Subtitle Indonesia.",
+            13f,
+            0xFFD4CEC2.toInt(),
+            Typeface.SANS_SERIF
+        ).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(6), 0, 0)
+        }
+        heroInfo.addView(heroBadge)
+        heroInfo.addView(heroTitle)
+        heroInfo.addView(heroMeta)
+        heroInfo.addView(heroOverview, LinearLayout.LayoutParams(dp(560), -2))
+        mainCol.addView(heroInfo)
+
+        // Baris-baris poster ala Netflix
+        rowsScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+        }
+        rowsBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(28))
+        }
+        rowsScroll.addView(rowsBox, FrameLayout.LayoutParams(-1, -2))
+        mainCol.addView(rowsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        root.addView(mainCol, FrameLayout.LayoutParams(-1, -1))
+
+        // 3. Layar Detail Sinematik (pengganti AlertDialog)
+        buildDetailOverlay(root)
 
         notice = Notice(this, root)
         setContentView(root)
-        catViews[0].requestFocus()
+
+        // Cek indeks judul Jellyfin di latar belakang untuk badge cadangan lokal
+        if (Jellyfin.configured(this)) {
+            Thread {
+                val jf = Jellyfin.latest(this) ?: emptyList()
+                jfTitles = jf.map { norm(it.title) }.toSet()
+            }.start()
+        }
+
+        tabViews[0].requestFocus()
         if (Tmdb.key(this).isEmpty()) {
-            notice.show("Kunci TMDB belum diisi", "Buka Pengaturan lewat HP, isi bagian Film (kunci gratis dari themoviedb.org), lalu kembali ke sini.")
+            notice.show(
+                "Kunci TMDB belum diisi",
+                "Buka Pengaturan lewat HP, isi bagian Film (kunci gratis dari themoviedb.org), lalu kembali ke sini."
+            )
         }
     }
 
-    private fun select(i: Int) {
-        if (i == catIdx) return
-        catIdx = i
-        for (j in catViews.indices) catViews[j].setTextColor(if (j == i) brassLight else mute)
-        heading.text = cats[i]
-        when (i) {
-            0 -> fetchList("/movie/popular", "language=id-ID&region=ID&page=1", "movie")
-            1 -> fetchList("/movie/now_playing", "language=id-ID&region=ID&page=1", "movie")
-            2 -> fetchList("/discover/movie", "language=id-ID&with_original_language=id&sort_by=primary_release_date.desc&vote_count.gte=3&page=1", "movie")
-            3 -> fetchList("/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=1", "tv")
-            4 -> fetchList("/movie/upcoming", "language=id-ID&region=ID&page=1", "movie")
-            5 -> {
-                token++
-                movies = loadWatch()
-                adapter.notifyDataSetChanged()
-                if (movies.isEmpty()) notice.show("Daftar saya kosong", "Buka detail film, lalu pilih Tambah ke daftar.", 3500L)
+    private fun styleTab(v: TextView, idx: Int, focused: Boolean) {
+        val active = idx == tabIdx
+        v.setTextColor(if (focused) Color.BLACK else if (active) brassLight else mute)
+        val g = GradientDrawable().apply {
+            cornerRadius = dp(20).toFloat()
+            if (focused) {
+                setColor(brassLight)
+            } else if (active) {
+                setColor(0x28B8975A)
+                setStroke(dp(1), brass)
+            } else {
+                setColor(Color.TRANSPARENT)
             }
-            6 -> loadCollection()
+        }
+        v.background = g
+    }
+
+    private fun refreshTabStyles() {
+        for (i in tabViews.indices) styleTab(tabViews[i], i, tabViews[i].hasFocus())
+    }
+
+    private fun scheduleHero(m: Movie) {
+        focusedMovie = m
+        ui.removeCallbacks(applyHeroRunnable)
+        ui.postDelayed(applyHeroRunnable, 160L)
+    }
+
+    private fun renderHero(m: Movie) {
+        heroTitle.text = m.title
+        val r = if (m.rating > 0) String.format(Locale.US, "%.1f", m.rating) else "-"
+        val typeTag = when (m.kind) {
+            "tv" -> "SERIAL / ANIME"
+            "jf_movie", "jf_series" -> "KOLEKSI SAYA (JELLYFIN)"
+            else -> "FILM"
+        }
+        val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
+        heroBadge.text = typeTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  STREAMING SUB INDO")
+        heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   ·   " else "") + "\u2605 " + r + "   ·   Tekan OK untuk Tonton"
+        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan server streaming, dan Subtitle Indonesia."
+        Images.load(m.backdrop ?: m.poster, heroBackdrop)
+    }
+
+    private fun selectTab(i: Int) {
+        if (i == tabIdx) return
+        tabIdx = i
+        refreshTabStyles()
+        val my = ++token
+        rowsBox.removeAllViews()
+        rowsScroll.scrollTo(0, 0)
+
+        when (i) {
+            0 -> loadHomeRows(my)
+            1 -> loadCategoryRows(
+                my,
+                listOf(
+                    Triple("Film Populer", "/movie/popular", "language=id-ID&region=ID&page=1"),
+                    Triple("Sedang Tayang di Bioskop", "/movie/now_playing", "language=id-ID&region=ID&page=1"),
+                    Triple("Rating Tertinggi", "/movie/top_rated", "language=id-ID&region=ID&page=1"),
+                    Triple("Akan Tayang", "/movie/upcoming", "language=id-ID&region=ID&page=1")
+                ),
+                "movie"
+            )
+            2 -> loadCategoryRows(
+                my,
+                listOf(
+                    Triple("Anime Populer", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=1"),
+                    Triple("Anime Rating Tertinggi", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=vote_average.desc&vote_count.gte=150&page=1"),
+                    Triple("Serial TV Populer", "/tv/popular", "language=id-ID&page=1"),
+                    Triple("Drama Korea Populer", "/discover/tv", "language=id-ID&with_original_language=ko&sort_by=popularity.desc&page=1")
+                ),
+                "tv"
+            )
+            3 -> loadCategoryRows(
+                my,
+                listOf(
+                    Triple("Film Indonesia Terbaru", "/discover/movie", "language=id-ID&with_original_language=id&sort_by=primary_release_date.desc&vote_count.gte=3&page=1"),
+                    Triple("Film Indonesia Terpopuler", "/discover/movie", "language=id-ID&with_original_language=id&sort_by=popularity.desc&page=1")
+                ),
+                "movie"
+            )
+            4 -> loadJellyfinTab(my)
+            5 -> {
+                val wl = loadWatch()
+                if (wl.isEmpty()) {
+                    notice.show("Daftar saya kosong", "Buka detail film, lalu pilih Tambah ke Daftar saya.", 3500L)
+                } else {
+                    notice.hide()
+                    addCarouselRow("Daftar Saya (${wl.size})", wl)
+                }
+            }
         }
     }
 
-    private fun fetchList(path: String, query: String, kind: String) {
+    private fun loadHomeRows(my: Int) {
+        if (Tmdb.key(this).isEmpty()) return
+        notice.hide()
+        val specs = listOf(
+            Triple("Sedang Tren Minggu Ini", "/trending/all/week", "language=id-ID"),
+            Triple("Film Populer", "/movie/popular", "language=id-ID&region=ID&page=1"),
+            Triple("Anime & Animasi Populer", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=1"),
+            Triple("Film Indonesia Terbaru", "/discover/movie", "language=id-ID&with_original_language=id&sort_by=primary_release_date.desc&vote_count.gte=3&page=1"),
+            Triple("Sedang Tayang", "/movie/now_playing", "language=id-ID&region=ID&page=1")
+        )
+        loadCategoryRows(my, specs, "movie")
+        val wl = loadWatch()
+        if (wl.isNotEmpty()) addCarouselRow("Daftar Saya", wl)
+    }
+
+    private fun loadCategoryRows(my: Int, specs: List<Triple<String, String, String>>, defKind: String) {
         if (Tmdb.key(this).isEmpty()) {
-            movies = emptyList()
-            adapter.notifyDataSetChanged()
-            notice.show("Kunci TMDB belum diisi", "Buka Pengaturan lewat HP, isi bagian Film (kunci gratis dari themoviedb.org).", 5000L)
+            notice.show("Kunci TMDB belum diisi", "Buka Pengaturan lewat HP, isi bagian Film.", 5000L)
             return
         }
-        val my = ++token
         Thread {
-            val json = Tmdb.get(this, path, query)
-            ui.post {
-                if (my == token) {
-                    if (json == null) {
-                        notice.show("Tidak bisa memuat", "Periksa kunci TMDB di Pengaturan dan koneksi internet TV.", 5000L)
-                    } else {
+            for ((title, path, query) in specs) {
+                if (my != token) return@Thread
+                val json = Tmdb.get(this, path, query) ?: continue
+                val list = Tmdb.parseList(json, defKind).take(16)
+                if (list.isEmpty()) continue
+                ui.post {
+                    if (my == token && !isFinishing) {
                         notice.hide()
-                        movies = Tmdb.parseList(json, kind)
-                        adapter.notifyDataSetChanged()
-                        grid.setSelection(0)
+                        addCarouselRow(title, list)
                     }
                 }
             }
         }.start()
     }
 
-    // ---- Koleksi Saya (server Jellyfin) ----
-    private fun loadCollection() {
-        val my = ++token
-        movies = emptyList()
-        adapter.notifyDataSetChanged()
+    private fun loadJellyfinTab(my: Int) {
         if (!Jellyfin.configured(this)) {
             notice.show(
-                "Koleksi Saya belum diatur",
-                "Pasang Jellyfin (gratis) di PC/laptop, masukkan film/anime milik Anda beserta subtitle Indonesia (.srt), " +
-                    "lalu isi alamat server, nama pengguna, dan sandi di Pengaturan lewat HP."
+                "Koleksi Saya (Cadangan) belum diatur",
+                "Jellyfin bersifat opsional sebagai cadangan lokal. Anda tetap bisa menonton langsung dari tab Beranda, Film, atau Anime."
             )
             return
         }
@@ -218,20 +366,392 @@ class FilmActivity : AppCompatActivity() {
         Thread {
             val list = Jellyfin.latest(this)
             ui.post {
-                if (my == token) {
-                    if (list == null) {
-                        notice.show("Server tidak terhubung", "Pastikan PC Jellyfin menyala dan alamat, nama pengguna, serta sandi di Pengaturan benar.", 6000L)
+                if (my != token) return@post
+                if (list == null) {
+                    notice.show("Server Jellyfin tidak terhubung", "Pastikan PC server menyala jika ingin memutar koleksi lokal.", 5000L)
+                } else {
+                    notice.hide()
+                    if (list.isEmpty()) {
+                        notice.show(null, "Koleksi Jellyfin masih kosong.", 3000L)
                     } else {
-                        notice.hide()
-                        movies = list
-                        adapter.notifyDataSetChanged()
-                        grid.setSelection(0)
-                        if (list.isEmpty()) notice.show(null, "Koleksi masih kosong.", 3000L)
+                        jfTitles = list.map { norm(it.title) }.toSet()
+                        addCarouselRow("Koleksi Lokal Jellyfin (${list.size})", list)
                     }
                 }
             }
         }.start()
     }
+
+    private fun addCarouselRow(rowTitle: String, items: List<Movie>) {
+        if (items.isEmpty()) return
+        if (focusedMovie == null) scheduleHero(items[0])
+
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(6), 0, dp(12))
+        }
+        val header = tv(rowTitle, 16f, ivory, Typeface.SANS_SERIF).apply {
+            setPadding(dp(42), 0, dp(42), dp(8))
+        }
+        section.addView(header)
+
+        val hScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            setPadding(dp(42), dp(4), dp(42), dp(4))
+        }
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        for (m in items) {
+            val card = buildPosterCard(m)
+            val lp = LinearLayout.LayoutParams(dp(122), -2)
+            lp.rightMargin = dp(12)
+            strip.addView(card, lp)
+        }
+
+        hScroll.addView(strip)
+        section.addView(hScroll)
+        rowsBox.addView(section)
+    }
+
+    private fun buildPosterCard(m: Movie): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(6))
+            isFocusable = true
+            isClickable = true
+            background = cardBg(false)
+        }
+
+        val posterFrame = FrameLayout(this)
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(0xFF1B1916.toInt())
+        }
+        posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(172)))
+
+        // Badge rating / Jellyfin di sudut poster
+        val badgeText = if (m.isJellyfin) "JF" else if (m.rating > 0) "\u2605 " + String.format(Locale.US, "%.1f", m.rating) else ""
+        if (badgeText.isNotEmpty()) {
+            val b = tv(badgeText, 10f, brassLight, Typeface.SANS_SERIF).apply {
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(4).toFloat()
+                    setColor(0xCC0D0C0B.toInt())
+                }
+            }
+            val blp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
+            blp.setMargins(0, dp(6), dp(6), 0)
+            posterFrame.addView(b, blp)
+        }
+
+        card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(172)))
+
+        val title = tv(m.title, 12f, ivory, Typeface.SANS_SERIF).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(2), dp(5), dp(2), 0)
+        }
+        card.addView(title)
+
+        card.setOnFocusChangeListener { _, hasFocus ->
+            card.background = cardBg(hasFocus)
+            card.animate().scaleX(if (hasFocus) 1.05f else 1f).scaleY(if (hasFocus) 1.05f else 1f).setDuration(120).start()
+            if (hasFocus) {
+                scheduleHero(m)
+                // Pastikan baris terlihat nyaman di layar saat pindah vertikal
+                val parentRow = card.parent?.parent?.parent as? View
+                if (parentRow != null) {
+                    rowsScroll.smoothScrollTo(0, (parentRow.top - dp(16)).coerceAtLeast(0))
+                }
+            }
+        }
+
+        card.setOnClickListener { openDetail(m) }
+        Images.load(m.poster, img)
+        return card
+    }
+
+    private fun cardBg(focused: Boolean): GradientDrawable = GradientDrawable().apply {
+        cornerRadius = dp(8).toFloat()
+        if (focused) {
+            setColor(0x28B8975A)
+            setStroke(dp(2), brassLight)
+        } else {
+            setColor(0x14FFFFFF)
+        }
+    }
+
+    // ---- Layar Detail Sinematik ----
+
+    private fun buildDetailOverlay(root: FrameLayout) {
+        detailOverlay = FrameLayout(this).apply {
+            setBackgroundColor(0xF50B0A09.toInt())
+            visibility = View.GONE
+            isClickable = true
+        }
+
+        detailBackdrop = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0.25f
+        }
+        detailOverlay.addView(detailBackdrop, FrameLayout.LayoutParams(-1, -1))
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(56), dp(40), dp(56), dp(40))
+        }
+
+        detailPoster = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(0xFF1D1B18.toInt())
+        }
+        content.addView(detailPoster, LinearLayout.LayoutParams(dp(220), dp(320)))
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(36), 0, 0, 0)
+        }
+        detailTitle = tv("", 28f, ivory, Typeface.SERIF)
+        detailMeta = tv("", 14f, brassLight, Typeface.SANS_SERIF).apply {
+            setPadding(0, dp(6), 0, dp(12))
+        }
+        detailOverview = tv("", 14f, 0xFFE2DDD3.toInt(), Typeface.SANS_SERIF).apply {
+            maxLines = 5
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        detailProviders = tv("", 12f, mute, Typeface.SANS_SERIF).apply {
+            setPadding(0, dp(12), 0, dp(16))
+        }
+        detailActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        right.addView(detailTitle)
+        right.addView(detailMeta)
+        right.addView(detailOverview)
+        right.addView(detailProviders)
+        right.addView(detailActions)
+
+        content.addView(right, LinearLayout.LayoutParams(0, -2, 1f))
+        detailOverlay.addView(content, FrameLayout.LayoutParams(-1, -1))
+        root.addView(detailOverlay, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun openDetail(m: Movie) {
+        if (m.isJellyfin) {
+            openJellyfin(m)
+            return
+        }
+        detailTitle.text = m.title
+        detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") +
+            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  ·  Subtitle Indonesia"
+        detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
+        detailProviders.text = "Memuat info durasi & episode..."
+        Images.load(m.poster, detailPoster)
+        Images.load(m.backdrop ?: m.poster, detailBackdrop)
+        detailActions.removeAllViews()
+
+        // Tombol utama langsung muncul seketika
+        addDetailButton("▶  Tonton (Sub Indo)", true) { startDirectStream(m) }
+        if (Jellyfin.configured(this)) {
+            addDetailButton("Koleksi Saya", false) { playFromCollection(m) }
+        }
+        val inList = loadWatch().any { watchKey(it) == watchKey(m) }
+        addDetailButton(if (inList) "✓ Di Daftar Saya" else "+ Daftar Saya", false) {
+            val added = toggleWatch(m)
+            notice.show(null, if (added) "Ditambahkan ke Daftar saya" else "Dihapus dari Daftar saya", 2000L)
+            closeDetail()
+        }
+        addDetailButton("Tutup", false) { closeDetail() }
+
+        detailOverlay.visibility = View.VISIBLE
+        detailActions.getChildAt(0)?.requestFocus()
+
+        // Ambil detail tambahan TMDB (durasi, season, trailer, layanan resmi)
+        Thread {
+            val path = "/" + (if (m.kind == "tv") "tv" else "movie") + "/" + m.id
+            val json = Tmdb.get(this, path, "language=id-ID&append_to_response=videos,watch/providers&include_video_language=id,en,ja,null")
+                ?: return@Thread
+            val o = try { JSONObject(json) } catch (e: Exception) { return@Thread }
+            ui.post {
+                if (detailOverlay.visibility != View.VISIBLE || isFinishing) return@post
+                val metaParts = ArrayList<String>()
+                if (m.year.isNotEmpty()) metaParts.add(m.year)
+                if (m.rating > 0) metaParts.add("\u2605 " + String.format(Locale.US, "%.1f", m.rating))
+                val rt = o.optInt("runtime", 0)
+                if (rt > 0) metaParts.add("$rt menit")
+                val seasons = o.optInt("number_of_seasons", 0)
+                if (seasons > 0) metaParts.add("$seasons Musim · ${o.optInt("number_of_episodes", 0)} Episode")
+                val g = o.optJSONArray("genres")
+                if (g != null && g.length() > 0) {
+                    val gl = ArrayList<String>()
+                    for (i in 0 until g.length()) gl.add(g.getJSONObject(i).optString("name"))
+                    metaParts.add(gl.joinToString(", "))
+                }
+                detailMeta.text = metaParts.joinToString("  ·  ")
+
+                val ov = o.optString("overview", "").trim()
+                if (ov.isNotEmpty()) detailOverview.text = ov
+
+                var trailer: String? = null
+                val vs = o.optJSONObject("videos")?.optJSONArray("results")
+                if (vs != null) {
+                    for (i in 0 until vs.length()) {
+                        val v = vs.getJSONObject(i)
+                        if (v.optString("site") == "YouTube" && (v.optString("type") == "Trailer" || v.optString("type") == "Teaser")) {
+                            trailer = v.optString("key")
+                            break
+                        }
+                    }
+                }
+
+                val wp = o.optJSONObject("watch/providers")?.optJSONObject("results")?.optJSONObject("ID")
+                val provNames = ArrayList<String>()
+                if (wp != null) {
+                    for (k in listOf("flatrate", "free", "ads")) {
+                        val s = names(wp.optJSONArray(k))
+                        if (s.isNotEmpty()) provNames.addAll(s.split(", "))
+                    }
+                }
+                detailProviders.text = if (provNames.isNotEmpty()) {
+                    "Layanan Resmi ID: " + provNames.distinct().joinToString(", ")
+                } else {
+                    "Streaming langsung tersedia dengan Subtitle Indonesia otomatis."
+                }
+
+                // Susun ulang tombol lengkap dengan opsi Season/Episode & Trailer
+                detailActions.removeAllViews()
+                if (m.kind == "tv" && seasons > 0) {
+                    addDetailButton("▶  Pilih Episode (Sub Indo)", true) { pickEpisodeAndStream(m, seasons) }
+                } else {
+                    addDetailButton("▶  Tonton Sekarang (Sub Indo)", true) { startDirectStream(m) }
+                }
+                if (Jellyfin.configured(this)) {
+                    addDetailButton("Koleksi Saya", false) { playFromCollection(m) }
+                }
+                val tk = trailer
+                if (!tk.isNullOrEmpty()) {
+                    addDetailButton("Trailer", false) { openTrailer(tk) }
+                }
+                val installed = findInstalled(provNames)
+                if (installed != null) {
+                    addDetailButton("Buka " + installed.first, false) {
+                        try {
+                            val i = Intent(Intent.ACTION_MAIN)
+                            i.addCategory("android.intent.category.LEANBACK_LAUNCHER")
+                            i.component = installed.second
+                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(i)
+                        } catch (e: Exception) {
+                            notice.show("Tidak terbuka", "Buka aplikasinya dari layar utama TV.", 3000L)
+                        }
+                    }
+                }
+                val curInList = loadWatch().any { watchKey(it) == watchKey(m) }
+                addDetailButton(if (curInList) "✓ Daftar Saya" else "+ Daftar Saya", false) {
+                    val added = toggleWatch(m)
+                    notice.show(null, if (added) "Ditambahkan ke Daftar saya" else "Dihapus dari Daftar saya", 2000L)
+                    closeDetail()
+                }
+                detailActions.getChildAt(0)?.requestFocus()
+            }
+        }.start()
+    }
+
+    private fun addDetailButton(label: String, primary: Boolean, onClick: () -> Unit) {
+        val btn = tv(label, 14f, if (primary) Color.BLACK else ivory, Typeface.SANS_SERIF).apply {
+            setPadding(dp(18), dp(11), dp(18), dp(11))
+            isFocusable = true
+            isClickable = true
+            background = buttonBg(primary, false)
+            setOnFocusChangeListener { _, f ->
+                background = buttonBg(primary, f)
+                setTextColor(if (f || primary) Color.BLACK else ivory)
+            }
+            setOnClickListener { onClick() }
+        }
+        val lp = LinearLayout.LayoutParams(-2, -2)
+        lp.rightMargin = dp(10)
+        detailActions.addView(btn, lp)
+    }
+
+    private fun buttonBg(primary: Boolean, focused: Boolean): GradientDrawable = GradientDrawable().apply {
+        cornerRadius = dp(8).toFloat()
+        when {
+            focused -> {
+                setColor(brassLight)
+                setStroke(dp(2), Color.WHITE)
+            }
+            primary -> setColor(brass)
+            else -> {
+                setColor(0x28FFFFFF)
+                setStroke(dp(1), 0x55FFFFFF)
+            }
+        }
+    }
+
+    private fun closeDetail() {
+        detailOverlay.visibility = View.GONE
+    }
+
+    // ---- Streaming Langsung + Pilih Episode ----
+
+    private fun startDirectStream(m: Movie, season: Int = 1, episode: Int = 1, epTitle: String = "") {
+        closeDetail()
+        val fullTitle = if (m.kind == "tv") "${m.title} · S${season}E${episode} $epTitle".trim() else m.title
+        val rKey = if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
+        try {
+            val i = Intent(this, WebStreamActivity::class.java)
+            i.putExtra("title", fullTitle)
+            i.putExtra("tmdb_id", m.id)
+            i.putExtra("tmdb_kind", m.kind)
+            i.putExtra("season", season)
+            i.putExtra("episode", episode)
+            i.putExtra("resume_key", rKey)
+            startActivity(i)
+        } catch (e: Exception) {
+            notice.show("Aktivitas belum terdaftar", "Tambahkan WebStreamActivity ke AndroidManifest.xml.", 5000L)
+        }
+    }
+
+    private fun pickEpisodeAndStream(m: Movie, totalSeasons: Int) {
+        if (totalSeasons <= 1) {
+            loadSeasonEpisodes(m, 1)
+            return
+        }
+        val labels = (1..totalSeasons).map { "Season $it" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(m.title + " · Pilih Season")
+            .setItems(labels) { _, which -> loadSeasonEpisodes(m, which + 1) }
+            .show()
+    }
+
+    private fun loadSeasonEpisodes(m: Movie, season: Int) {
+        notice.show(null, "Memuat daftar episode Season $season...")
+        Thread {
+            val eps = Tmdb.episodes(this, m.id, season)
+            ui.post {
+                notice.hide()
+                if (eps.isEmpty()) {
+                    startDirectStream(m, season, 1)
+                    return@post
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("${m.title} · Season $season")
+                    .setItems(eps.map { it.title }.toTypedArray()) { _, w ->
+                        val ep = eps[w]
+                        startDirectStream(m, ep.season, ep.episode, ep.title)
+                    }
+                    .show()
+            }
+        }.start()
+    }
+
+    // ---- Koleksi Saya (Jellyfin sebagai cadangan) ----
 
     private fun openJellyfin(m: Movie) {
         if (m.kind == "jf_series") {
@@ -282,10 +802,9 @@ class FilmActivity : AppCompatActivity() {
         }.start()
     }
 
-    // Cari judul dari katalog TMDB di Koleksi Saya
     private fun playFromCollection(m: Movie) {
         if (!Jellyfin.configured(this)) {
-            notice.show("Koleksi Saya belum diatur", "Isi server Jellyfin di Pengaturan lewat HP.", 5000L)
+            notice.show("Koleksi Saya belum diatur", "Isi server Jellyfin di Pengaturan lewat HP.", 4000L)
             return
         }
         notice.show(null, "Mencari di Koleksi Saya...")
@@ -294,13 +813,15 @@ class FilmActivity : AppCompatActivity() {
             ui.post {
                 notice.hide()
                 if (found.isNullOrEmpty()) {
-                    notice.show(null, "\"" + m.title + "\" belum ada di Koleksi Saya.", 3500L)
+                    notice.show(null, "\"" + m.title + "\" belum ada di Koleksi Saya.", 3000L)
                 } else if (found.size == 1) {
+                    closeDetail()
                     openJellyfin(found[0])
                 } else {
                     AlertDialog.Builder(this)
                         .setTitle("Pilih dari Koleksi Saya")
                         .setItems(found.map { it.title + (if (it.year.isNotEmpty()) " (" + it.year + ")" else "") }.toTypedArray()) { _, w ->
+                            closeDetail()
                             openJellyfin(found[w])
                         }
                         .show()
@@ -309,28 +830,34 @@ class FilmActivity : AppCompatActivity() {
         }.start()
     }
 
+    // ---- Pencarian & Daftar Saya ----
+
     private fun askSearch() {
-        val et = EditText(this)
-        et.isSingleLine = true
-        et.hint = "Judul film"
+        val et = EditText(this).apply {
+            isSingleLine = true
+            hint = "Judul film atau anime"
+        }
         AlertDialog.Builder(this)
-            .setTitle("Cari film")
+            .setTitle("Cari Film & Anime")
             .setView(et)
             .setPositiveButton("Cari") { _, _ ->
                 val q = et.text.toString().trim()
                 if (q.isNotEmpty()) {
-                    catIdx = searchIdx
-                    for (j in catViews.indices) catViews[j].setTextColor(if (j == searchIdx) brassLight else mute)
-                    heading.text = "Hasil: " + q
-                    fetchList("/search/multi", "language=id-ID&include_adult=false&query=" + URLEncoder.encode(q, "UTF-8"), "movie")
-                    grid.requestFocus()
+                    tabIdx = searchIdx
+                    refreshTabStyles()
+                    val my = ++token
+                    rowsBox.removeAllViews()
+                    loadCategoryRows(
+                        my,
+                        listOf(Triple("Hasil Pencarian: $q", "/search/multi", "language=id-ID&include_adult=false&query=" + URLEncoder.encode(q, "UTF-8"))),
+                        "movie"
+                    )
                 }
             }
             .setNegativeButton("Batal", null)
             .show()
     }
 
-    // ---- Daftar saya (disimpan di TV) ----
     private fun loadWatch(): List<Movie> {
         val out = ArrayList<Movie>()
         try {
@@ -343,8 +870,6 @@ class FilmActivity : AppCompatActivity() {
         }
         return out
     }
-
-    private fun isWatched(id: Int): Boolean = loadWatch().any { it.id == id }
 
     private fun watchKey(m: Movie): String = m.kind + ":" + m.id
 
@@ -359,20 +884,16 @@ class FilmActivity : AppCompatActivity() {
             o.put("title", x.title)
             o.put("release_date", x.year)
             o.put("poster_path", x.poster ?: "")
+            o.put("backdrop_path", x.backdrop ?: "")
             o.put("vote_average", x.rating)
             o.put("overview", x.overview)
             o.put("kind", x.kind)
             a.put(o)
         }
         prefs.edit().putString("watch", a.toString()).apply()
-        if (catIdx == 5) {
-            movies = list
-            adapter.notifyDataSetChanged()
-        }
         return !had
     }
 
-    // ---- Detail film ----
     private fun names(a: JSONArray?): String {
         if (a == null) return ""
         val l = ArrayList<String>()
@@ -401,128 +922,6 @@ class FilmActivity : AppCompatActivity() {
         return null
     }
 
-    private fun showDetail(m: Movie) {
-        if (m.isJellyfin) {
-            openJellyfin(m)
-            return
-        }
-        notice.show(null, "Memuat detail...")
-        Thread {
-            val json = Tmdb.get(this, "/" + (if (m.kind == "tv") "tv" else "movie") + "/" + m.id, "language=id-ID&append_to_response=videos,watch/providers&include_video_language=id,en,ja,null")
-            ui.post {
-                notice.hide()
-                if (json == null) {
-                    notice.show("Tidak bisa memuat detail", "Periksa koneksi internet TV.", 4000L)
-                } else {
-                    try {
-                        renderDetail(m, JSONObject(json))
-                    } catch (e: Exception) {
-                        notice.show("Detail tidak terbaca", e.javaClass.simpleName, 4000L)
-                    }
-                }
-            }
-        }.start()
-    }
-
-    private fun renderDetail(m: Movie, o: JSONObject) {
-        val sb = StringBuilder()
-        val head = ArrayList<String>()
-        if (m.year.isNotEmpty()) head.add(m.year)
-        if (m.rating > 0) head.add("\u2605 " + String.format(Locale.US, "%.1f", m.rating))
-        val rt = o.optInt("runtime", 0)
-        if (rt > 0) head.add(rt.toString() + " menit")
-        val seasons = o.optInt("number_of_seasons", 0)
-        if (seasons > 0) head.add(seasons.toString() + " musim, " + o.optInt("number_of_episodes", 0) + " episode")
-        sb.append(head.joinToString("  \u00B7  "))
-        val g = o.optJSONArray("genres")
-        if (g != null && g.length() > 0) {
-            val gl = ArrayList<String>()
-            for (i in 0 until g.length()) gl.add(g.getJSONObject(i).optString("name"))
-            sb.append("\n").append(gl.joinToString(", "))
-        }
-        var ov = o.optString("overview", "").trim()
-        if (ov.isEmpty()) ov = "Sinopsis bahasa Indonesia belum tersedia."
-        if (ov.length > 420) ov = ov.substring(0, 420) + "..."
-        sb.append("\n\n").append(ov)
-
-        var trailer: String? = null
-        val vs = o.optJSONObject("videos")?.optJSONArray("results")
-        if (vs != null) {
-            for (i in 0 until vs.length()) {
-                val v = vs.getJSONObject(i)
-                if (v.optString("site") == "YouTube" && (v.optString("type") == "Trailer" || v.optString("type") == "Teaser")) {
-                    trailer = v.optString("key")
-                    break
-                }
-            }
-        }
-
-        val wp = o.optJSONObject("watch/providers")?.optJSONObject("results")?.optJSONObject("ID")
-        val provNames = ArrayList<String>()
-        sb.append("\n\nTonton di Indonesia:")
-        if (wp == null) {
-            sb.append("\nBelum ada data layanan resmi.")
-        } else {
-            val fl = names(wp.optJSONArray("flatrate"))
-            val fr = names(wp.optJSONArray("free"))
-            val ad = names(wp.optJSONArray("ads"))
-            val rent = names(wp.optJSONArray("rent"))
-            val buy = names(wp.optJSONArray("buy"))
-            if (fl.isNotEmpty()) sb.append("\nLangganan: ").append(fl)
-            if (fr.isNotEmpty()) sb.append("\nGratis: ").append(fr)
-            if (ad.isNotEmpty()) sb.append("\nGratis dengan iklan: ").append(ad)
-            if (rent.isNotEmpty()) sb.append("\nSewa: ").append(rent)
-            if (buy.isNotEmpty()) sb.append("\nBeli: ").append(buy)
-            if (fl.isEmpty() && fr.isEmpty() && ad.isEmpty() && rent.isEmpty() && buy.isEmpty()) sb.append("\nBelum ada data layanan resmi.")
-            for (s in listOf(fl, fr, ad, rent, buy)) if (s.isNotEmpty()) provNames.addAll(s.split(", "))
-        }
-        sb.append("\n\nData layanan: JustWatch (via TMDB).")
-
-        val installed = findInstalled(provNames)
-        val tk = trailer
-        val inList = loadWatch().any { watchKey(it) == watchKey(m) }
-        val labels = ArrayList<String>()
-        val acts = ArrayList<() -> Unit>()
-        if (Jellyfin.configured(this)) {
-            labels.add("Putar dari Koleksi Saya")
-            acts.add { playFromCollection(m) }
-        }
-        if (tk != null && tk.isNotEmpty()) {
-            labels.add("Tonton trailer")
-            acts.add { openTrailer(tk) }
-        }
-        if (installed != null) {
-            labels.add("Buka " + installed.first)
-            acts.add {
-                try {
-                    val i = Intent(Intent.ACTION_MAIN)
-                    i.addCategory("android.intent.category.LEANBACK_LAUNCHER")
-                    i.component = installed.second
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(i)
-                } catch (e: Exception) {
-                    notice.show("Tidak terbuka", "Buka aplikasinya langsung dari layar utama TV.", 4000L)
-                }
-            }
-        }
-        labels.add(if (inList) "Hapus dari Daftar saya" else "Tambah ke Daftar saya")
-        acts.add {
-            val added = toggleWatch(m)
-            notice.show(null, if (added) "Ditambahkan ke Daftar saya" else "Dihapus dari Daftar saya", 2000L)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(m.title)
-            .setMessage(sb.toString())
-            .setPositiveButton("Pilihan") { _, _ ->
-                AlertDialog.Builder(this)
-                    .setTitle(m.title)
-                    .setItems(labels.toTypedArray()) { _, w -> acts[w]() }
-                    .show()
-            }
-            .setNegativeButton("Tutup", null)
-            .show()
-    }
-
     private fun openTrailer(key: String) {
         try {
             val i = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:" + key))
@@ -537,6 +936,14 @@ class FilmActivity : AppCompatActivity() {
                 notice.show("Trailer tidak terbuka", "Pasang aplikasi YouTube di TV.", 4000L)
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && detailOverlay.visibility == View.VISIBLE) {
+            closeDetail()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onDestroy() {
