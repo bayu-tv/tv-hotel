@@ -2,7 +2,6 @@ package com.bayutv.hotel
 
 import android.content.pm.PackageManager
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.media.tv.TvContract
 import android.media.tv.TvView
@@ -37,6 +36,7 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import java.io.File
 import java.util.Calendar
@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
     private var player: ExoPlayer? = null
+    private var trackSelector: DefaultTrackSelector? = null
     private var tvView: TvView? = null
 
     private var all: List<Channel> = emptyList()
@@ -350,7 +351,6 @@ class MainActivity : AppCompatActivity() {
 
     private var favs: Set<String> = emptySet()
 
-    // Sorotan yang jelas: bingkai emas pada baris terpilih
     private fun selectorBg(): GradientDrawable {
         val g = GradientDrawable()
         g.cornerRadius = dp(8).toFloat()
@@ -359,7 +359,6 @@ class MainActivity : AppCompatActivity() {
         return g
     }
 
-    // Kolom yang sedang aktif terang dan berlabel "\u25B6"; kolom lain diredupkan
     private fun styleFocus() {
         if (!::colLeft.isInitialized) return
         val inCat = catList.hasFocus()
@@ -450,11 +449,9 @@ class MainActivity : AppCompatActivity() {
     private fun appChannel(t: AppLinks.Target): Channel =
         Channel(t.name, "app:" + t.name, null, t.provider, null, null, "Indonesia", "Nasional", "app")
 
-    // Satu entri bisa punya beberapa sumber: antena -> internet -> aplikasi resmi (RCTI+/Vidio)
     private fun setData(list: List<Channel>) {
         scan = Playlist.loadScan(this)
         if (!prefs.getBoolean("fails_v1", false)) {
-            // Versi lama menyimpan channel gagal sebagai mati permanen; mulai bersih sekali
             val cleaned = HashMap(scan.filterValues { it.isNotEmpty() })
             Playlist.saveScan(this, cleaned)
             scan = cleaned
@@ -558,7 +555,6 @@ class MainActivity : AppCompatActivity() {
         }
         cats = out
         catAdapter.notifyDataSetChanged()
-        // Daftar untuk remote HP
         val arr = JSONArray()
         for (c in vis) {
             val num = nums[c.key] ?: continue
@@ -588,14 +584,30 @@ class MainActivity : AppCompatActivity() {
         chanAdapter.notifyDataSetChanged()
     }
 
-    // ---------- Pemutar ----------
+    // ---------- Pemutar & Kualitas Video ----------
+
+    private fun applyVideoQuality(maxHeight: Int) {
+        val ts = trackSelector ?: return
+        val b = ts.buildUponParameters()
+        if (maxHeight > 0) {
+            b.setMaxVideoSize(Int.MAX_VALUE, maxHeight)
+        } else {
+            b.clearVideoSizeConstraints()
+        }
+        ts.setParameters(b.build())
+    }
 
     private fun setupPlayer() {
-        // Buffer kecil agar hemat RAM (TV 2 GB)
         val lc = DefaultLoadControl.Builder()
             .setBufferDurationsMs(12000, 30000, 1500, 3000)
             .build()
-        val p = ExoPlayer.Builder(this).setLoadControl(lc).build()
+        val ts = DefaultTrackSelector(this)
+        trackSelector = ts
+        applyVideoQuality(prefs.getInt("max_height", 0))
+        val p = ExoPlayer.Builder(this)
+            .setTrackSelector(ts)
+            .setLoadControl(lc)
+            .build()
         playerView.player = p
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -633,7 +645,6 @@ class MainActivity : AppCompatActivity() {
         val k = curKey ?: return
         prefs.edit().putString("last", k).remove("trying").apply()
         val ch = cands.getOrNull(candPos) ?: return
-        // Internet terbukti jalan: catat kegagalan channel sebelumnya (bukan langsung mati permanen)
         var failsChanged = false
         if (pendingDead.isNotEmpty()) {
             for (d in pendingDead) Playlist.recordFail(fails, d)
@@ -663,7 +674,6 @@ class MainActivity : AppCompatActivity() {
         }
         failStreak++
         if (failStreak >= 3) {
-            // Beberapa gagal beruntun: kemungkinan internet TV bermasalah, jangan sembunyikan apa pun
             pendingDead.clear()
             notice.show("Sinyal hilang", "Beberapa channel gagal berturut-turut. Periksa internet TV.\n\nAtas/bawah: ganti channel  ·  OK: daftar channel")
             return
@@ -678,7 +688,6 @@ class MainActivity : AppCompatActivity() {
 
     private val antTimeout = Runnable { nextOrStatus("Sinyal antena lemah.") }
 
-    // Sumber sekarang gagal: coba sumber berikutnya, bila habis tampilkan pesan saja
     private fun nextOrStatus(msg: String) {
         ui.removeCallbacks(antTimeout)
         if (candPos + 1 < cands.size) {
@@ -771,7 +780,6 @@ class MainActivity : AppCompatActivity() {
         val inet = members.filter { !it.isAntenna && !it.isApp }
         val pref = scan[key]
         val first = if (!pref.isNullOrEmpty()) inet.firstOrNull { it.url == pref } else null
-        // Bila ada aplikasi resmi sebagai cadangan, jangan lama mencoba alamat internet
         val maxInet = if (members.any { it.isApp }) 2 else 5
         val inetOrdered = (if (first != null) listOf(first) + inet.filter { it !== first } else inet).take(maxInet)
         cands = members.filter { it.isAntenna } + inetOrdered + members.filter { it.isApp }
@@ -806,7 +814,6 @@ class MainActivity : AppCompatActivity() {
             nextOrStatus("Gagal menyetel antena.")
             return
         }
-        // Ada sumber internet/aplikasi cadangan: pindah bila gambar tak muncul dalam 10 detik
         if (candPos + 1 < cands.size) ui.postDelayed(antTimeout, 10000L)
     }
 
@@ -816,7 +823,6 @@ class MainActivity : AppCompatActivity() {
         status.text = ""
         val t = AppLinks.targetFor(c.name) ?: return
         if (viaZap) {
-            // Saat pindah channel dengan atas/bawah, jangan langsung melompat ke aplikasi lain
             pendingApp = curKey
             notice.show(Playlist.display(c.name), "Tekan OK untuk menonton di " + t.provider + ".\nAtas/bawah: lanjut ganti channel", 6000L)
             return
@@ -886,7 +892,6 @@ class MainActivity : AppCompatActivity() {
     private fun showPanel() {
         if (cats.isEmpty()) return
         search.setText("")
-        // Buka kategori tempat channel yang sedang diputar
         var ci = cats.indexOfFirst { it.action == null && it.keys == zapKeys }
         if (ci < 0) ci = cats.indexOfFirst { it.title == "Semua channel" }
         selectCat(if (ci >= 0) ci else 0, true)
@@ -968,12 +973,16 @@ class MainActivity : AppCompatActivity() {
                 val ch = curKey?.let { byKey[it] }
                 if (ch != null) {
                     val ep = Epg.line(ch.name)
+                    val pray = nextPrayerText()
                     val ip = Net.localIp()
                     val rs = remoteServer
+                    val qVal = prefs.getInt("max_height", 0)
+                    val qTag = if (qVal > 0) " · ${qVal}p" else ""
                     showBanner(
                         (numberOf[ch.key]?.toString() ?: "") + "   " + Playlist.display(ch.name) +
-                            "\n" + ch.region + " · " + ch.category +
+                            "\n" + ch.region + " · " + ch.category + qTag +
                             (if (ep.isNotEmpty()) "\n" + ep else "") +
+                            (if (pray.isNotEmpty()) "\n" + pray else "") +
                             (if (sleepAt > 0L) "\nTimer tidur: " + ((sleepAt - System.currentTimeMillis()) / 60000L + 1) + " menit lagi" else "") +
                             (if (ip != null && rs != null) "\nRemote HP: http://" + ip + ":" + rs.port + "  ·  PIN " + remotePin() else ""),
                         8000L
@@ -1030,8 +1039,29 @@ class MainActivity : AppCompatActivity() {
         return player?.isPlaying == true
     }
 
+    private fun prayerOffset(): Int =
+        (prefs.getString("adzan_offset", "0") ?: "0").toIntOrNull()?.coerceIn(-15, 15) ?: 0
+
+    private fun nextPrayerText(): String {
+        val t = prayerTimes ?: return ""
+        if (t.size < 5) return ""
+        val off = prayerOffset()
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        for (i in 0..4) {
+            val pt = t[i] + off
+            if (pt > now) {
+                val diff = pt - now
+                val jam = diff / 60
+                val mnt = diff % 60
+                val sisa = if (jam > 0) "${jam}j ${mnt}m lagi" else "${mnt} menit lagi"
+                return "Berikutnya: ${Prayer.NAMES[i]} ${Prayer.fmt(pt)} ($sisa)"
+            }
+        }
+        return "Berikutnya: ${Prayer.NAMES[0]} ${Prayer.fmt(t[0] + off)} (besok)"
+    }
+
     private fun onTick() {
-        // Jadwal sholat: muat ulang saat ganti hari
         val today = Prayer.todayStr()
         if (prayerDay != today) {
             prayerDay = today
@@ -1041,9 +1071,7 @@ class MainActivity : AppCompatActivity() {
             }.start()
         }
         checkPrayer()
-        // Batas menonton per hari
         if (isWatching() && Lock.addWatch(this, 30) && !limitAsking) onLimit()
-        // Timer tidur
         if (sleepAt > 0L) {
             val left = sleepAt - System.currentTimeMillis()
             if (left <= 0L) {
@@ -1054,22 +1082,23 @@ class MainActivity : AppCompatActivity() {
             }
             if (panel.visibility == View.VISIBLE) rebuildKeepCat()
         }
-        // Perbarui teks "sedang tayang" di daftar
         if (panel.visibility == View.VISIBLE && Epg.has()) chanAdapter.notifyDataSetChanged()
     }
 
     private fun checkPrayer() {
         if (prefs.getString("adzan", "Ya") == "Tidak") return
         val t = prayerTimes ?: return
+        val off = prayerOffset()
         val c = Calendar.getInstance()
         val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
         val day = Prayer.todayStr()
         for (i in 0..4) {
-            if (now >= t[i] && now < t[i] + 2) {
+            val pt = t[i] + off
+            if (now >= pt && now < pt + 2) {
                 val tag = day + "#" + i
                 if (prefs.getString("adzan_done", "") == tag) return
                 prefs.edit().putString("adzan_done", tag).apply()
-                startAdzan(i, t[i])
+                startAdzan(i, pt)
                 return
             }
         }
@@ -1099,14 +1128,12 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        // suara adzan gagal: volume tetap kecil sampai waktunya habis
                     }
                 })
                 ap.setMediaItem(MediaItem.fromUri(url))
                 ap.prepare()
                 ap.playWhenReady = true
                 adzanPlayer = ap
-                // beri waktu sampai adzan selesai (maks. 10 menit)
                 ui.removeCallbacks(adzanEnd)
                 ui.postDelayed(adzanEnd, 10L * 60000L)
             } catch (e: Exception) {
@@ -1210,7 +1237,10 @@ class MainActivity : AppCompatActivity() {
         if (remoteServer != null) return
         val r = object : Remote {
             override fun channelsJson(): String =
-                "{\"cur\":" + JSONObject.quote(remoteCur) + ",\"now\":" + JSONObject.quote(remoteNow) + ",\"list\":" + remoteList + "}"
+                "{\"cur\":" + JSONObject.quote(remoteCur) +
+                    ",\"now\":" + JSONObject.quote(remoteNow) +
+                    ",\"q\":" + prefs.getInt("max_height", 0) +
+                    ",\"list\":" + remoteList + "}"
 
             override fun command(cmd: String, arg: String) {
                 ui.post {
@@ -1224,6 +1254,19 @@ class MainActivity : AppCompatActivity() {
                         "panel" -> if (panel.visibility == View.VISIBLE) hidePanel() else showPanel()
                         "ok" -> onKeyDown(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER))
                         "sleep" -> setSleep(arg.toIntOrNull()?.coerceIn(0, 240) ?: 0)
+                        "quality" -> {
+                            val h = when (arg) {
+                                "720" -> 720
+                                "480" -> 480
+                                else -> 0
+                            }
+                            prefs.edit().putInt("max_height", h).apply()
+                            applyVideoQuality(h)
+                            showBanner(
+                                "Kualitas video: " + (if (h > 0) "${h}p (Hemat Kuota & RAM)" else "Otomatis (HD)"),
+                                2500L
+                            )
+                        }
                         else -> {}
                     }
                     Unit
@@ -1273,7 +1316,6 @@ class MainActivity : AppCompatActivity() {
     override fun onRestart() {
         super.onRestart()
         if (returnFromApp) {
-            // Kembali dari RCTI+/Vidio: langsung buka daftar di posisi channel tadi
             returnFromApp = false
             ui.post { showPanel() }
             return
