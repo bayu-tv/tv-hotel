@@ -88,6 +88,11 @@ button{margin-top:14px;padding:12px 22px;border-radius:99px;border:1px solid #b8
 <label>Sandi (kosongkan bila tidak diubah)</label><input id="jf_pass" type="password" autocomplete="off">
 <div class="s">Jellyfin gratis dipasang di PC/laptop/NAS. Film dan anime milik Anda diputar tanpa iklan; letakkan subtitle Indonesia (.srt, mis. Judul.id.srt) di samping file video.</div>
 <h2>Sumber channel</h2>
+<div style="margin-top:18px;padding-top:14px;border-top:1px solid #34302a">
+  <button type="button" onclick="hapusRiwayat()" style="background:#3a1f1d;border:1px solid #c9706a;color:#f2b8b5;padding:12px;border-radius:10px;width:100%;font-size:15px">
+    Hapus Semua Riwayat Tontonan
+  </button>
+</div>
 <div class="s">Daftar utama diperbarui otomatis oleh GitHub Actions setiap 6 jam (Indonesia + internasional, sudah diperiksa).</div>
 <label>Kode negara cadangan bila daftar utama belum siap (2 huruf, mis. id)</label><input id="country" maxlength="2">
 <label>Playlist M3U tambahan (opsional, tampil sebagai "Playlist Saya")</label><input id="playlist" placeholder="https://...">
@@ -208,6 +213,13 @@ function photo(){
    g('msg').textContent=r.ok?'Foto terkirim ke TV.':'Foto gagal dikirim.';if(r.ok)g('bg').value='photo'})},'image/jpeg',0.75)
  };
  im.src=u
+}
+function hapusRiwayat(){
+  if(!confirm('Hapus semua riwayat Lanjutkan Menonton di TV?')) return;
+  fetch('/api/clear-history',{method:'POST'}).then(function(r){
+    if(r.ok) alert('Semua riwayat tontonan berhasil dihapus.');
+    else alert('Gagal menghapus riwayat.');
+  }).catch(function(){ alert('TV tidak terjangkau.'); });
 }
 </script></body></html>"""
 }
