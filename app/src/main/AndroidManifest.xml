@@ -82,6 +82,10 @@
             android:screenOrientation="landscape" />
 
         <activity
+            android:name=".RadioMusicActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
