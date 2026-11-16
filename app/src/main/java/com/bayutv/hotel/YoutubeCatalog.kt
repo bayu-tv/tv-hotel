@@ -2,170 +2,315 @@ package com.bayutv.hotel
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Shader
-import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
+import android.graphics.Color
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
+import java.io.StringReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 
 object YoutubeCatalog {
 
     data class Entry(
-        val tmdbId: Int,
         val title: String,
         val channelName: String,
-        val category: String,
         val channelUrl: String,
-        val searchQuery: String,
-        val accentColor: Int,
+        val searchQuery: String = "",
+        val category: String = "Anime Sub Indo",
+        val tmdbId: Int = 0,
+        val tmdbKind: String = "tv",
         var year: String = "",
         var rating: Double = 0.0,
         var overview: String = "",
         var posterUrl: String? = null,
-        var backdropUrl: String? = null
+        var backdropUrl: String? = null,
+        val videoUrl: String? = null
     )
 
-    private val posterCache = HashMap<String, Bitmap>()
+    // Kanal RSS resmi YouTube (otomatis berisi 15 unggahan terbaru setiap kanal)
+    private val RSS_FEEDS = listOf(
+        Pair("Muse Indonesia", "https://www.youtube.com/feeds/videos.xml?channel_id=UCxxnxya_32jcKj4yN1_kD7A"),
+        Pair("Ani-One Asia", "https://www.youtube.com/feeds/videos.xml?channel_id=UC0wNSTMWIL3qaorLx0jie6A")
+    )
+
+    private var cachedRss: List<Entry> = emptyList()
+    private var lastRssFetchMs: Long = 0L
 
     val ANIME_PICKS = listOf(
-        Entry(209867, "Frieren: Beyond Journey's End", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Frieren Sub Indo", 0xFF1F4E46.toInt()),
-        Entry(120089, "SPY x FAMILY", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Spy x Family Sub Indo", 0xFF6B2D38.toInt()),
-        Entry(85937, "Demon Slayer: Kimetsu no Yaiba", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Demon Slayer Sub Indo", 0xFF5C2323.toInt()),
-        Entry(1429, "Attack on Titan", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Attack on Titan Sub Indo", 0xFF4A3726.toInt()),
-        Entry(63926, "One-Punch Man", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia One Punch Man Sub Indo", 0xFF6E5120.toInt()),
-        Entry(46298, "Hunter x Hunter", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Hunter x Hunter Sub Indo", 0xFF234D36.toInt()),
-        Entry(82684, "That Time I Got Reincarnated as a Slime", "Muse Indonesia", "Anime Sub Indo", "https://www.youtube.com/@MuseIndonesia/playlists", "Muse Indonesia Tensura Slime Sub Indo", 0xFF224463.toInt()),
-        Entry(95479, "Jujutsu Kaisen", "Ani-One Asia", "Anime Sub Indo", "https://www.youtube.com/@AniOneAsia/playlists", "Ani-One Jujutsu Kaisen Sub Indo", 0xFF2E3159.toInt()),
-        Entry(60863, "Haikyu!!", "Ani-One Asia", "Anime Sub Indo", "https://www.youtube.com/@AniOneAsia/playlists", "Ani-One Haikyu Sub Indo", 0xFF753E1E.toInt()),
-        Entry(30983, "Detective Conan", "POPS Anime Indonesia", "Anime Sub Indo", "https://www.youtube.com/@POPSAnimeIndonesia/playlists", "POPS Anime Indonesia Detective Conan", 0xFF1F3857.toInt())
+        Entry(
+            title = "Frieren: Beyond Journey's End",
+            channelName = "Muse Indonesia",
+            channelUrl = "https://www.youtube.com/@MuseIndonesia/playlists",
+            searchQuery = "Frieren Sub Indo Muse Indonesia",
+            category = "Anime Sub Indo",
+            tmdbId = 209867
+        ),
+        Entry(
+            title = "Solo Leveling",
+            channelName = "Ani-One Asia",
+            channelUrl = "https://www.youtube.com/@AniOneAsia/playlists",
+            searchQuery = "Solo Leveling Sub Indo Ani-One",
+            category = "Anime Sub Indo",
+            tmdbId = 127532
+        ),
+        Entry(
+            title = "Demon Slayer: Kimetsu no Yaiba",
+            channelName = "Muse Indonesia",
+            channelUrl = "https://www.youtube.com/@MuseIndonesia/playlists",
+            searchQuery = "Kimetsu no Yaiba Sub Indo Muse Indonesia",
+            category = "Anime Sub Indo",
+            tmdbId = 85937
+        ),
+        Entry(
+            title = "One Punch Man",
+            channelName = "Muse Indonesia",
+            channelUrl = "https://www.youtube.com/@MuseIndonesia/playlists",
+            searchQuery = "One Punch Man Sub Indo Muse Indonesia",
+            category = "Anime Sub Indo",
+            tmdbId = 63926
+        ),
+        Entry(
+            title = "Spy x Family",
+            channelName = "Muse Indonesia",
+            channelUrl = "https://www.youtube.com/@MuseIndonesia/playlists",
+            searchQuery = "Spy x Family Sub Indo Muse Indonesia",
+            category = "Anime Sub Indo",
+            tmdbId = 120089
+        ),
+        Entry(
+            title = "Jujutsu Kaisen",
+            channelName = "Ani-One Asia",
+            channelUrl = "https://www.youtube.com/@AniOneAsia/playlists",
+            searchQuery = "Jujutsu Kaisen Sub Indo Ani-One",
+            category = "Anime Sub Indo",
+            tmdbId = 95479
+        )
     )
 
     val DRACIN_PICKS = listOf(
-        Entry(210733, "Hidden Love", "YOUKU Indonesia", "Drama China", "https://www.youtube.com/@YOUKUIndonesia/playlists", "YOUKU Indonesia Hidden Love Sub Indo", 0xFF6E3B4C.toInt()),
-        Entry(212204, "When I Fly Towards You", "YOUKU Indonesia", "Drama China", "https://www.youtube.com/@YOUKUIndonesia/playlists", "YOUKU Indonesia When I Fly Towards You Sub Indo", 0xFF2B4C66.toInt()),
-        Entry(137887, "Love Between Fairy and Devil", "iQIYI Indonesia", "Drama China", "https://www.youtube.com/@iQIYIIndonesia/playlists", "iQIYI Indonesia Love Between Fairy and Devil Sub Indo", 0xFF1D5436.toInt()),
-        Entry(136243, "Till The End of The Moon", "YOUKU Indonesia", "Drama China", "https://www.youtube.com/@YOUKUIndonesia/playlists", "YOUKU Indonesia Till The End of The Moon Sub Indo", 0xFF422E61.toInt()),
-        Entry(88040, "Put Your Head on My Shoulder", "WeTV Indonesia", "Drama China", "https://www.youtube.com/@WeTVIndonesia/playlists", "WeTV Indonesia Put Your Head on My Shoulder Sub Indo", 0xFF73431E.toInt()),
-        Entry(91254, "The Untamed", "WeTV Indonesia", "Drama China", "https://www.youtube.com/@WeTVIndonesia/playlists", "WeTV Indonesia The Untamed Sub Indo", 0xFF23424D.toInt()),
-        Entry(117376, "Falling Into Your Smile", "YOUKU Indonesia", "Drama China", "https://www.youtube.com/@YOUKUIndonesia/playlists", "YOUKU Indonesia Falling Into Your Smile Sub Indo", 0xFF572B41.toInt()),
-        Entry(106651, "Go Ahead", "Huace Croton TV ID", "Drama China", "https://www.youtube.com/@HuaceCrotonTVIndonesia/playlists", "Huace Croton TV Indonesia Go Ahead Sub Indo", 0xFF5E3F22.toInt()),
-        Entry(67518, "Love O2O", "YOUKU Indonesia", "Drama China", "https://www.youtube.com/@YOUKUIndonesia/playlists", "Love O2O Full Episode Sub Indo", 0xFF234357.toInt()),
-        Entry(69889, "Eternal Love", "WeTV Indonesia", "Drama China", "https://www.youtube.com/@WeTVIndonesia/playlists", "Eternal Love Ten Miles of Peach Blossoms Sub Indo", 0xFF613448.toInt())
+        Entry(
+            title = "Love Between Fairy and Devil",
+            channelName = "iQIYI Indonesia",
+            channelUrl = "https://www.youtube.com/@iQIYIIndonesia/playlists",
+            searchQuery = "Love Between Fairy and Devil Sub Indo iQIYI",
+            category = "Drama China Sub Indo",
+            tmdbId = 136248
+        ),
+        Entry(
+            title = "Hidden Love",
+            channelName = "YOUKU Indonesia",
+            channelUrl = "https://www.youtube.com/@YOUKUEnglish/playlists",
+            searchQuery = "Hidden Love Sub Indo YOUKU",
+            category = "Drama China Sub Indo",
+            tmdbId = 210733
+        ),
+        Entry(
+            title = "You Are My Glory",
+            channelName = "WeTV Indonesia",
+            channelUrl = "https://www.youtube.com/@WeTVIndonesia/playlists",
+            searchQuery = "You Are My Glory Sub Indo WeTV",
+            category = "Drama China Sub Indo",
+            tmdbId = 112627
+        ),
+        Entry(
+            title = "The Untamed",
+            channelName = "WeTV Indonesia",
+            channelUrl = "https://www.youtube.com/@WeTVIndonesia/playlists",
+            searchQuery = "The Untamed Sub Indo WeTV",
+            category = "Drama China Sub Indo",
+            tmdbId = 91001
+        )
     )
 
     val OFFICIAL_CHANNELS = listOf(
-        Entry(0, "Muse Indonesia", "Anime Sub Indo 1080p", "Kanal Resmi", "https://www.youtube.com/@MuseIndonesia/playlists", "", 0xFF662222.toInt(), overview = "Distributor resmi anime Jepang dengan terjemahan Bahasa Indonesia paling populer dan jernih hingga 1080p."),
-        Entry(0, "Ani-One Indonesia", "Anime Populer & Ongoing", "Kanal Resmi", "https://www.youtube.com/@AniOneIndonesia/playlists", "", 0xFF1E495E.toInt(), overview = "Kanal resmi Medialink Indonesia untuk berbagai judul anime shonen, aksi, dan fantasi Sub Indo."),
-        Entry(0, "Ani-One Asia", "Katalog Anime Asia", "Kanal Resmi", "https://www.youtube.com/@AniOneAsia/playlists", "", 0xFF26335E.toInt(), overview = "Katalog anime Asia terlengkap (aktifkan tombol CC Bahasa Indonesia saat memutar)."),
-        Entry(0, "WeTV Indonesia", "Drama China Resmi", "Kanal Resmi", "https://www.youtube.com/@WeTVIndonesia/playlists", "", 0xFF734219.toInt(), overview = "Koleksi drama China modern dan kolosal pilihan dengan takarir Bahasa Indonesia resmi dari episode 1 hingga tamat."),
-        Entry(0, "iQIYI Indonesia", "Dracin & Romansa", "Kanal Resmi", "https://www.youtube.com/@iQIYIIndonesia/playlists", "", 0xFF174F30.toInt(), overview = "Serial drama romantis, komedi, dan misteri Tiongkok berkualitas tinggi dengan subtitle Indonesia."),
-        Entry(0, "YOUKU Indonesia", "Xianxia & Kolosal", "Kanal Resmi", "https://www.youtube.com/@YOUKUIndonesia/playlists", "", 0xFF3C2A5E.toInt(), overview = "Spesialis drama fantasi xianxia, wuxia, dan drama remaja Tiongkok populer."),
-        Entry(0, "Huace Croton TV ID", "Studio Drama China", "Kanal Resmi", "https://www.youtube.com/@HuaceCrotonTVIndonesia/playlists", "", 0xFF593A1D.toInt(), overview = "Kanal resmi studio produksi drama terbesar di Tiongkok dengan puluhan seri full episode Sub Indo."),
-        Entry(0, "POPS Anime ID", "Anime Keluarga & Anak", "Kanal Resmi", "https://www.youtube.com/@POPSAnimeIndonesia/playlists", "", 0xFF1D4366.toInt(), overview = "Tontonan anime ramah keluarga seperti Detective Conan dan Doraemon dengan pilihan dubbing dan Sub Indo.")
+        Entry(
+            title = "Muse Indonesia (Anime Resmi)",
+            channelName = "Muse Indonesia",
+            channelUrl = "https://www.youtube.com/@MuseIndonesia/playlists",
+            category = "Kanal Resmi"
+        ),
+        Entry(
+            title = "Ani-One Asia (Anime Resmi)",
+            channelName = "Ani-One Asia",
+            channelUrl = "https://www.youtube.com/@AniOneAsia/playlists",
+            category = "Kanal Resmi"
+        ),
+        Entry(
+            title = "WeTV Indonesia (Drama Resmi)",
+            channelName = "WeTV Indonesia",
+            channelUrl = "https://www.youtube.com/@WeTVIndonesia/playlists",
+            category = "Kanal Resmi"
+        ),
+        Entry(
+            title = "iQIYI Indonesia (Drama & Anime)",
+            channelName = "iQIYI Indonesia",
+            channelUrl = "https://www.youtube.com/@iQIYIIndonesia/playlists",
+            category = "Kanal Resmi"
+        )
     )
 
-    fun hydrateFromTmdb(ctx: Context, item: Entry): Boolean {
-        if (item.tmdbId <= 0 || item.posterUrl != null) return item.posterUrl != null
-        if (Tmdb.key(ctx).isEmpty()) return false
-        val json = Tmdb.get(ctx, "/tv/${item.tmdbId}", "language=id-ID") ?: return false
+    fun fetchLatestRss(context: Context): List<Entry> {
+        val now = System.currentTimeMillis()
+        if (cachedRss.isNotEmpty() && now - lastRssFetchMs < 30 * 60 * 1000L) {
+            return cachedRss
+        }
+        val merged = ArrayList<Entry>()
+        for ((defaultChannel, feedUrl) in RSS_FEEDS) {
+            try {
+                val conn = URL(feedUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 7000
+                conn.readTimeout = 9000
+                conn.setRequestProperty("User-Agent", "BayuTV")
+                if (conn.responseCode == 200) {
+                    val xml = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    merged.addAll(parseAtomFeed(xml, defaultChannel).take(10))
+                }
+            } catch (_: Exception) {
+            }
+        }
+        if (merged.isNotEmpty()) {
+            cachedRss = merged
+            lastRssFetchMs = now
+        }
+        return cachedRss
+    }
+
+    private fun parseAtomFeed(xml: String, fallbackChannel: String): List<Entry> {
+        val list = ArrayList<Entry>()
+        try {
+            val factory = XmlPullParserFactory.newInstance()
+            val parser = factory.newPullParser()
+            parser.setInput(StringReader(xml))
+
+            var inEntry = false
+            var inAuthor = false
+            var title = ""
+            var videoId = ""
+            var author = ""
+            var published = ""
+            var summary = ""
+
+            var event = parser.eventType
+            while (event != XmlPullParser.END_DOCUMENT) {
+                when (event) {
+                    XmlPullParser.START_TAG -> {
+                        val tag = parser.name ?: ""
+                        if (tag == "entry") {
+                            inEntry = true
+                            title = ""
+                            videoId = ""
+                            author = ""
+                            published = ""
+                            summary = ""
+                        } else if (inEntry) {
+                            when (tag) {
+                                "title" -> title = parser.nextText().trim()
+                                "yt:videoId" -> videoId = parser.nextText().trim()
+                                "published" -> published = parser.nextText().trim()
+                                "media:description" -> summary = parser.nextText().trim()
+                                "author" -> inAuthor = true
+                                "name" -> if (inAuthor) author = parser.nextText().trim()
+                            }
+                        }
+                    }
+                    XmlPullParser.END_TAG -> {
+                        val tag = parser.name ?: ""
+                        if (tag == "author") inAuthor = false
+                        if (tag == "entry" && inEntry) {
+                            inEntry = false
+                            if (videoId.isNotEmpty() && title.isNotEmpty()) {
+                                val ch = author.ifBlank { fallbackChannel }
+                                val watchUrl = "https://www.youtube.com/watch?v=$videoId"
+                                list.add(
+                                    Entry(
+                                        title = cleanTitle(title),
+                                        channelName = ch,
+                                        channelUrl = watchUrl,
+                                        searchQuery = title,
+                                        category = "Episode Baru · RSS",
+                                        year = if (published.length >= 4) published.substring(0, 4) else "",
+                                        overview = summary.take(240),
+                                        posterUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+                                        backdropUrl = "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg",
+                                        videoUrl = watchUrl
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                event = parser.next()
+            }
+        } catch (_: Exception) {
+        }
+        return list
+    }
+
+    private fun cleanTitle(raw: String): String {
+        return raw
+            .replace("[Sub Indo]", "", ignoreCase = true)
+            .replace("(Sub Indo)", "", ignoreCase = true)
+            .replace("| Muse Indonesia", "", ignoreCase = true)
+            .replace("| Ani-One Asia", "", ignoreCase = true)
+            .trim()
+    }
+
+    fun hydrateFromTmdb(context: Context, item: Entry): Boolean {
+        if (item.tmdbId <= 0 || Tmdb.key(context).isEmpty()) return false
+        if (item.posterUrl != null && item.overview.isNotEmpty()) return false
+        val json = Tmdb.get(context, "/${item.tmdbKind}/${item.tmdbId}", "language=id-ID") ?: return false
         return try {
             val o = JSONObject(json)
-            val p = o.optString("poster_path", "")
-            val b = o.optString("backdrop_path", "")
-            if (p.isNotEmpty() && p != "null") item.posterUrl = "https://image.tmdb.org/t/p/w342$p"
-            if (b.isNotEmpty() && b != "null") item.backdropUrl = "https://image.tmdb.org/t/p/w780$b"
-            val d = o.optString("first_air_date", "")
-            if (d.length >= 4) item.year = d.substring(0, 4)
-            item.rating = o.optDouble("vote_average", 0.0)
+            val pp = o.optString("poster_path", "")
+            val bp = o.optString("backdrop_path", "")
             val ov = o.optString("overview", "").trim()
-            if (ov.isNotEmpty()) {
-                item.overview = ov
-            } else {
-                val enJson = Tmdb.get(ctx, "/tv/${item.tmdbId}", "language=en-US")
-                if (enJson != null) {
-                    val enOv = JSONObject(enJson).optString("overview", "").trim()
-                    if (enOv.isNotEmpty()) item.overview = enOv
-                }
-            }
-            item.posterUrl != null
-        } catch (e: Exception) {
+            val dt = o.optString("first_air_date", o.optString("release_date", ""))
+            val rt = o.optDouble("vote_average", 0.0)
+            if (pp.isNotEmpty() && pp != "null") item.posterUrl = "https://image.tmdb.org/t/p/w342$pp"
+            if (bp.isNotEmpty() && bp != "null") item.backdropUrl = "https://image.tmdb.org/t/p/w1280$bp"
+            if (ov.isNotEmpty()) item.overview = ov
+            if (dt.length >= 4) item.year = dt.substring(0, 4)
+            if (rt > 0.0) item.rating = rt
+            true
+        } catch (_: Exception) {
             false
         }
     }
 
-    // Poster grafis elegan (tampil bersih tanpa judul ganda sebelum poster TMDB dimuat)
-    fun fallbackPoster(ctx: Context, item: Entry): Drawable {
-        val key = "${item.title}_${item.accentColor}"
-        posterCache[key]?.let { return BitmapDrawable(ctx.resources, it) }
-
-        val w = 260
-        val h = 380
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
-        val c = Canvas(bmp)
-
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        bgPaint.shader = LinearGradient(
-            0f, 0f, w.toFloat(), h.toFloat(),
-            intArrayOf(item.accentColor, 0xFF161412.toInt(), 0xFF0B0A09.toInt()),
-            floatArrayOf(0f, 0.65f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgPaint)
-
-        // Monogram inisial besar transparan di latar poster
-        val initials = item.title.split(" ")
-            .filter { it.isNotEmpty() && it[0].isLetterOrDigit() }
-            .take(2)
-            .joinToString("") { it[0].uppercase() }
-            .ifEmpty { "TV" }
-        val monoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x22E6C88F
-            textSize = 96f
-            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
+    fun fallbackPoster(context: Context, item: Entry): Drawable {
+        val topColor = when {
+            item.channelName.contains("Muse", true) -> 0xFF2B2118.toInt()
+            item.channelName.contains("Ani-One", true) -> 0xFF1A2530.toInt()
+            item.channelName.contains("WeTV", true) -> 0xFF2A1D24.toInt()
+            else -> 0xFF1E1C19.toInt()
         }
-        c.drawText(initials, w / 2f, h * 0.54f, monoPaint)
-
-        // Garis aksen emas halus di bagian bawah poster
-        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x66E6C88F
-            strokeWidth = 2f
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(topColor, 0xFF0E0D0B.toInt())
+        ).apply {
+            cornerRadius = Ui.dp(context, 10).toFloat()
+            setStroke(Ui.dp(context, 1), 0x44B8975A)
         }
-        c.drawRect(RectF(24f, h - 52f, 64f, h - 49f), linePaint)
-
-        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFD4CEC2.toInt()
-            textSize = 15f
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        }
-        c.drawText(item.category.uppercase(), 24f, h - 26f, subPaint)
-
-        posterCache[key] = bmp
-        return BitmapDrawable(ctx.resources, bmp)
     }
 
-    fun openYoutubeSearch(ctx: Context, query: String, fallbackUrl: String, onError: () -> Unit) {
-        val target = if (query.isNotBlank()) {
-            "https://www.youtube.com/results?search_query=" + URLEncoder.encode(query, "UTF-8")
-        } else {
-            fallbackUrl
+    fun openYoutubeSearch(context: Context, query: String, fallbackUrl: String, onError: () -> Unit) {
+        val url = "https://www.youtube.com/results?search_query=" + URLEncoder.encode(query, "UTF-8")
+        openUrl(context, url) {
+            openUrl(context, fallbackUrl, onError)
         }
-        openUrl(ctx, target, onError)
     }
 
-    fun openUrl(ctx: Context, url: String, onError: () -> Unit) {
+    fun openUrl(context: Context, url: String, onError: () -> Unit) {
         try {
             val i = Intent(Intent.ACTION_VIEW, Uri.parse(url))
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            ctx.startActivity(i)
-        } catch (e: Exception) {
+            context.startActivity(i)
+        } catch (_: Exception) {
             onError()
         }
     }
