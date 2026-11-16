@@ -512,7 +512,6 @@ class FilmActivity : AppCompatActivity() {
         if (!bdUrl.isNullOrBlank()) {
             loadHeroImage(bdUrl, true, heroBackdrop)
         } else {
-            // Tampilkan versi w780 dari poster sementara mencari backdrop layar lebar asli dari TMDB
             loadHeroImage(m.poster, false, heroBackdrop)
             if (m.id > 0 && !m.isJellyfin && Tmdb.key(this).isNotEmpty()) {
                 Thread {
@@ -885,11 +884,38 @@ class FilmActivity : AppCompatActivity() {
             clipToPadding = false
             setPadding(0, dp(4), 0, dp(10))
         }
-        val header = tv(rowTitle, 17f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(44), 0, dp(44), dp(6))
         }
-        section.addView(header)
+        val header = tv(rowTitle, 17f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+        }
+        headerRow.addView(header)
+
+        val clearAllBtn = tv("Hapus Semua", 11f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x22FFFFFF)
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            setOnFocusChangeListener { _, f ->
+                setTextColor(if (f) bgDark else mute)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(if (f) brassLight else 0x22FFFFFF)
+                }
+            }
+            setOnClickListener { confirmClearAllHistory() }
+        }
+        val clp = LinearLayout.LayoutParams(-2, -2)
+        clp.leftMargin = dp(14)
+        headerRow.addView(clearAllBtn, clp)
+        section.addView(headerRow)
 
         val hScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -913,6 +939,34 @@ class FilmActivity : AppCompatActivity() {
         hScroll.addView(strip)
         section.addView(hScroll)
         rowsBox.addView(section)
+    }
+
+    private fun confirmClearAllHistory() {
+        AlertDialog.Builder(this)
+            .setTitle("Hapus Semua Riwayat?")
+            .setMessage("Seluruh daftar Lanjutkan Menonton dan posisi menit terakhir akan dihapus.")
+            .setPositiveButton("Hapus Semua") { _, _ ->
+                clearAllContinueHistory()
+                closeDetail()
+                notice.show(null, "Semua riwayat tontonan telah dihapus", 2500L)
+                if (tabIdx == 0) {
+                    tabIdx = -1
+                    selectTab(0)
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
+    private fun clearAllContinueHistory() {
+        for (entry in ContinueWatch.load(this)) {
+            ContinueWatch.remove(this, entry.key)
+        }
+        val ed = prefs.edit()
+        for (k in prefs.all.keys) {
+            if (k.startsWith("pos_")) ed.remove(k)
+        }
+        ed.apply()
     }
 
     private fun addCarouselRow(rowTitle: String, items: List<Movie>) {
@@ -1126,6 +1180,9 @@ class FilmActivity : AppCompatActivity() {
                 tabIdx = -1
                 selectTab(0)
             }
+        }
+        addDetailButton("Hapus Semua", false) {
+            confirmClearAllHistory()
         }
         addDetailButton("Tutup", false) { closeDetail() }
 
