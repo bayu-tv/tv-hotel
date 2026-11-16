@@ -4,9 +4,12 @@ import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -15,6 +18,7 @@ import android.os.Looper
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.LruCache
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -32,6 +36,8 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 
@@ -45,6 +51,10 @@ class FilmActivity : AppCompatActivity() {
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
+
+    // Cache khusus gambar latar HD (1280x720) agar tajam & tetap hemat RAM (~7 MB maks)
+    private val heroCache = LruCache<String, Bitmap>(4)
+    private val resolvedBackdrops = HashMap<String, String>()
 
     private val tabs = arrayOf("Beranda", "Film", "Anime & Serial", "Indonesia", "YouTube Resmi", "Koleksi Saya", "Daftar Saya", "Cari")
     private val searchIdx = 7
@@ -89,14 +99,67 @@ class FilmActivity : AppCompatActivity() {
         return v
     }
 
-    // Tingkatkan resolusi backdrop TMDB dari w780/w500 ke w1280 agar tajam di layar TV
-    private fun hdBackdrop(url: String?): String? {
-        if (url.isNullOrBlank()) return url
+    private fun upgradeImageUrl(url: String?, isBackdrop: Boolean): String? {
+        if (url.isNullOrBlank()) return null
+        val targetSize = if (isBackdrop) "/w1280/" else "/w780/"
         return url
-            .replace("/w300/", "/w1280/")
-            .replace("/w342/", "/w1280/")
-            .replace("/w500/", "/w1280/")
-            .replace("/w780/", "/w1280/")
+            .replace("/w185/", targetSize)
+            .replace("/w300/", targetSize)
+            .replace("/w342/", targetSize)
+            .replace("/w500/", targetSize)
+            .replace("/w780/", targetSize)
+    }
+
+    private fun loadHeroImage(rawUrl: String?, isBackdrop: Boolean, target: ImageView, fallbackDrawable: Drawable? = null) {
+        val hdUrl = upgradeImageUrl(rawUrl, isBackdrop)
+        if (hdUrl == null) {
+            target.tag = null
+            target.setImageDrawable(fallbackDrawable)
+            return
+        }
+        target.tag = hdUrl
+        heroCache.get(hdUrl)?.let { cached ->
+            target.setImageBitmap(cached)
+            return
+        }
+        Thread {
+            try {
+                val conn = URL(hdUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 10000
+                conn.setRequestProperty("User-Agent", "BayuTV")
+                val bytes = conn.inputStream.use { it.readBytes() }
+
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+
+                var sample = 1
+                while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 720) {
+                    sample *= 2
+                }
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.RGB_565
+                }
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (bmp != null) {
+                    heroCache.put(hdUrl, bmp)
+                    ui.post {
+                        if (target.tag == hdUrl && !isFinishing) {
+                            target.setImageBitmap(bmp)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (fallbackDrawable != null) {
+                    ui.post {
+                        if (target.tag == hdUrl && !isFinishing) {
+                            target.setImageDrawable(fallbackDrawable)
+                        }
+                    }
+                }
+            }
+        }.start()
     }
 
     private val applyHeroRunnable = Runnable {
@@ -187,7 +250,6 @@ class FilmActivity : AppCompatActivity() {
         topBar.addView(tabScroll, LinearLayout.LayoutParams(0, -2, 1f))
         mainCol.addView(topBar)
 
-        // Panel Pencarian Modern Ala Netflix (muncul saat tab Cari dipilih)
         buildSearchPanel(mainCol)
 
         // Hero Info Area
@@ -225,7 +287,6 @@ class FilmActivity : AppCompatActivity() {
         heroInfo.addView(heroOverview, LinearLayout.LayoutParams(dp(560), -2))
         mainCol.addView(heroInfo)
 
-        // Scrollable Rows (clipChildren = false agar kartu membesar tidak terpotong)
         rowsScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             clipToPadding = false
@@ -317,7 +378,6 @@ class FilmActivity : AppCompatActivity() {
         barBox.addView(clearBtn)
         searchPanel.addView(barBox, LinearLayout.LayoutParams(dp(620), -2))
 
-        // Chip kata kunci cepat agar praktis dipilih pakai remote tanpa banyak mengetik
         val chipsScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, dp(8), 0, 0)
@@ -446,7 +506,31 @@ class FilmActivity : AppCompatActivity() {
         heroBadge.text = typeTag + cwTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  SUB INDO")
         heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   ·   " else "") + "\u2605 " + r + "   ·   Tekan OK untuk Tonton"
         heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan server streaming, dan Subtitle Indonesia."
-        Images.load(hdBackdrop(m.backdrop) ?: m.poster, heroBackdrop)
+
+        val key = watchKey(m)
+        val bdUrl = resolvedBackdrops[key] ?: m.backdrop
+        if (!bdUrl.isNullOrBlank()) {
+            loadHeroImage(bdUrl, true, heroBackdrop)
+        } else {
+            // Tampilkan versi w780 dari poster sementara mencari backdrop layar lebar asli dari TMDB
+            loadHeroImage(m.poster, false, heroBackdrop)
+            if (m.id > 0 && !m.isJellyfin && Tmdb.key(this).isNotEmpty()) {
+                Thread {
+                    val path = "/" + (if (m.kind == "tv") "tv" else "movie") + "/" + m.id
+                    val json = Tmdb.get(this, path, "language=id-ID") ?: return@Thread
+                    val bp = try { JSONObject(json).optString("backdrop_path", "") } catch (e: Exception) { "" }
+                    if (bp.isNotEmpty() && bp != "null") {
+                        val fullBd = "https://image.tmdb.org/t/p/w1280$bp"
+                        resolvedBackdrops[key] = fullBd
+                        ui.post {
+                            if (focusedMovie == m && !isFinishing) {
+                                loadHeroImage(fullBd, true, heroBackdrop)
+                            }
+                        }
+                    }
+                }.start()
+            }
+        }
     }
 
     private fun selectTab(i: Int) {
@@ -656,11 +740,14 @@ class FilmActivity : AppCompatActivity() {
         heroOverview.text = item.overview.ifBlank {
             "Tonton episode resmi ${item.title} dengan Subtitle Indonesia jernih melalui kanal ${item.channelName} di YouTube TV."
         }
-        val bg = hdBackdrop(item.backdropUrl) ?: item.posterUrl
-        if (bg != null) {
-            Images.load(bg, heroBackdrop)
+        val fallback = YoutubeCatalog.fallbackPoster(this, item)
+        if (!item.backdropUrl.isNullOrBlank()) {
+            loadHeroImage(item.backdropUrl, true, heroBackdrop, fallback)
+        } else if (!item.posterUrl.isNullOrBlank()) {
+            loadHeroImage(item.posterUrl, false, heroBackdrop, fallback)
         } else {
-            heroBackdrop.setImageDrawable(YoutubeCatalog.fallbackPoster(this, item))
+            heroBackdrop.tag = null
+            heroBackdrop.setImageDrawable(fallback)
         }
     }
 
@@ -674,16 +761,19 @@ class FilmActivity : AppCompatActivity() {
         }
         detailProviders.text = "Kanal Resmi: ${item.channelName} (Gratis & Jernih di YouTube)"
 
+        val fallback = YoutubeCatalog.fallbackPoster(this, item)
         if (item.posterUrl != null) {
             Images.load(item.posterUrl, detailPoster)
         } else {
-            detailPoster.setImageDrawable(YoutubeCatalog.fallbackPoster(this, item))
+            detailPoster.setImageDrawable(fallback)
         }
-        val bg = hdBackdrop(item.backdropUrl) ?: item.posterUrl
-        if (bg != null) {
-            Images.load(bg, detailBackdrop)
+        if (!item.backdropUrl.isNullOrBlank()) {
+            loadHeroImage(item.backdropUrl, true, detailBackdrop, fallback)
+        } else if (!item.posterUrl.isNullOrBlank()) {
+            loadHeroImage(item.posterUrl, false, detailBackdrop, fallback)
         } else {
-            detailBackdrop.setImageDrawable(YoutubeCatalog.fallbackPoster(this, item))
+            detailBackdrop.tag = null
+            detailBackdrop.setImageDrawable(fallback)
         }
 
         detailActions.removeAllViews()
@@ -906,7 +996,6 @@ class FilmActivity : AppCompatActivity() {
 
         card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(192)))
 
-        // Judul 2 baris agar tidak mudah terpotong saat disorot
         val title = tv(m.title, 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
@@ -1011,7 +1100,12 @@ class FilmActivity : AppCompatActivity() {
         detailOverview.text = m.overview.ifBlank { "Lanjutkan menonton dari posisi terakhir Anda." }
         detailProviders.text = "Riwayat tersimpan otomatis di perangkat TV."
         Images.load(m.poster, detailPoster)
-        Images.load(hdBackdrop(m.backdrop) ?: m.poster, detailBackdrop)
+        val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
+        if (!bdUrl.isNullOrBlank()) {
+            loadHeroImage(bdUrl, true, detailBackdrop)
+        } else {
+            loadHeroImage(m.poster, false, detailBackdrop)
+        }
         detailActions.removeAllViews()
 
         addDetailButton("▶  Lanjutkan Menonton", true) {
@@ -1050,7 +1144,12 @@ class FilmActivity : AppCompatActivity() {
         detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
         detailProviders.text = "Memuat info durasi & episode..."
         Images.load(m.poster, detailPoster)
-        Images.load(hdBackdrop(m.backdrop) ?: m.poster, detailBackdrop)
+        val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
+        if (!bdUrl.isNullOrBlank()) {
+            loadHeroImage(bdUrl, true, detailBackdrop)
+        } else {
+            loadHeroImage(m.poster, false, detailBackdrop)
+        }
         detailActions.removeAllViews()
 
         addDetailButton("▶  Tonton (Server Web)", true) { startDirectStream(m) }
@@ -1078,6 +1177,13 @@ class FilmActivity : AppCompatActivity() {
             val o = try { JSONObject(json) } catch (e: Exception) { return@Thread }
             ui.post {
                 if (detailOverlay.visibility != View.VISIBLE || isFinishing) return@post
+                val bp = o.optString("backdrop_path", "")
+                if (bp.isNotEmpty() && bp != "null") {
+                    val fullBd = "https://image.tmdb.org/t/p/w1280$bp"
+                    resolvedBackdrops[watchKey(m)] = fullBd
+                    loadHeroImage(fullBd, true, detailBackdrop)
+                }
+
                 val metaParts = ArrayList<String>()
                 if (m.year.isNotEmpty()) metaParts.add(m.year)
                 if (m.rating > 0) metaParts.add("\u2605 " + String.format(Locale.US, "%.1f", m.rating))
@@ -1226,7 +1332,7 @@ class FilmActivity : AppCompatActivity() {
             i.putExtra("resume_key", rKey)
             i.putExtra("year", m.year)
             i.putExtra("poster", m.poster ?: "")
-            i.putExtra("backdrop", m.backdrop ?: "")
+            i.putExtra("backdrop", resolvedBackdrops[watchKey(m)] ?: m.backdrop ?: "")
             i.putExtra("rating", m.rating)
             i.putExtra("overview", m.overview)
             startActivity(i)
@@ -1381,7 +1487,7 @@ class FilmActivity : AppCompatActivity() {
             o.put("title", x.title)
             o.put("release_date", x.year)
             o.put("poster_path", x.poster ?: "")
-            o.put("backdrop_path", x.backdrop ?: "")
+            o.put("backdrop_path", resolvedBackdrops[watchKey(x)] ?: x.backdrop ?: "")
             o.put("vote_average", x.rating)
             o.put("overview", x.overview)
             o.put("kind", x.kind)
@@ -1445,6 +1551,7 @@ class FilmActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        heroCache.evictAll()
         super.onDestroy()
     }
 }
