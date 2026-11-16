@@ -99,10 +99,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adzanTitleView: TextView
     private lateinit var adzanSubtitleView: TextView
     private lateinit var ramadanBox: LinearLayout
-    private lateinit var ramadanBoxTitle: TextView
-    private lateinit var ramadanBoxArab: TextView
-    private lateinit var ramadanBoxLatin: TextView
-    private lateinit var ramadanBoxArti: TextView
     private lateinit var btnDismissAdzan: TextView
 
     private val brass = 0xFFB8975A.toInt()
@@ -193,7 +189,6 @@ class MainActivity : AppCompatActivity() {
     // ---------- Overlay Countdown 5 Detik Adzan, Doa Setelah Adzan & Doa/Dzikir Ramadan ----------
 
     private fun buildAdzanAndRamadanOverlays() {
-        // 1. Pill Countdown 5 detik di pojok kanan atas
         countdownBanner = tv("", 18f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             setPadding(dp(22), dp(12), dp(22), dp(12))
             background = GradientDrawable().apply {
@@ -207,7 +202,6 @@ class MainActivity : AppCompatActivity() {
         cdlp.setMargins(dp(24), dp(28), dp(32), 0)
         root.addView(countdownBanner, cdlp)
 
-        // 2. Kartu Lengkap Waktu Adzan + Doa Setelah Adzan + Doa Berbuka Puasa (Ramadan)
         adzanOverlay = FrameLayout(this).apply {
             setBackgroundColor(0xCC0A0908.toInt())
             visibility = View.GONE
@@ -249,28 +243,32 @@ class MainActivity : AppCompatActivity() {
             }
             visibility = View.GONE
         }
-        ramadanBoxTitle = tv("SELAMAT BERBUKA PUASA · DOA BERBUKA", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            letterSpacing = 0.08f
-        }
-        ramadanBoxArab = tv(
-            "ذَهَبَ الظَّمَأُ وَابْتَلَّتِ الْعُرُوقُ، وَثَبَتَ الْأَجْرُ إِنْ شَاءَ اللَّهُ",
-            22f, ivory, Typeface.SERIF
-        ).apply {
-            gravity = Gravity.END
-            setPadding(0, dp(6), 0, dp(4))
-        }
-        ramadanBoxLatin = tv(
-            "Dzahabazh-zhama'u wabtallatil-'urūqu wa tsabatal-ajru insyā Allāh.",
-            13.5f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC)
+        ramadanBox.addView(
+            tv("SELAMAT BERBUKA PUASA · DOA BERBUKA", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                letterSpacing = 0.08f
+            }
         )
-        ramadanBoxArti = tv(
-            "\"Telah hilang rasa haus, telah basah urat-urat, dan telah tetap pahala, insya Allah.\" (HR. Abu Dawud)",
-            12.5f, mute, Typeface.SANS_SERIF
-        ).apply { setPadding(0, dp(2), 0, 0) }
-        ramadanBox.addView(ramadanBoxTitle)
-        ramadanBox.addView(ramadanBoxArab)
-        ramadanBox.addView(ramadanBoxLatin)
-        ramadanBox.addView(ramadanBoxArti)
+        ramadanBox.addView(
+            tv(
+                "ذَهَبَ الظَّمَأُ وَابْتَلَّتِ الْعُرُوقُ، وَثَبَتَ الْأَجْرُ إِنْ شَاءَ اللَّهُ",
+                22f, ivory, Typeface.SERIF
+            ).apply {
+                gravity = Gravity.END
+                setPadding(0, dp(6), 0, dp(4))
+            }
+        )
+        ramadanBox.addView(
+            tv(
+                "Dzahabazh-zhama'u wabtallatil-'urūqu wa tsabatal-ajru insyā Allāh.",
+                13.5f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC)
+            )
+        )
+        ramadanBox.addView(
+            tv(
+                "\"Telah hilang rasa haus, telah basah urat-urat, dan telah tetap pahala, insya Allah.\" (HR. Abu Dawud)",
+                12.5f, mute, Typeface.SANS_SERIF
+            ).apply { setPadding(0, dp(2), 0, 0) }
+        )
         val rblp = LinearLayout.LayoutParams(-1, -2)
         rblp.bottomMargin = dp(12)
         contentCol.addView(ramadanBox, rblp)
@@ -339,7 +337,7 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener { endAdzan() }
         }
-        val blp = LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL).apply {
+        val blp = LinearLayout.LayoutParams(-2, -2).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = dp(14)
         }
@@ -937,7 +935,7 @@ class MainActivity : AppCompatActivity() {
         val ch = byKey[key] ?: return
         if (key == Antenna.OPEN_KEY) {
             if (!Antenna.openSaved(this)) {
-                notice.show("TV Antena", "Aplikasi antena belum bisa dibuka. Pilih aplikasinya dari menu TV Antena di Beranda." +
+                notice.show("TV Antena", "Aplikasi antena belum bisa dibuka. Pilih aplikasinya di menu Pengaturan." +
                     (if (antennaInfo.isNotEmpty()) "\n\n" + antennaInfo else ""), 7000L)
             }
             return
