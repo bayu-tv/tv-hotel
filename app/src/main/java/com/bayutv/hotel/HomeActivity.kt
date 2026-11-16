@@ -6,10 +6,17 @@ import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.graphics.PorterDuff
+import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.media.tv.TvContract
@@ -28,10 +35,12 @@ import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
@@ -47,7 +56,6 @@ import java.util.Locale
 
 class HomeActivity : AppCompatActivity() {
 
-    // Lokasi bawaan: Pontianak. Nanti bisa diubah dari HP.
     private val lat: Double get() = prefs.getString("lat", null)?.toDoubleOrNull() ?: -0.0263
     private val lon: Double get() = prefs.getString("lon", null)?.toDoubleOrNull() ?: 109.3425
     private val tzName: String get() = prefs.getString("tz", null) ?: "Asia/Pontianak"
@@ -85,6 +93,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var glow: View
     private lateinit var glowAnim: ValueAnimator
     private var locSig = ""
+    private var isPhoneLayout = false
+    private var firstTile: View? = null
     private val cells = ArrayList<Pair<TextView, TextView>>()
     private val times = IntArray(5) { -1 }
     private val prayNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
@@ -110,6 +120,31 @@ class HomeActivity : AppCompatActivity() {
         return v
     }
 
+    // Ikon vektor nada musik bawaan kode (anti-error resource hilang)
+    private fun musicIconDrawable(color: Int): Drawable {
+        return object : Drawable() {
+            private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.color = color
+                style = Paint.Style.FILL
+            }
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                if (w <= 0f || h <= 0f) return
+                // Batang & palang nada ganda
+                canvas.drawRoundRect(RectF(w * 0.34f, h * 0.16f, w * 0.82f, h * 0.27f), w * 0.04f, w * 0.04f, p)
+                canvas.drawRect(RectF(w * 0.34f, h * 0.20f, w * 0.42f, h * 0.72f), p)
+                canvas.drawRect(RectF(w * 0.74f, h * 0.16f, w * 0.82f, h * 0.66f), p)
+                canvas.drawOval(RectF(w * 0.16f, h * 0.62f, w * 0.42f, h * 0.82f), p)
+                canvas.drawOval(RectF(w * 0.56f, h * 0.56f, w * 0.82f, h * 0.76f), p)
+            }
+            override fun setAlpha(alpha: Int) { p.alpha = alpha }
+            override fun setColorFilter(cf: ColorFilter?) { p.colorFilter = cf }
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+    }
+
     private fun box(focused: Boolean): GradientDrawable {
         val g = GradientDrawable()
         g.cornerRadius = dp(16).toFloat()
@@ -118,16 +153,46 @@ class HomeActivity : AppCompatActivity() {
         return g
     }
 
-    private fun tile(label: String, res: Int, action: () -> Unit): LinearLayout {
+    private fun tile(
+        label: String,
+        res: Int,
+        customIcon: ((Int) -> Drawable)? = null,
+        action: () -> Unit
+    ): LinearLayout {
         val t = LinearLayout(this)
-        t.orientation = LinearLayout.VERTICAL
+        t.orientation = if (isPhoneLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         t.gravity = Gravity.CENTER
-        val ic = icon(res, 40, mute)
+        if (isPhoneLayout) t.setPadding(dp(14), dp(12), dp(14), dp(12))
+
+        val ic = ImageView(this).apply {
+            val sz = dp(if (isPhoneLayout) 28 else 36)
+            layoutParams = LinearLayout.LayoutParams(sz, sz)
+            if (customIcon != null) {
+                setImageDrawable(customIcon(mute))
+            } else {
+                setImageResource(res)
+                setColorFilter(mute, PorterDuff.Mode.SRC_IN)
+            }
+        }
         t.addView(ic)
-        val tx = tv(label, 17f, mute, Typeface.SERIF)
-        tx.setPadding(0, dp(10), 0, 0)
-        tx.gravity = Gravity.CENTER_HORIZONTAL
-        t.addView(tx)
+
+        val tx = tv(label, if (isPhoneLayout) 14.5f else 15.5f, mute, Typeface.SERIF).apply {
+            if (isPhoneLayout) {
+                setPadding(dp(12), 0, 0, 0)
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            } else {
+                setPadding(dp(4), dp(9), dp(4), 0)
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        if (isPhoneLayout) {
+            t.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
+        } else {
+            t.addView(tx)
+        }
+
         t.isFocusable = true
         t.isClickable = true
         t.background = box(false)
@@ -135,21 +200,36 @@ class HomeActivity : AppCompatActivity() {
         t.setOnFocusChangeListener { _, f ->
             t.background = box(f)
             val c = if (f) brassLight else mute
-            ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
+            if (customIcon != null) {
+                ic.setImageDrawable(customIcon(c))
+            } else {
+                ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
+            }
             tx.setTextColor(c)
-            val s = if (f) 1.05f else 1f
-            t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(5).toFloat() else 0f).setDuration(220).start()
-            if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(700).start()
+            val s = if (f) 1.04f else 1f
+            t.animate().scaleX(s).scaleY(s).translationY(if (f && !isPhoneLayout) -dp(4).toFloat() else 0f).setDuration(200).start()
+            if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(650).start()
         }
-        val lp = LinearLayout.LayoutParams(dp(136), dp(108))
-        lp.setMargins(dp(6), 0, dp(6), 0)
-        t.layoutParams = lp
+
+        if (isPhoneLayout) {
+            val lp = LinearLayout.LayoutParams(0, dp(64), 1f)
+            lp.setMargins(dp(5), dp(5), dp(5), dp(5))
+            t.layoutParams = lp
+        } else {
+            val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
+            lp.setMargins(dp(5), 0, dp(5), 0)
+            t.layoutParams = lp
+        }
+        if (firstTile == null) firstTile = t
         return t
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        isPhoneLayout = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
+            resources.configuration.screenWidthDp < 600
 
         skin = Themes.pick(this)
         brass = skin.accent
@@ -180,36 +260,48 @@ class HomeActivity : AppCompatActivity() {
         }
         decoLayer = FrameLayout(this)
         root.addView(decoLayer, FrameLayout.LayoutParams(-1, -1))
+
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.clipChildren = false
-        col.setPadding(dp(56), dp(32), dp(56), dp(20))
-        root.addView(col, FrameLayout.LayoutParams(-1, -1))
+        if (isPhoneLayout) {
+            col.setPadding(dp(20), dp(22), dp(20), dp(24))
+        } else {
+            col.setPadding(dp(44), dp(28), dp(44), dp(18))
+        }
 
         // Baris atas: sapaan dan jam
         val top = LinearLayout(this)
+        top.orientation = LinearLayout.HORIZONTAL
         val left = LinearLayout(this)
         left.orientation = LinearLayout.VERTICAL
-        tvWelcome = tv("SELAMAT DATANG", 13f, brass, Typeface.SANS_SERIF)
-        tvWelcome.letterSpacing = 0.25f
-        tvGreet = tv("", 36f, ivory, Typeface.SERIF)
-        tvName = tv(prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda", 36f, brass, Typeface.create(Typeface.SERIF, Typeface.ITALIC))
+        tvWelcome = tv("SELAMAT DATANG", if (isPhoneLayout) 11f else 13f, brass, Typeface.SANS_SERIF)
+        tvWelcome.letterSpacing = 0.22f
+        tvGreet = tv("", if (isPhoneLayout) 22f else 34f, ivory, Typeface.SERIF)
+        tvName = tv(
+            prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda",
+            if (isPhoneLayout) 22f else 34f,
+            brass,
+            Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+        )
         val brand = LinearLayout(this)
         brand.gravity = Gravity.CENTER_VERTICAL
         val logo = ImageView(this)
         logo.setImageResource(R.drawable.logo_mark)
-        brand.addView(logo, LinearLayout.LayoutParams(dp(30), dp(30)))
-        tvWelcome.setPadding(dp(10), 0, 0, 0)
+        val logoSz = dp(if (isPhoneLayout) 22 else 30)
+        brand.addView(logo, LinearLayout.LayoutParams(logoSz, logoSz))
+        tvWelcome.setPadding(dp(8), 0, 0, 0)
         brand.addView(tvWelcome)
         left.addView(brand)
         left.addView(tvGreet)
         left.addView(tvName)
+
         val right = LinearLayout(this)
         right.orientation = LinearLayout.VERTICAL
         right.gravity = Gravity.END
-        tvClock = tv("", 54f, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
-        tvDate = tv("", 16f, mute, Typeface.SANS_SERIF)
-        tvHijri = tv("", 16f, mute, Typeface.SANS_SERIF)
+        tvClock = tv("", if (isPhoneLayout) 36f else 52f, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
+        tvDate = tv("", if (isPhoneLayout) 12.5f else 15f, mute, Typeface.SANS_SERIF)
+        tvHijri = tv("", if (isPhoneLayout) 12.5f else 15f, mute, Typeface.SANS_SERIF)
         tvClock.gravity = Gravity.END
         tvDate.gravity = Gravity.END
         tvHijri.gravity = Gravity.END
@@ -223,38 +315,51 @@ class HomeActivity : AppCompatActivity() {
         val line = View(this)
         line.setBackgroundColor(0xFF34302A.toInt())
         val llp = LinearLayout.LayoutParams(-1, dp(1))
-        llp.topMargin = dp(14)
+        llp.topMargin = dp(12)
         col.addView(line, llp)
 
-        // Cuaca (tanpa kotak)
-        val wx = LinearLayout(this)
-        wx.gravity = Gravity.CENTER_VERTICAL
-        wxIcon = icon(R.drawable.ic_cloud_sun, 56, brassLight)
-        wx.addView(wxIcon)
+        // Cuaca
+        val wxOuter = LinearLayout(this)
+        wxOuter.orientation = if (isPhoneLayout) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        wxOuter.gravity = if (isPhoneLayout) Gravity.START else Gravity.CENTER_VERTICAL
+
+        val wxMainRow = LinearLayout(this)
+        wxMainRow.gravity = Gravity.CENTER_VERTICAL
+        wxIcon = icon(R.drawable.ic_cloud_sun, if (isPhoneLayout) 42 else 54, brassLight)
+        wxMainRow.addView(wxIcon)
         val wt = LinearLayout(this)
         wt.orientation = LinearLayout.VERTICAL
-        wt.setPadding(dp(16), 0, 0, 0)
-        tvWx1 = tv("Memuat cuaca...", 18f, ivory, Typeface.SANS_SERIF)
+        wt.setPadding(dp(14), 0, 0, 0)
+        tvWx1 = tv("Memuat cuaca...", if (isPhoneLayout) 15f else 18f, ivory, Typeface.SANS_SERIF)
         val row2 = LinearLayout(this)
         row2.gravity = Gravity.CENTER_VERTICAL
-        row2.addView(icon(R.drawable.ic_wind, 18, mute))
-        tvWx2 = tv("", 15f, mute, Typeface.SANS_SERIF)
-        tvWx2.setPadding(dp(8), 0, 0, 0)
+        row2.addView(icon(R.drawable.ic_wind, 16, mute))
+        tvWx2 = tv("", if (isPhoneLayout) 13f else 15f, mute, Typeface.SANS_SERIF)
+        tvWx2.setPadding(dp(6), 0, 0, 0)
         row2.addView(tvWx2)
         wt.addView(tvWx1)
         wt.addView(row2)
-        wx.addView(wt, LinearLayout.LayoutParams(0, -2, 1f))
-        fc = LinearLayout(this)
-        wx.addView(fc)
-        val wlp = LinearLayout.LayoutParams(-1, -2)
-        wlp.topMargin = dp(14)
-        col.addView(wx, wlp)
+        wxMainRow.addView(wt, LinearLayout.LayoutParams(0, -2, 1f))
 
-        // Kartu Pengingat / Catatan Keluarga (otomatis muncul bila diisi dari HP)
+        fc = LinearLayout(this)
+        if (isPhoneLayout) {
+            wxOuter.addView(wxMainRow, LinearLayout.LayoutParams(-1, -2))
+            val fclp = LinearLayout.LayoutParams(-1, -2)
+            fclp.topMargin = dp(8)
+            wxOuter.addView(fc, fclp)
+        } else {
+            wxOuter.addView(wxMainRow, LinearLayout.LayoutParams(0, -2, 1f))
+            wxOuter.addView(fc)
+        }
+        val wlp = LinearLayout.LayoutParams(-1, -2)
+        wlp.topMargin = dp(12)
+        col.addView(wxOuter, wlp)
+
+        // Kartu Pengingat / Catatan Keluarga
         noteBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor((brass and 0x00FFFFFF) or 0x1A000000)
@@ -277,42 +382,80 @@ class HomeActivity : AppCompatActivity() {
         nlp.topMargin = dp(10)
         col.addView(noteBox, nlp)
 
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.2f))
+        if (!isPhoneLayout) {
+            col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.1f))
+        }
 
-        // Menu
-        tiles = LinearLayout(this)
-        tiles.gravity = Gravity.CENTER
-        tiles.clipChildren = false
-        tiles.clipToPadding = false
-        tiles.setPadding(0, dp(14), 0, dp(14))
-        tiles.addView(tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) })
-        val antenna = tile("TV Antena", R.drawable.ic_antenna) { openAntennaMenu() }
-        antenna.setOnLongClickListener {
-            launchSaved()
+        // Menu Utama (7 Fitur termasuk Musik & Radio)
+        val tTv = tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) }
+        val tMusic = tile("Musik & Radio", 0, customIcon = { c -> musicIconDrawable(c) }) {
+            startActivity(Intent(this, RadioMusicActivity::class.java))
+        }
+        val tAntenna = tile("TV Antena", R.drawable.ic_antenna) {
+            if (!launchSaved()) chooseAntennaApp()
+        }
+        tAntenna.setOnLongClickListener {
+            openAntennaMenu()
             true
         }
-        tiles.addView(antenna)
-        tiles.addView(tile("Film", R.drawable.ic_film) {
+        val tFilm = tile("Film", R.drawable.ic_film) {
             if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
             else startActivity(Intent(this, FilmActivity::class.java))
-        })
-        tiles.addView(tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) })
-        tiles.addView(tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) })
-        tiles.addView(tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) })
+        }
+        val tPanduan = tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
+        val tScan = tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) }
+        val tSettings = tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) }
+
+        tiles = LinearLayout(this)
+        tiles.clipChildren = false
+        tiles.clipToPadding = false
+        if (isPhoneLayout) {
+            tiles.orientation = LinearLayout.VERTICAL
+            tiles.setPadding(0, dp(14), 0, dp(14))
+            val allTiles = listOf(tMusic, tTv, tFilm, tAntenna, tPanduan, tScan, tSettings)
+            var idx = 0
+            while (idx < allTiles.size) {
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                row.addView(allTiles[idx])
+                if (idx + 1 < allTiles.size) {
+                    row.addView(allTiles[idx + 1])
+                } else {
+                    val spacer = View(this)
+                    val slp = LinearLayout.LayoutParams(0, dp(64), 1f)
+                    slp.setMargins(dp(5), dp(5), dp(5), dp(5))
+                    row.addView(spacer, slp)
+                }
+                tiles.addView(row, LinearLayout.LayoutParams(-1, -2))
+                idx += 2
+            }
+        } else {
+            tiles.orientation = LinearLayout.HORIZONTAL
+            tiles.gravity = Gravity.CENTER
+            tiles.setPadding(0, dp(12), 0, dp(12))
+            tiles.addView(tTv)
+            tiles.addView(tMusic)
+            tiles.addView(tAntenna)
+            tiles.addView(tFilm)
+            tiles.addView(tPanduan)
+            tiles.addView(tScan)
+            tiles.addView(tSettings)
+        }
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
 
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
+        if (!isPhoneLayout) {
+            col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
+        }
 
         // Jadwal sholat
         val pray = LinearLayout(this)
         pray.background = box(false)
-        pray.setPadding(dp(8), dp(8), dp(8), dp(8))
+        pray.setPadding(dp(6), dp(8), dp(6), dp(8))
         for (i in 0..4) {
             val c = LinearLayout(this)
             c.orientation = LinearLayout.VERTICAL
             c.gravity = Gravity.CENTER
-            val n = tv(prayNames[i], 14f, mute, Typeface.SANS_SERIF)
-            val t = tv("--:--", 22f, ivory, Typeface.SERIF)
+            val n = tv(prayNames[i], if (isPhoneLayout) 12f else 14f, mute, Typeface.SANS_SERIF)
+            val t = tv("--:--", if (isPhoneLayout) 17f else 22f, ivory, Typeface.SERIF)
             n.gravity = Gravity.CENTER_HORIZONTAL
             t.gravity = Gravity.CENTER_HORIZONTAL
             c.addView(n)
@@ -320,17 +463,28 @@ class HomeActivity : AppCompatActivity() {
             cells.add(Pair(n, t))
             pray.addView(c, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        col.addView(pray, LinearLayout.LayoutParams(-1, -2))
-        tvCd = tv("", 15f, mute, Typeface.SANS_SERIF)
-        tvCd.setPadding(dp(8), dp(8), 0, 0)
+        val prayLp = LinearLayout.LayoutParams(-1, -2)
+        if (isPhoneLayout) prayLp.topMargin = dp(6)
+        col.addView(pray, prayLp)
+
+        tvCd = tv("", if (isPhoneLayout) 13f else 15f, mute, Typeface.SANS_SERIF)
+        tvCd.setPadding(dp(6), dp(8), 0, 0)
         col.addView(tvCd)
         tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF)
-        tvNote.setPadding(dp(8), dp(4), 0, 0)
+        tvNote.setPadding(dp(6), dp(4), 0, 0)
         col.addView(tvNote)
+
+        if (isPhoneLayout) {
+            val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+            scroll.addView(col, ViewGroup.LayoutParams(-1, -2))
+            root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            root.addView(col, FrameLayout.LayoutParams(-1, -1))
+        }
 
         notice = Notice(this, root)
         setContentView(root)
-        tiles.getChildAt(0).requestFocus()
+        firstTile?.requestFocus()
 
         refreshFamilyNote()
         renderWeather()
@@ -504,7 +658,7 @@ class HomeActivity : AppCompatActivity() {
             wxIcon.setImageResource(c.second)
             val head = temp.toString() + "\u00B0"
             val sp = SpannableString(head + "  " + c.first + " \u00B7 " + city)
-            sp.setSpan(RelativeSizeSpan(2.1f), 0, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sp.setSpan(RelativeSizeSpan(if (isPhoneLayout) 1.6f else 2.1f), 0, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             tvWx1.text = sp
 
             val base = "Angin " + ws + " km/j " + dirName(wd)
@@ -520,7 +674,7 @@ class HomeActivity : AppCompatActivity() {
             if (aqText.isEmpty()) {
                 tvWx2.text = base
             } else {
-                val pre = base + "  \u00B7  Kualitas udara "
+                val pre = base + "  \u00B7  Udara "
                 val s2 = SpannableString(pre + aqText)
                 s2.setSpan(ForegroundColorSpan(aqColor), pre.length, pre.length + aqText.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 tvWx2.text = s2
@@ -535,21 +689,25 @@ class HomeActivity : AppCompatActivity() {
                 val cal = Calendar.getInstance()
                 cal.add(Calendar.DAY_OF_YEAR, i)
                 val item = LinearLayout(this)
-                item.orientation = LinearLayout.VERTICAL
+                item.orientation = if (isPhoneLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
                 item.gravity = Gravity.CENTER
-                item.setPadding(dp(12), 0, dp(12), 0)
+                item.setPadding(dp(10), dp(2), dp(10), dp(2))
                 item.addView(tv(SimpleDateFormat("EEE", Locale("id", "ID")).format(cal.time), 13f, mute, Typeface.SANS_SERIF))
-                item.addView(icon(cond(codes.getInt(i)).second, 28, 0xFFCFC7B8.toInt()))
+                val ic = icon(cond(codes.getInt(i)).second, if (isPhoneLayout) 22 else 28, 0xFFCFC7B8.toInt())
+                if (isPhoneLayout) ic.setPadding(dp(6), 0, dp(6), 0)
+                item.addView(ic)
                 item.addView(tv(Math.round(maxs.getDouble(i)).toInt().toString() + "\u00B0", 14f, ivory, Typeface.SANS_SERIF))
-                fc.addView(item)
+                if (isPhoneLayout) {
+                    fc.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+                } else {
+                    fc.addView(item)
+                }
             }
         } catch (e: Exception) {
             tvWx1.text = "Cuaca belum tersedia"
         }
     }
 
-    // ---- Pembaruan otomatis ----
-    // Beri tahu bila jadwal "Perbarui daftar channel" di GitHub berhenti atau lama tidak berhasil
     private fun checkWorkflow() {
         val now = System.currentTimeMillis()
         if (now - prefs.getLong("wf_check", 0L) < 6L * 3600000L) return
@@ -586,8 +744,8 @@ class HomeActivity : AppCompatActivity() {
         }.start()
     }
 
-    // Buka otomatis saat TV menyala butuh izin "Tampilkan di atas aplikasi lain" (Android 10+)
     private fun checkAutostartPermission() {
+        if (isPhoneLayout) return
         val mode = prefs.getString("autostart", "Mati") ?: "Mati"
         if (mode == "Mati" || Build.VERSION.SDK_INT < 29) return
         if (Settings.canDrawOverlays(this)) return
@@ -759,8 +917,8 @@ class HomeActivity : AppCompatActivity() {
                 sp.setColorFilter(if (i % 3 == 0) 0xFFFFFFFF.toInt() else skin.accentLight, PorterDuff.Mode.SRC_IN)
                 sp.alpha = 0.2f
                 val lp = FrameLayout.LayoutParams(sz, sz)
-                lp.leftMargin = rnd.nextInt(dm.widthPixels - sz)
-                lp.topMargin = rnd.nextInt(dm.heightPixels - sz)
+                lp.leftMargin = rnd.nextInt((dm.widthPixels - sz).coerceAtLeast(1))
+                lp.topMargin = rnd.nextInt((dm.heightPixels - sz).coerceAtLeast(1))
                 decoLayer.addView(sp, lp)
                 val tw = ObjectAnimator.ofFloat(sp, "alpha", 0.15f, 0.75f)
                 tw.duration = 1800L + rnd.nextInt(1600)
@@ -779,7 +937,6 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Uji: apakah aplikasi ini bisa melihat dan membaca tuner antena bawaan TV?
     private fun runTunerTest() {
         val sb = StringBuilder()
         try {
@@ -866,9 +1023,9 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun launchSaved(): Boolean {
-        val saved = prefs.getString("antenna", null) ?: return false
+        val saved = prefs.getString("antenna", null) ?: return tryLiveTv()
         val ok = if (saved == "system") tryLiveTv() else launchComponent(saved)
-        if (!ok) notice.show("Tidak terbuka", "Pilih aplikasi antena lagi dari menu TV Antena.", 4000L)
+        if (!ok) notice.show("Tidak terbuka", "Pilih aplikasi antena lagi (tahan OK pada TV Antena).", 4000L)
         return ok
     }
 
@@ -883,24 +1040,23 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Menu TV Antena: buka, ganti aplikasi, atau uji tuner. Tahan OK = langsung buka.
     private fun openAntennaMenu() {
         val label = savedLabel()
         AlertDialog.Builder(this)
-            .setTitle("TV Antena")
+            .setTitle("Pengaturan & Uji TV Antena")
             .setItems(arrayOf(
-                "Arah & sinyal antena",
-                "Antena di dalam aplikasi (uji hybrid)",
                 if (label != null) "Buka " + label else "Pilih aplikasi antena",
                 "Ganti aplikasi antena",
+                "Arah & sinyal antena (Kompas MUX)",
+                "Antena di dalam aplikasi (uji hybrid)",
                 "Uji tuner antena (info)",
                 "Uji pintasan RCTI+ / Vidio"
             )) { _, which ->
                 when (which) {
-                    0 -> startActivity(Intent(this, AntennaAimActivity::class.java))
-                    1 -> startActivity(Intent(this, AntennaActivity::class.java))
-                    2 -> if (label != null) launchSaved() else chooseAntennaApp()
-                    3 -> chooseAntennaApp()
+                    0 -> if (label != null) launchSaved() else chooseAntennaApp()
+                    1 -> chooseAntennaApp()
+                    2 -> startActivity(Intent(this, AntennaAimActivity::class.java))
+                    3 -> startActivity(Intent(this, AntennaActivity::class.java))
                     4 -> runTunerTest()
                     else -> testAppLinks()
                 }
@@ -908,7 +1064,6 @@ class HomeActivity : AppCompatActivity() {
             .show()
     }
 
-    // Uji pintasan: tampilkan format alamat/layar yang diterima RCTI+ dan Vidio, lalu bisa dicoba satu per satu
     private fun testAppLinks() {
         val res = try {
             AppLinks.diagnose(this)
@@ -941,7 +1096,6 @@ class HomeActivity : AppCompatActivity() {
 
     private var pendingTrial: AppLinks.Trial? = null
 
-    // Kembali dari percobaan alamat: tanya apakah siaran langsung terbuka
     private fun confirmTrial() {
         val t = pendingTrial ?: return
         pendingTrial = null
@@ -958,7 +1112,6 @@ class HomeActivity : AppCompatActivity() {
             .show()
     }
 
-    // Aplikasi pihak ketiga tidak bisa memutar tuner langsung; kita hanya membuka aplikasi antena bawaan.
     private fun chooseAntennaApp() {
         val pm = packageManager
         val q = Intent(Intent.ACTION_MAIN)
@@ -967,22 +1120,19 @@ class HomeActivity : AppCompatActivity() {
             .filter { it.activityInfo.packageName != packageName }
             .sortedBy { it.loadLabel(pm).toString().lowercase() }
         val names = ArrayList<String>()
-        names.add("Antena di dalam aplikasi (uji hybrid)")
-        names.add("Live TV bawaan sistem (coba)")
-        names.add("Uji tuner antena (info)")
+        names.add("Live TV bawaan sistem")
+        names.add("Antena di dalam aplikasi (hybrid)")
         for (a in apps) names.add(a.loadLabel(pm).toString())
         AlertDialog.Builder(this)
-            .setTitle("Pilih aplikasi antena atau Live TV")
+            .setTitle("Pilih aplikasi TV Antena")
             .setItems(names.toTypedArray()) { _, which ->
                 if (which == 0) {
-                    startActivity(Intent(this, AntennaActivity::class.java))
-                } else if (which == 1) {
                     prefs.edit().putString("antenna", "system").apply()
-                    if (!tryLiveTv()) notice.show("Tidak terbuka", "Live TV bawaan tidak bisa dibuka langsung. Pilih aplikasi dari daftar (tahan OK pada menu TV Antena).", 6000L)
-                } else if (which == 2) {
-                    runTunerTest()
+                    if (!tryLiveTv()) notice.show("Tidak terbuka", "Live TV bawaan tidak bisa dibuka langsung. Tahan OK pada TV Antena untuk memilih aplikasi.", 6000L)
+                } else if (which == 1) {
+                    startActivity(Intent(this, AntennaActivity::class.java))
                 } else {
-                    val ri = apps[which - 3]
+                    val ri = apps[which - 2]
                     val cn = ComponentName(ri.activityInfo.packageName, ri.activityInfo.name)
                     prefs.edit().putString("antenna", cn.flattenToString()).apply()
                     launchComponent(cn.flattenToString())
