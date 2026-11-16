@@ -2,15 +2,23 @@ package com.bayutv.hotel
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.KeyEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -25,6 +33,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 
 object ContinueWatch {
     data class Entry(
@@ -140,10 +149,11 @@ object ContinueWatch {
     }
 }
 
-// Pemutar film/episode (Streaming & Koleksi Saya) dengan Sub Indo otomatis.
+// Pemutar film/episode (Streaming & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
 class VodPlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
+    private lateinit var root: FrameLayout
     private lateinit var view: PlayerView
     private lateinit var notice: Notice
     private var usedFallback = false
@@ -152,10 +162,41 @@ class VodPlayerActivity : AppCompatActivity() {
     private val rawKey: String get() = intent.getStringExtra("resume_key") ?: ""
     private val resumeKey: String get() = "pos_" + rawKey
 
+    private val brass = 0xFFB8975A.toInt()
+    private val brassLight = 0xFFE6C88F.toInt()
+    private val ivory = 0xFFEFE8DA.toInt()
+    private val mute = 0xFFA79F90.toInt()
+
+    // Komponen Overlay Adzan, Countdown 5 Detik & Doa/Dzikir Ramadan
+    private lateinit var countdownBanner: TextView
+    private lateinit var adzanOverlay: FrameLayout
+    private lateinit var adzanTitleView: TextView
+    private lateinit var adzanSubtitleView: TextView
+    private lateinit var ramadanBox: LinearLayout
+    private lateinit var btnDismissAdzan: TextView
+
+    private var prayerTimes: IntArray? = null
+    private var prayerDay = ""
+    private var pausedForAdzan = false
+    private var wasPlayingBeforeAdzan = false
+    private var adzanPlayer: ExoPlayer? = null
+    private var adzanCountdownRunnable: Runnable? = null
+
+    private fun dp(v: Int): Int = Ui.dp(this, v)
+
+    private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
+        val v = TextView(this)
+        v.text = t
+        v.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, sp))
+        v.setTextColor(color)
+        v.typeface = face
+        return v
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val root = FrameLayout(this)
+        root = FrameLayout(this)
         root.setBackgroundColor(0xFF000000.toInt())
 
         view = PlayerView(this)
@@ -177,8 +218,18 @@ class VodPlayerActivity : AppCompatActivity() {
             setApplyEmbeddedStyles(false)
         }
         root.addView(view, FrameLayout.LayoutParams(-1, -1))
+        buildAdzanAndRamadanOverlays()
         notice = Notice(this, root)
         setContentView(root)
+
+        // Muat jadwal sholat untuk pengingat Adzan & Ramadan
+        Thread {
+            val pt = Prayer.fetch(this)
+            ui.post {
+                prayerTimes = pt
+                prayerDay = Prayer.todayStr()
+            }
+        }.start()
 
         val lc = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15000, 35000, 2000, 4000)
@@ -274,6 +325,331 @@ class VodPlayerActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- Overlay Countdown 5 Detik Adzan, Doa Setelah Adzan & Doa/Dzikir Ramadan ----------
+
+    private fun buildAdzanAndRamadanOverlays() {
+        val isPhone = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
+            resources.configuration.screenWidthDp < 600
+
+        // 1. Pill Countdown 5 detik di pojok kanan atas
+        countdownBanner = tv("", if (isPhone) 14.5f else 18f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setPadding(dp(20), dp(11), dp(20), dp(11))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(0xE6141210.toInt())
+                setStroke(dp(2), brassLight)
+            }
+            visibility = View.GONE
+        }
+        val cdlp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
+        cdlp.setMargins(dp(20), dp(24), dp(24), 0)
+        root.addView(countdownBanner, cdlp)
+
+        // 2. Kartu Lengkap Waktu Adzan + Doa Setelah Adzan + Doa Berbuka Puasa (Ramadan)
+        adzanOverlay = FrameLayout(this).apply {
+            setBackgroundColor(0xCC0A0908.toInt())
+            visibility = View.GONE
+            isClickable = true
+            isFocusable = true
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(if (isPhone) 20 else 32), dp(20), dp(if (isPhone) 20 else 32), dp(20))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0xF5161411.toInt())
+                setStroke(dp(2), brass)
+            }
+        }
+
+        adzanTitleView = tv("WAKTU ADZAN", if (isPhone) 18f else 22f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        adzanSubtitleView = tv("Film dijeda sejenak untuk menghormati waktu sholat", if (isPhone) 12.5f else 13.5f, mute, Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(4), 0, dp(12))
+        }
+        card.addView(adzanTitleView)
+        card.addView(adzanSubtitleView)
+
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        val contentCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        // Blok Khusus Ramadan (Doa Berbuka Puasa saat Magrib)
+        ramadanBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x28B8975A)
+                setStroke(dp(1), brassLight)
+            }
+            visibility = View.GONE
+        }
+        ramadanBox.addView(
+            tv("SELAMAT BERBUKA PUASA · DOA BERBUKA", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                letterSpacing = 0.08f
+            }
+        )
+        ramadanBox.addView(
+            tv(
+                "ذَهَبَ الظَّمَأُ وَابْتَلَّتِ الْعُرُوقُ، وَثَبَتَ الْأَجْرُ إِنْ شَاءَ اللَّهُ",
+                if (isPhone) 19f else 22f, ivory, Typeface.SERIF
+            ).apply {
+                gravity = Gravity.END
+                setPadding(0, dp(6), 0, dp(4))
+            }
+        )
+        ramadanBox.addView(
+            tv(
+                "Dzahabazh-zhama'u wabtallatil-'urūqu wa tsabatal-ajru insyā Allāh.",
+                13.5f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC)
+            )
+        )
+        ramadanBox.addView(
+            tv(
+                "\"Telah hilang rasa haus, telah basah urat-urat, dan telah tetap pahala, insya Allah.\" (HR. Abu Dawud)",
+                12.5f, mute, Typeface.SANS_SERIF
+            ).apply { setPadding(0, dp(2), 0, 0) }
+        )
+        val rblp = LinearLayout.LayoutParams(-1, -2)
+        rblp.bottomMargin = dp(12)
+        contentCol.addView(ramadanBox, rblp)
+
+        // Blok Menjawab Adzan & Doa Setelah Adzan
+        val doaBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x16FFFFFF)
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+        }
+        doaBox.addView(
+            tv("MENJAWAB ADZAN & DOA SETELAH ADZAN", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                letterSpacing = 0.08f
+            }
+        )
+        doaBox.addView(
+            tv(
+                "Ucapkan lafal seperti muadzin; saat \"Hayya 'alash-shalāh / Hayya 'alal-falāḥ\" jawab: \"Lā haula wa lā quwwata illā billāh\". Setelah adzan selesai, baca:",
+                12.5f, mute, Typeface.SANS_SERIF
+            ).apply { setPadding(0, dp(4), 0, dp(8)) }
+        )
+        doaBox.addView(
+            tv(
+                "اللَّهُمَّ رَبَّ هَذِهِ الدَّعْوَةِ التَّامَّةِ، وَالصَّلَاةِ الْقَائِمَةِ، آتِ مُحَمَّدًا الْوَسِيلَةَ وَالْفَضِيلَةَ، وَابْعَثْهُ مَقَامًا مَحْمُودًا الَّذِي وَعَدْتَهُ",
+                if (isPhone) 18.5f else 21f, ivory, Typeface.SERIF
+            ).apply {
+                gravity = Gravity.END
+                setPadding(0, dp(2), 0, dp(6))
+            }
+        )
+        doaBox.addView(
+            tv(
+                "Allāhumma rabba hādzihid-da'watit-tāmmah, wash-shalātil-qā'imah, āti Muḥammadanil-wasīlata wal-fadhīlah, wab'atshu maqāmam maḥmūdanil-ladzī wa'adtah.",
+                13.5f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC)
+            )
+        )
+        doaBox.addView(
+            tv(
+                "\"Ya Allah, Tuhan pemilik panggilan yang sempurna ini dan shalat yang didirikan, berilah Nabi Muhammad wasilah dan keutamaan, serta bangkitkanlah beliau di tempat terpuji yang telah Engkau janjikan.\"",
+                12.5f, mute, Typeface.SANS_SERIF
+            ).apply { setPadding(0, dp(4), 0, 0) }
+        )
+        contentCol.addView(doaBox, LinearLayout.LayoutParams(-1, -2))
+
+        scroll.addView(contentCol, FrameLayout.LayoutParams(-1, -2))
+        card.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        btnDismissAdzan = tv("Lanjutkan Menonton (Tekan OK)", 14.5f, 0xFF100E0C.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(11), dp(24), dp(11))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(brassLight)
+            }
+            setOnFocusChangeListener { _, f ->
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(if (f) Color.WHITE else brassLight)
+                }
+            }
+            setOnClickListener { endAdzan() }
+        }
+        val blp = LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(14)
+        }
+        card.addView(btnDismissAdzan, blp)
+
+        val cardLp = if (isPhone) {
+            FrameLayout.LayoutParams(-1, dp(460), Gravity.CENTER).apply {
+                setMargins(dp(18), dp(24), dp(18), dp(24))
+            }
+        } else {
+            FrameLayout.LayoutParams(dp(760), dp(470), Gravity.CENTER)
+        }
+        adzanOverlay.addView(card, cardLp)
+        root.addView(adzanOverlay, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun isRamadanNow(): Boolean {
+        if (Themes.pick(this).id == "ramadan") return true
+        return try {
+            Themes.hijri()[0] == 8
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun prayerOffset(): Int =
+        (prefs.getString("adzan_offset", "0") ?: "0").toIntOrNull()?.coerceIn(-15, 15) ?: 0
+
+    private val tick = object : Runnable {
+        override fun run() {
+            try {
+                val today = Prayer.todayStr()
+                if (prayerDay != today) {
+                    prayerDay = today
+                    Thread {
+                        val pt = Prayer.fetch(this@VodPlayerActivity)
+                        ui.post { prayerTimes = pt }
+                    }.start()
+                }
+                checkPrayer()
+            } catch (_: Exception) {
+            }
+            ui.postDelayed(this, 30000L)
+        }
+    }
+
+    private fun checkPrayer() {
+        if (prefs.getString("adzan", "Ya") == "Tidak") return
+        val t = prayerTimes ?: return
+        if (t.size < 5) return
+        val off = prayerOffset()
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        val day = Prayer.todayStr()
+
+        // Pengingat Dzikir Menjelang Berbuka Puasa (15 menit sebelum Magrib saat Ramadan)
+        if (isRamadanNow()) {
+            val magrib = t[3] + off
+            if (now >= magrib - 15 && now < magrib - 1 && prefs.getString("ramadan_dzikir_done", "") != day) {
+                prefs.edit().putString("ramadan_dzikir_done", day).apply()
+                if (player?.isPlaying == true) {
+                    val sisa = magrib - now
+                    notice.show(
+                        "Menjelang Berbuka Puasa ($sisa menit lagi) · Dzikir Dianjurkan",
+                        "Perbanyak Istighfar, Tasbih & baca:\n\"Asyhadu allā ilāha illallāh, astaghfirullāh, as'alukal-jannata wa a'ūdzu bika minan-nār.\"",
+                        35000L
+                    )
+                }
+            }
+        }
+
+        for (i in 0..4) {
+            val pt = t[i] + off
+            if (now >= pt && now < pt + 2) {
+                val tag = day + "#" + i
+                if (prefs.getString("adzan_done", "") == tag) return
+                prefs.edit().putString("adzan_done", tag).apply()
+                startAdzanCountdown(i, pt)
+                return
+            }
+        }
+    }
+
+    private fun startAdzanCountdown(i: Int, minute: Int) {
+        if (player?.isPlaying != true && !pausedForAdzan) return
+        adzanCountdownRunnable?.let { ui.removeCallbacks(it) }
+        var secLeft = 5
+        val r = object : Runnable {
+            override fun run() {
+                if (isFinishing) {
+                    countdownBanner.visibility = View.GONE
+                    return
+                }
+                if (secLeft > 0) {
+                    countdownBanner.text = "⏳ Adzan ${Prayer.NAMES[i]} dalam $secLeft detik..."
+                    countdownBanner.visibility = View.VISIBLE
+                    secLeft--
+                    ui.postDelayed(this, 1000L)
+                } else {
+                    countdownBanner.visibility = View.GONE
+                    startAdzan(i, minute)
+                }
+            }
+        }
+        adzanCountdownRunnable = r
+        ui.post(r)
+    }
+
+    private val adzanEnd = Runnable { endAdzan() }
+
+    private fun startAdzan(i: Int, minute: Int) {
+        val p = player ?: return
+        wasPlayingBeforeAdzan = p.isPlaying || p.playWhenReady
+        pausedForAdzan = true
+        p.pause()
+
+        val mins = (prefs.getString("adzan_min", "4") ?: "4").toIntOrNull()?.coerceIn(1, 30) ?: 4
+        val isMagribRamadan = (i == 3 && isRamadanNow())
+        adzanTitleView.text = if (isMagribRamadan) {
+            "WAKTU MAGRIB · SELAMAT BERBUKA PUASA (${Prayer.fmt(minute)})"
+        } else {
+            "WAKTU ADZAN ${Prayer.NAMES[i].uppercase()} · ${Prayer.fmt(minute)}"
+        }
+        ramadanBox.visibility = if (isMagribRamadan) View.VISIBLE else View.GONE
+        adzanOverlay.visibility = View.VISIBLE
+        btnDismissAdzan.requestFocus()
+
+        ui.removeCallbacks(adzanEnd)
+        ui.postDelayed(adzanEnd, mins * 60000L)
+        val url = (prefs.getString("adzan_url", "") ?: "").trim()
+        if (url.startsWith("http")) {
+            try {
+                val ap = ExoPlayer.Builder(this).build()
+                ap.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_ENDED) endAdzan()
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                    }
+                })
+                ap.setMediaItem(MediaItem.fromUri(url))
+                ap.prepare()
+                ap.playWhenReady = true
+                adzanPlayer = ap
+                ui.removeCallbacks(adzanEnd)
+                ui.postDelayed(adzanEnd, 10L * 60000L)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun endAdzan() {
+        adzanCountdownRunnable?.let { ui.removeCallbacks(it) }
+        countdownBanner.visibility = View.GONE
+        adzanOverlay.visibility = View.GONE
+        ui.removeCallbacks(adzanEnd)
+        adzanPlayer?.release()
+        adzanPlayer = null
+        if (!pausedForAdzan) return
+        pausedForAdzan = false
+        notice.hide()
+        if (wasPlayingBeforeAdzan && !isFinishing) {
+            player?.playWhenReady = true
+            player?.play()
+        }
+    }
+
     private fun item(url: String, fetchedSubs: List<Subtitles.Track>): MediaItem {
         val urls = intent.getStringArrayExtra("sub_urls") ?: emptyArray()
         val langs = intent.getStringArrayExtra("sub_langs") ?: emptyArray()
@@ -312,12 +688,33 @@ class VodPlayerActivity : AppCompatActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (adzanOverlay.visibility == View.VISIBLE) {
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == KeyEvent.KEYCODE_ENTER ||
+                event.keyCode == KeyEvent.KEYCODE_BACK
+            ) {
+                if (event.action == KeyEvent.ACTION_UP) endAdzan()
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
         return view.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
     }
 
+    override fun onStart() {
+        super.onStart()
+        ui.removeCallbacks(tick)
+        ui.postDelayed(tick, 15000L)
+    }
+
     override fun onStop() {
         super.onStop()
+        ui.removeCallbacks(tick)
+        if (pausedForAdzan) {
+            wasPlayingBeforeAdzan = false
+            endAdzan()
+        }
         val p = player ?: return
         val pos = p.currentPosition
         val dur = p.duration
@@ -330,6 +727,8 @@ class VodPlayerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        adzanPlayer?.release()
+        adzanPlayer = null
         player?.release()
         player = null
         super.onDestroy()
