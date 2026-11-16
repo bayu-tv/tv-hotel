@@ -70,6 +70,12 @@
             android:screenOrientation="landscape" />
 
         <activity
+            android:name=".WebStreamActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+
+        <activity
             android:name=".VodPlayerActivity"
             android:exported="false"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout"
