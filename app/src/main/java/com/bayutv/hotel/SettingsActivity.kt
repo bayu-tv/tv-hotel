@@ -50,7 +50,6 @@ class SettingsActivity : AppCompatActivity() {
 
     private var server: SettingsServer? = null
     private var isPhoneLayout = false
-    private var pendingTrial: AppLinks.Trial? = null
 
     private lateinit var status: TextView
     private lateinit var tvAntennaSubtitle: TextView
@@ -177,7 +176,6 @@ class SettingsActivity : AppCompatActivity() {
         val started = srv.start()
         server = srv
 
-        // Blok QR Code & Info PIN
         val qrSize = dp(if (isPhoneLayout) 180 else 220)
         val qrBox = FrameLayout(this).apply {
             background = GradientDrawable().apply {
@@ -230,7 +228,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         leftQrCol.addView(status)
 
-        // Kolom Kanan / Bawah: Panduan Web + Menu Antena & Diagnostik
         val rightCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -299,13 +296,13 @@ class SettingsActivity : AppCompatActivity() {
             "Kompas MUX & Arah Antena",
             "Panduan arah pemancar TV Digital sesuai lokasi"
         ) {
-            startActivity(Intent(this, AntennaAimActivity::class.java))
+            openOptionalActivity("com.bayutv.hotel.AntennaAimActivity", "Kompas MUX belum tersedia di versi ini.")
         }
         rightCol.addView(btnCompass)
 
         val (btnDiag, _) = actionButton(
             "Uji Tuner & Pintasan Siaran",
-            "Antena hybrid di aplikasi, info tuner, & uji pintasan RCTI+ / Vidio"
+            "Antena hybrid, info tuner, & pintasan RCTI+ / Vidio"
         ) {
             openDiagnosticMenu()
         }
@@ -342,6 +339,15 @@ class SettingsActivity : AppCompatActivity() {
             notice.show("TV belum terhubung", "Sambungkan TV ke Wi-Fi atau jaringan rumah, lalu buka lagi menu Pengaturan.")
         } else if (!started) {
             notice.show("Server gagal dibuka", "Tutup lalu buka lagi menu Pengaturan.")
+        }
+    }
+
+    private fun openOptionalActivity(className: String, fallbackMsg: String) {
+        try {
+            val cls = Class.forName(className)
+            startActivity(Intent(this, cls))
+        } catch (e: Exception) {
+            notice.show("Info", fallbackMsg, 4000L)
         }
     }
 
@@ -410,7 +416,7 @@ class SettingsActivity : AppCompatActivity() {
                             notice.show("Disimpan", "Live TV bawaan dipilih. Jika tidak otomatis terbuka, pilih aplikasi antena lain.", 5000L)
                         }
                     }
-                    1 -> startActivity(Intent(this, AntennaActivity::class.java))
+                    1 -> openOptionalActivity("com.bayutv.hotel.AntennaActivity", "Gunakan kategori Antena · TV Digital langsung di menu TV Live.")
                     else -> {
                         val ri = apps[which - 2]
                         val cn = ComponentName(ri.activityInfo.packageName, ri.activityInfo.name)
@@ -430,11 +436,11 @@ class SettingsActivity : AppCompatActivity() {
                 arrayOf(
                     "Antena di dalam aplikasi (uji hybrid)",
                     "Uji tuner antena (cek input & daftar siaran)",
-                    "Uji pintasan RCTI+ / Vidio"
+                    "Uji pintasan channel RCTI+ / Vidio"
                 )
             ) { _, which ->
                 when (which) {
-                    0 -> startActivity(Intent(this, AntennaActivity::class.java))
+                    0 -> openOptionalActivity("com.bayutv.hotel.AntennaActivity", "Buka TV Live lalu pilih kategori Antena · TV Digital.")
                     1 -> runTunerTest()
                     else -> testAppLinks()
                 }
@@ -503,55 +509,28 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun testAppLinks() {
-        val res = try {
-            AppLinks.diagnose(this)
-        } catch (e: Exception) {
-            Pair("Gagal memeriksa: " + e.javaClass.simpleName, emptyList<AppLinks.Trial>())
+        val targets = AppLinks.TARGETS
+        if (targets.isEmpty()) {
+            notice.show("Info", "Daftar pintasan aplikasi kosong.", 3000L)
+            return
         }
-        val b = AlertDialog.Builder(this)
-            .setTitle("Uji pintasan RCTI+ / Vidio")
-            .setMessage(res.first + "\n\nPilih \"Coba satu per satu\" untuk mencari cara yang langsung membuka siaran.")
-            .setNegativeButton("Tutup", null)
-        if (res.second.isNotEmpty()) b.setPositiveButton("Coba satu per satu") { _, _ -> chooseTrial(res.second) }
-        b.show()
-    }
-
-    private fun chooseTrial(trials: List<AppLinks.Trial>) {
+        val labels = targets.map { it.name + "  (" + it.provider + ")" }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("Pilih lalu lihat hasilnya")
-            .setItems(trials.map { it.label }.toTypedArray()) { _, w ->
-                val t = trials[w]
-                prefs.edit().putInt("trial_last", w).apply()
-                val ok = if (t.url != null) AppLinks.openUrl(this, t.pkg, t.url) else AppLinks.openActivity(this, t.pkg, t.cls ?: "")
-                if (!ok) {
-                    notice.show("Tidak bisa dibuka", t.label, 4000L)
-                } else if (t.url != null && t.target != null) {
-                    pendingTrial = t
+            .setTitle("Pilih siaran untuk diuji")
+            .setItems(labels) { _, which ->
+                val t = targets[which]
+                when (AppLinks.open(this, t)) {
+                    0 -> notice.show(t.name, "Aplikasi " + t.provider + " belum terpasang di perangkat ini.", 5000L)
+                    1 -> notice.show(t.name, "Membuka aplikasi " + t.provider + ", silakan pilih " + t.name + ".", 5000L)
                 }
             }
-            .show()
-    }
-
-    private fun confirmTrial() {
-        val t = pendingTrial ?: return
-        pendingTrial = null
-        val target = t.target ?: return
-        val url = t.url ?: return
-        AlertDialog.Builder(this)
-            .setTitle("Hasil percobaan")
-            .setMessage("Tadi " + target.provider + " langsung menampilkan siaran " + target.name + "?\n\n" + url)
-            .setPositiveButton("Ya, pakai cara ini") { _, _ ->
-                AppLinks.savePattern(this, target, url)
-                notice.show(null, "Disimpan. Channel " + target.provider + " akan langsung membuka siarannya.", 4000L)
-            }
-            .setNegativeButton("Tidak", null)
+            .setNegativeButton("Tutup", null)
             .show()
     }
 
     override fun onResume() {
         super.onResume()
         refreshAntennaLabel()
-        if (pendingTrial != null) ui.postDelayed({ confirmTrial() }, 600L)
     }
 
     override fun onDestroy() {
