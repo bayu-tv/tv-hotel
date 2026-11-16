@@ -83,6 +83,9 @@ class WebStreamActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // Catat ke riwayat Lanjutkan Menonton
+        ContinueWatch.saveFromIntent(this, intent, 0L)
+
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.BLACK)
 
@@ -108,7 +111,6 @@ class WebStreamActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val u = request?.url?.toString()?.lowercase() ?: return true
-                // Blokir semua redirect iklan ke domain luar
                 val allowed = u.contains("vidsrc") || u.contains("multiembed") || u.contains("embed") || u.contains("cloudflare")
                 return !allowed
             }
@@ -122,7 +124,6 @@ class WebStreamActivity : AppCompatActivity() {
                     return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                 }
 
-                // Tangkap stream M3U8 / MP4 asli lalu oper ke ExoPlayer (hemat RAM + Sub Indo)
                 if (!handedOff && isVideoStream(low)) {
                     handedOff = true
                     val ref = request.requestHeaders["Referer"] ?: webView.url ?: ""
@@ -134,7 +135,6 @@ class WebStreamActivity : AppCompatActivity() {
 
         root.addView(webView, FrameLayout.LayoutParams(-1, -1))
 
-        // Overlay loading awal saat mencari stream
         loadingBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -159,7 +159,6 @@ class WebStreamActivity : AppCompatActivity() {
         loadingBox.addView(loadingText)
         root.addView(loadingBox, FrameLayout.LayoutParams(-1, -1))
 
-        // Bar atas untuk ganti server jika memakai mode WebView fallback
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -232,6 +231,11 @@ class WebStreamActivity : AppCompatActivity() {
         i.putExtra("tmdb_kind", intent.getStringExtra("tmdb_kind") ?: "movie")
         i.putExtra("season", intent.getIntExtra("season", 0))
         i.putExtra("episode", intent.getIntExtra("episode", 0))
+        i.putExtra("year", intent.getStringExtra("year") ?: "")
+        i.putExtra("poster", intent.getStringExtra("poster") ?: "")
+        i.putExtra("backdrop", intent.getStringExtra("backdrop") ?: "")
+        i.putExtra("rating", intent.getDoubleExtra("rating", 0.0))
+        i.putExtra("overview", intent.getStringExtra("overview") ?: "")
         startActivity(i)
         finish()
     }
