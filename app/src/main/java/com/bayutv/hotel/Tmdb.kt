@@ -8,7 +8,7 @@ import java.net.URLEncoder
 
 /**
  * kind: "movie" / "tv" (katalog TMDB), "jf_movie" / "jf_series" / "jf_episode" (Koleksi Saya di Jellyfin)
- * poster: jalur TMDB ("/abc.jpg") atau alamat lengkap untuk Jellyfin.
+ * poster & backdrop: jalur TMDB ("/abc.jpg") atau alamat lengkap untuk Jellyfin.
  */
 data class Movie(
     val id: Int,
@@ -18,14 +18,24 @@ data class Movie(
     val rating: Double,
     val overview: String,
     val kind: String = "movie",
-    val jfId: String = ""
+    val jfId: String = "",
+    val backdrop: String? = null
 ) {
     val isJellyfin: Boolean get() = kind.startsWith("jf_")
 }
 
+data class EpisodeItem(
+    val season: Int,
+    val episode: Int,
+    val title: String,
+    val overview: String
+)
+
 // Data film dari TMDB (gratis untuk pemakaian non-komersial dengan atribusi).
 object Tmdb {
     private const val BASE = "https://api.themoviedb.org/3"
+    private val cache = LinkedHashMap<String, Pair<Long, String>>()
+    private const val CACHE_TTL = 15L * 60L * 1000L
 
     fun key(ctx: Context): String =
         (ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE).getString("tmdb", "") ?: "").trim()
@@ -33,6 +43,13 @@ object Tmdb {
     fun get(ctx: Context, path: String, query: String): String? {
         val k = key(ctx)
         if (k.isEmpty()) return null
+        val cacheKey = "$path?$query"
+        synchronized(cache) {
+            val hit = cache[cacheKey]
+            if (hit != null && System.currentTimeMillis() - hit.first < CACHE_TTL) {
+                return hit.second
+            }
+        }
         return try {
             val bearer = k.length > 60
             val url = BASE + path + "?" + query + (if (bearer) "" else "&api_key=" + URLEncoder.encode(k, "UTF-8"))
@@ -42,7 +59,15 @@ object Tmdb {
             c.setRequestProperty("Accept", "application/json")
             if (bearer) c.setRequestProperty("Authorization", "Bearer " + k)
             if (c.responseCode != 200) return null
-            c.inputStream.bufferedReader().use { it.readText() }
+            val body = c.inputStream.bufferedReader().use { it.readText() }
+            synchronized(cache) {
+                if (cache.size >= 24) {
+                    val oldest = cache.keys.firstOrNull()
+                    if (oldest != null) cache.remove(oldest)
+                }
+                cache[cacheKey] = Pair(System.currentTimeMillis(), body)
+            }
+            body
         } catch (e: Exception) {
             null
         }
@@ -54,6 +79,7 @@ object Tmdb {
         if (title.isEmpty()) return null
         val date = o.optString("release_date", "").ifEmpty { o.optString("first_air_date", "") }
         val p = o.optString("poster_path", "")
+        val b = o.optString("backdrop_path", "")
         var kind = o.optString("kind", "").ifEmpty { o.optString("media_type", "") }
         if (kind != "movie" && kind != "tv") kind = if (!o.has("title") && o.has("name")) "tv" else defKind
         return Movie(
@@ -63,7 +89,9 @@ object Tmdb {
             if (p.isEmpty() || p == "null") null else p,
             o.optDouble("vote_average", 0.0),
             o.optString("overview", ""),
-            kind
+            kind,
+            "",
+            if (b.isEmpty() || b == "null") null else b
         )
     }
 
@@ -75,5 +103,22 @@ object Tmdb {
             if (m != null) out.add(m)
         }
         return out
+    }
+
+    fun episodes(ctx: Context, tvId: Int, season: Int): List<EpisodeItem> {
+        val json = get(ctx, "/tv/$tvId/season/$season", "language=id-ID") ?: return emptyList()
+        return try {
+            val arr = JSONObject(json).optJSONArray("episodes") ?: return emptyList()
+            val out = ArrayList<EpisodeItem>()
+            for (i in 0 until arr.length()) {
+                val e = arr.getJSONObject(i)
+                val epNum = e.optInt("episode_number", i + 1)
+                val name = e.optString("name", "Episode $epNum").ifEmpty { "Episode $epNum" }
+                out.add(EpisodeItem(season, epNum, "E$epNum · $name", e.optString("overview", "")))
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 }
