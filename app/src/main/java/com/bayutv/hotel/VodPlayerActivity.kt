@@ -1,5 +1,7 @@
 package com.bayutv.hotel
 
+import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -21,6 +23,122 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import org.json.JSONArray
+import org.json.JSONObject
+
+object ContinueWatch {
+    data class Entry(
+        val key: String,
+        val movie: Movie,
+        val season: Int,
+        val episode: Int,
+        val posMs: Long
+    )
+
+    fun saveFromIntent(ctx: Context, intent: Intent, posMs: Long) {
+        val key = intent.getStringExtra("resume_key") ?: return
+        if (key.isEmpty()) return
+        val title = intent.getStringExtra("title") ?: return
+        val tmdbId = intent.getIntExtra("tmdb_id", 0)
+        val kind = intent.getStringExtra("tmdb_kind") ?: (if (key.startsWith("jf_")) "jf_movie" else "movie")
+        val jfId = intent.getStringExtra("jf_id") ?: (if (key.startsWith("jf_")) key.removePrefix("jf_") else "")
+        val m = Movie(
+            id = tmdbId,
+            title = title,
+            year = intent.getStringExtra("year") ?: "",
+            poster = intent.getStringExtra("poster"),
+            rating = intent.getDoubleExtra("rating", 0.0),
+            overview = intent.getStringExtra("overview") ?: "",
+            kind = kind,
+            jfId = jfId,
+            backdrop = intent.getStringExtra("backdrop")
+        )
+        upsert(ctx, Entry(key, m, intent.getIntExtra("season", 1), intent.getIntExtra("episode", 1), posMs))
+    }
+
+    @Synchronized
+    fun upsert(ctx: Context, item: Entry) {
+        val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
+        val old = load(ctx).filterNot { it.key == item.key }
+        val combined = (listOf(item) + old).take(10)
+        val arr = JSONArray()
+        for (e in combined) {
+            val o = JSONObject()
+            o.put("key", e.key)
+            o.put("id", e.movie.id)
+            o.put("title", e.movie.title)
+            o.put("year", e.movie.year)
+            o.put("poster", e.movie.poster ?: "")
+            o.put("backdrop", e.movie.backdrop ?: "")
+            o.put("rating", e.movie.rating)
+            o.put("overview", e.movie.overview)
+            o.put("kind", e.movie.kind)
+            o.put("jfId", e.movie.jfId)
+            o.put("season", e.season)
+            o.put("episode", e.episode)
+            o.put("pos", e.posMs)
+            arr.put(o)
+        }
+        prefs.edit().putString("continue_watch", arr.toString()).apply()
+    }
+
+    @Synchronized
+    fun remove(ctx: Context, key: String) {
+        if (key.isEmpty()) return
+        val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
+        prefs.edit().remove("pos_$key").apply()
+        val left = load(ctx).filterNot { it.key == key }
+        val arr = JSONArray()
+        for (e in left) {
+            val o = JSONObject()
+            o.put("key", e.key)
+            o.put("id", e.movie.id)
+            o.put("title", e.movie.title)
+            o.put("year", e.movie.year)
+            o.put("poster", e.movie.poster ?: "")
+            o.put("backdrop", e.movie.backdrop ?: "")
+            o.put("rating", e.movie.rating)
+            o.put("overview", e.movie.overview)
+            o.put("kind", e.movie.kind)
+            o.put("jfId", e.movie.jfId)
+            o.put("season", e.season)
+            o.put("episode", e.episode)
+            o.put("pos", e.posMs)
+            arr.put(o)
+        }
+        prefs.edit().putString("continue_watch", arr.toString()).apply()
+    }
+
+    fun load(ctx: Context): List<Entry> {
+        val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
+        val out = ArrayList<Entry>()
+        try {
+            val arr = JSONArray(prefs.getString("continue_watch", "[]"))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val key = o.optString("key")
+                val title = o.optString("title")
+                if (key.isEmpty() || title.isEmpty()) continue
+                val p = o.optString("poster")
+                val b = o.optString("backdrop")
+                val m = Movie(
+                    id = o.optInt("id"),
+                    title = title,
+                    year = o.optString("year"),
+                    poster = p.ifEmpty { null },
+                    rating = o.optDouble("rating", 0.0),
+                    overview = o.optString("overview"),
+                    kind = o.optString("kind", "movie"),
+                    jfId = o.optString("jfId"),
+                    backdrop = b.ifEmpty { null }
+                )
+                out.add(Entry(key, m, o.optInt("season", 1), o.optInt("episode", 1), o.optLong("pos", 0L)))
+            }
+        } catch (e: Exception) {
+        }
+        return out
+    }
+}
 
 // Pemutar film/episode (Streaming & Koleksi Saya) dengan Sub Indo otomatis.
 class VodPlayerActivity : AppCompatActivity() {
@@ -31,7 +149,8 @@ class VodPlayerActivity : AppCompatActivity() {
     private var usedFallback = false
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
-    private val resumeKey: String get() = "pos_" + (intent.getStringExtra("resume_key") ?: "")
+    private val rawKey: String get() = intent.getStringExtra("resume_key") ?: ""
+    private val resumeKey: String get() = "pos_" + rawKey
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,7 +224,7 @@ class VodPlayerActivity : AppCompatActivity() {
 
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {
-                    prefs.edit().remove(resumeKey).apply()
+                    ContinueWatch.remove(this@VodPlayerActivity, rawKey)
                     finish()
                 }
             }
@@ -126,7 +245,6 @@ class VodPlayerActivity : AppCompatActivity() {
         if (resume > 60000L) notice.show(title, "Melanjutkan dari menit " + (resume / 60000L), 3000L)
         else if (title.isNotEmpty()) notice.show(null, title, 2500L)
 
-        // Jika diputar dari TMDB tanpa subtitle bawaan, cari Sub Indo otomatis di latar belakang
         val tmdbId = intent.getIntExtra("tmdb_id", 0)
         val hasExistingSubs = (intent.getStringArrayExtra("sub_urls")?.isNotEmpty() == true)
         if (tmdbId > 0 && !hasExistingSubs) {
@@ -203,7 +321,10 @@ class VodPlayerActivity : AppCompatActivity() {
         val p = player ?: return
         val pos = p.currentPosition
         val dur = p.duration
-        if (pos > 60000L && (dur <= 0L || pos < dur - 180000L)) prefs.edit().putLong(resumeKey, pos).apply()
+        if (pos > 60000L && (dur <= 0L || pos < dur - 180000L)) {
+            prefs.edit().putLong(resumeKey, pos).apply()
+            ContinueWatch.saveFromIntent(this, intent, pos)
+        }
         p.pause()
     }
 
