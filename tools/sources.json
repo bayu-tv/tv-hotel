@@ -47,7 +47,10 @@
   "workers": 48,
   "timeout": 10,
   "exclude_keywords": [],
-  "extra_playlists": [],
+  "extra_playlists": [
+    "https://raw.githubusercontent.com/dhasap/dhanytv/main/dhanytv-ott.m3u",
+    "https://mgi24.github.io/tvdigital/idwork.m3u"
+  ],
   "epg_sites": [
     "vidio.com",
     "mncvision.id",
