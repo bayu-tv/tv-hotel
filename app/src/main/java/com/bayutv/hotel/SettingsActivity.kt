@@ -146,12 +146,15 @@ class SettingsActivity : AppCompatActivity() {
         box.setOnFocusChangeListener { _, f ->
             box.background = cardBg(f, highlight)
             tView.setTextColor(if (f || highlight) brassLight else ivory)
-            val s = if (f) 1.02f else 1f
-            box.animate().scaleX(s).scaleY(s).setDuration(160).start()
+            val s = if (f) 1.015f else 1f
+            box.animate().scaleX(s).scaleY(s).setDuration(150).start()
         }
 
-        val lp = LinearLayout.LayoutParams(-1, -2)
-        lp.bottomMargin = dp(10)
+        val lp = LinearLayout.LayoutParams(-1, -2).apply {
+            leftMargin = dp(4)
+            rightMargin = dp(4)
+            bottomMargin = dp(10)
+        }
         box.layoutParams = lp
         return Pair(box, subView)
     }
@@ -163,8 +166,11 @@ class SettingsActivity : AppCompatActivity() {
         isPhoneLayout = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
 
-        val root = FrameLayout(this)
-        root.setBackgroundColor(0xFF121110.toInt())
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(0xFF121110.toInt())
+            clipChildren = false
+            clipToPadding = false
+        }
 
         val ip = localIp()
         val pin = (SecureRandom().nextInt(9000) + 1000).toString()
@@ -176,7 +182,7 @@ class SettingsActivity : AppCompatActivity() {
         val started = srv.start()
         server = srv
 
-        val qrSize = dp(if (isPhoneLayout) 180 else 220)
+        val qrSize = dp(if (isPhoneLayout) 170 else 220)
         val qrBox = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(18).toFloat()
@@ -190,17 +196,19 @@ class SettingsActivity : AppCompatActivity() {
         val leftQrCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
         }
         leftQrCol.addView(qrBox, LinearLayout.LayoutParams(qrSize, qrSize))
 
         if (ip != null && started) {
             val url = "http://" + ip + ":" + srv.port
             img.setImageBitmap(qr(url))
-            val urlTv = tv(url, if (isPhoneLayout) 17f else 20f, brassLight, Typeface.SANS_SERIF).apply {
+            val urlTv = tv(url, if (isPhoneLayout) 16f else 20f, brassLight, Typeface.SANS_SERIF).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, dp(12), 0, 0)
             }
-            val pinTv = tv("PIN  " + pin, if (isPhoneLayout) 22f else 26f, ivory, Typeface.SERIF).apply {
+            val pinTv = tv("PIN  " + pin, if (isPhoneLayout) 21f else 26f, ivory, Typeface.SERIF).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, dp(4), 0, 0)
             }
@@ -209,7 +217,7 @@ class SettingsActivity : AppCompatActivity() {
         } else if (started && isPhoneLayout) {
             val localUrl = "http://127.0.0.1:" + srv.port
             img.setImageBitmap(qr(localUrl))
-            val pinTv = tv("PIN  " + pin, 22f, ivory, Typeface.SERIF).apply {
+            val pinTv = tv("PIN  " + pin, 21f, ivory, Typeface.SERIF).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, dp(10), 0, 0)
             }
@@ -230,18 +238,21 @@ class SettingsActivity : AppCompatActivity() {
 
         val rightCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
-        rightCol.addView(tv("Pengaturan lewat HP", if (isPhoneLayout) 24f else 28f, brass, Typeface.SERIF))
+        rightCol.addView(tv("Pengaturan lewat HP", if (isPhoneLayout) 23f else 28f, brass, Typeface.SERIF))
         val steps = tv(
             if (isPhoneLayout) {
-                "Atur nama keluarga, kota jadwal sholat, tema, playlist, dan catatan langsung dari browser HP dengan PIN di atas."
+                "Atur nama keluarga, kota jadwal sholat, tema, playlist, dan catatan langsung dari browser dengan PIN di atas."
             } else {
                 "1. Sambungkan HP ke Wi-Fi yang sama dengan TV.\n" +
                     "2. Pindai kode QR di samping atau buka alamatnya di browser HP.\n" +
                     "3. Masukkan PIN lalu simpan perubahan."
             },
-            if (isPhoneLayout) 14f else 16f,
+            if (isPhoneLayout) 13.5f else 16f,
             ivory,
             Typeface.SANS_SERIF
         ).apply {
@@ -278,7 +289,7 @@ class SettingsActivity : AppCompatActivity() {
 
         val secHead = tv("TV ANTENA & DIAGNOSTIK", 12.5f, brass, Typeface.SANS_SERIF).apply {
             letterSpacing = 0.16f
-            setPadding(0, 0, 0, dp(10))
+            setPadding(dp(4), 0, 0, dp(10))
         }
         rightCol.addView(secHead)
 
@@ -309,10 +320,16 @@ class SettingsActivity : AppCompatActivity() {
         rightCol.addView(btnDiag)
 
         if (isPhoneLayout) {
-            val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+            val scroll = ScrollView(this).apply {
+                isVerticalScrollBarEnabled = false
+                clipChildren = false
+                clipToPadding = false
+            }
             val container = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(20), dp(22), dp(20), dp(28))
+                clipChildren = false
+                clipToPadding = false
+                setPadding(dp(18), dp(22), dp(18), dp(28))
             }
             val qrLp = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(18) }
             container.addView(leftQrCol, qrLp)
@@ -323,10 +340,12 @@ class SettingsActivity : AppCompatActivity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
                 setPadding(dp(48), dp(28), dp(48), dp(28))
             }
             row.addView(leftQrCol, LinearLayout.LayoutParams(dp(290), -2))
-            val rlp = LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(40) }
+            val rlp = LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(36) }
             row.addView(rightCol, rlp)
             root.addView(row, FrameLayout.LayoutParams(-1, -1))
         }
