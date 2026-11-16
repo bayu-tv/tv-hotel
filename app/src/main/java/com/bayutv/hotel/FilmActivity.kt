@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -15,6 +16,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -32,9 +34,9 @@ class FilmActivity : AppCompatActivity() {
 
     private val brass = 0xFFB8975A.toInt()
     private val brassLight = 0xFFE6C88F.toInt()
-    private val ivory = 0xFFEFE8DA.toInt()
-    private val mute = 0xFFA79F90.toInt()
-    private val bgDark = 0xFF0D0C0B.toInt()
+    private val ivory = 0xFFF5F0E6.toInt()
+    private val mute = 0xFFB5AEA0.toInt()
+    private val bgDark = 0xFF0B0A09.toInt()
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
@@ -90,43 +92,47 @@ class FilmActivity : AppCompatActivity() {
         val root = FrameLayout(this)
         root.setBackgroundColor(bgDark)
 
+        // Full-Bleed Netflix Widescreen Backdrop
         val heroFrame = FrameLayout(this)
         heroBackdrop = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(0xFF151311.toInt())
+            setBackgroundColor(0xFF141210.toInt())
         }
-        val bdLp = FrameLayout.LayoutParams(dp(640), dp(340), Gravity.TOP or Gravity.END)
-        heroFrame.addView(heroBackdrop, bdLp)
+        heroFrame.addView(heroBackdrop, FrameLayout.LayoutParams(-1, dp(420), Gravity.TOP))
 
+        // Gradasi kiri-ke-kanan agar teks sinopsis selalu tajam terbaca
         val fadeLeft = View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(bgDark, bgDark, 0xCC0D0C0B.toInt(), 0x220D0C0B)
+                intArrayOf(0xF50B0A09.toInt(), 0xCC0B0A09.toInt(), 0x440B0A09, 0x000B0A09)
             )
         }
-        heroFrame.addView(fadeLeft, FrameLayout.LayoutParams(dp(720), dp(340), Gravity.TOP or Gravity.END))
+        heroFrame.addView(fadeLeft, FrameLayout.LayoutParams(-1, dp(420), Gravity.TOP))
 
+        // Gradasi atas-ke-bawah menyatu mulus ke baris poster
         val fadeBottom = View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x330D0C0B, 0x000D0C0B, 0xCC0D0C0B.toInt(), bgDark)
+                intArrayOf(0xAA0B0A09.toInt(), 0x000B0A09, 0xCC0B0A09.toInt(), bgDark)
             )
         }
-        heroFrame.addView(fadeBottom, FrameLayout.LayoutParams(-1, dp(345), Gravity.TOP))
-        root.addView(heroFrame, FrameLayout.LayoutParams(-1, dp(345), Gravity.TOP))
+        heroFrame.addView(fadeBottom, FrameLayout.LayoutParams(-1, dp(425), Gravity.TOP))
+        root.addView(heroFrame, FrameLayout.LayoutParams(-1, dp(425), Gravity.TOP))
 
         val mainCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
 
+        // Top Navigation Bar ala Netflix
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(42), dp(20), dp(42), dp(8))
+            setPadding(dp(44), dp(18), dp(44), dp(8))
         }
-        val brand = tv("BAYU CINEMA", 20f, brassLight, Typeface.SERIF).apply {
+        val brand = tv("BAYU CINEMA", 19f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.14f
-            setPadding(0, 0, dp(20), 0)
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            setPadding(0, 0, dp(22), 0)
         }
         topBar.addView(brand)
 
@@ -138,8 +144,8 @@ class FilmActivity : AppCompatActivity() {
         }
         for (i in tabs.indices) {
             val label = if (i == searchIdx) "\uD83D\uDD0D  " + tabs[i] else tabs[i]
-            val t = tv(label, 14f, mute, Typeface.SANS_SERIF).apply {
-                setPadding(dp(12), dp(7), dp(12), dp(7))
+            val t = tv(label, 14f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                setPadding(dp(14), dp(7), dp(14), dp(7))
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { _, hasFocus ->
@@ -151,7 +157,7 @@ class FilmActivity : AppCompatActivity() {
                 }
             }
             val lp = LinearLayout.LayoutParams(-2, -2)
-            lp.rightMargin = dp(4)
+            lp.rightMargin = dp(6)
             tabStrip.addView(t, lp)
             tabViews.add(t)
         }
@@ -159,27 +165,33 @@ class FilmActivity : AppCompatActivity() {
         topBar.addView(tabScroll, LinearLayout.LayoutParams(0, -2, 1f))
         mainCol.addView(topBar)
 
+        // Hero Title & Synopsis Area
         val heroInfo = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(42), dp(6), dp(42), dp(10))
+            setPadding(dp(44), dp(10), dp(44), dp(12))
         }
-        heroBadge = tv("STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.SANS_SERIF).apply {
-            letterSpacing = 0.12f
+        heroBadge = tv("STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            letterSpacing = 0.14f
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
-        heroTitle = tv("Pilih Film atau Anime", 30f, ivory, Typeface.SERIF).apply {
+        heroTitle = tv("Pilih Film atau Anime", 34f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
+            setShadowLayer(10f, 0f, 3f, Color.BLACK)
             setPadding(0, dp(2), 0, dp(4))
         }
-        heroMeta = tv("", 13f, brass, Typeface.SANS_SERIF)
+        heroMeta = tv("", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        }
         heroOverview = tv(
             "Geser remote ke poster di bawah untuk melihat sinopsis, lalu tekan OK untuk menonton lengkap dengan Subtitle Indonesia.",
             13f,
-            0xFFD4CEC2.toInt(),
+            0xFFE6E0D6.toInt(),
             Typeface.SANS_SERIF
         ).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
             setPadding(0, dp(6), 0, 0)
         }
         heroInfo.addView(heroBadge)
@@ -188,12 +200,14 @@ class FilmActivity : AppCompatActivity() {
         heroInfo.addView(heroOverview, LinearLayout.LayoutParams(dp(560), -2))
         mainCol.addView(heroInfo)
 
+        // Horizontal Carousel Rows
         rowsScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
+            clipToPadding = false
         }
         rowsBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(28))
+            setPadding(0, dp(2), 0, dp(32))
         }
         rowsScroll.addView(rowsBox, FrameLayout.LayoutParams(-1, -2))
         mainCol.addView(rowsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -214,9 +228,9 @@ class FilmActivity : AppCompatActivity() {
         tabViews[0].requestFocus()
         if (Tmdb.key(this).isEmpty()) {
             notice.show(
-                "Info Kunci TMDB",
-                "Tab YouTube Resmi sudah siap ditonton. Untuk katalog Film lengkap, isi kunci TMDB gratis di Pengaturan lewat HP.",
-                4500L
+                "Poster Asli Belum Aktif",
+                "Isi Kunci API TMDB gratis di Pengaturan lewat HP agar semua poster & latar film tampil penuh seperti Netflix.",
+                5500L
             )
         }
     }
@@ -232,16 +246,17 @@ class FilmActivity : AppCompatActivity() {
 
     private fun styleTab(v: TextView, idx: Int, focused: Boolean) {
         val active = idx == tabIdx
-        v.setTextColor(if (focused) Color.BLACK else if (active) brassLight else mute)
+        v.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
         val g = GradientDrawable().apply {
             cornerRadius = dp(20).toFloat()
             if (focused) {
                 setColor(brassLight)
+                setStroke(dp(2), Color.WHITE)
             } else if (active) {
-                setColor(0x28B8975A)
+                setColor(0x33B8975A)
                 setStroke(dp(1), brass)
             } else {
-                setColor(Color.TRANSPARENT)
+                setColor(0x18000000)
             }
         }
         v.background = g
@@ -254,7 +269,7 @@ class FilmActivity : AppCompatActivity() {
     private fun scheduleHero(m: Movie, cw: ContinueWatch.Entry? = null) {
         focusedMovie = m
         ui.removeCallbacks(applyHeroRunnable)
-        ui.postDelayed({ renderHero(m, cw) }, 160L)
+        ui.postDelayed({ renderHero(m, cw) }, 150L)
     }
 
     private fun renderHero(m: Movie, cw: ContinueWatch.Entry? = null) {
@@ -342,17 +357,18 @@ class FilmActivity : AppCompatActivity() {
         if (items.isEmpty()) return
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(12))
+            setPadding(0, dp(4), 0, dp(14))
         }
-        val header = tv(rowTitle, 16f, ivory, Typeface.SANS_SERIF).apply {
-            setPadding(dp(42), 0, dp(42), dp(8))
+        val header = tv(rowTitle, 17f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+            setPadding(dp(44), 0, dp(44), dp(8))
         }
         section.addView(header)
 
         val hScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
-            setPadding(dp(42), dp(4), dp(42), dp(4))
+            setPadding(dp(44), dp(4), dp(44), dp(4))
         }
         val strip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -360,8 +376,8 @@ class FilmActivity : AppCompatActivity() {
 
         for ((idx, item) in items.withIndex()) {
             val card = buildYoutubeCard(my, item, idx == 0 && rowTitle.startsWith("Anime"))
-            val lp = LinearLayout.LayoutParams(dp(122), -2)
-            lp.rightMargin = dp(12)
+            val lp = LinearLayout.LayoutParams(dp(128), -2)
+            lp.rightMargin = dp(14)
             strip.addView(card, lp)
         }
 
@@ -370,45 +386,55 @@ class FilmActivity : AppCompatActivity() {
         rowsBox.addView(section)
     }
 
+    private fun roundPoster(v: View, radiusDp: Int) {
+        v.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, dp(radiusDp).toFloat())
+            }
+        }
+        v.clipToOutline = true
+    }
+
     private fun buildYoutubeCard(my: Int, item: YoutubeCatalog.Entry, isFirstHero: Boolean): LinearLayout {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(6))
             isFocusable = true
             isClickable = true
-            background = cardBg(false)
         }
 
-        val posterFrame = FrameLayout(this)
+        val posterFrame = FrameLayout(this).apply {
+            foreground = posterStroke(false)
+        }
+        roundPoster(posterFrame, 10)
+
         val img = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setImageDrawable(YoutubeCatalog.fallbackPoster(this@FilmActivity, item))
         }
-        posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(172)))
+        posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(184)))
 
-        val badge = tv(item.channelName, 9f, brassLight, Typeface.SANS_SERIF).apply {
+        val badge = tv(item.channelName, 9f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             setPadding(dp(6), dp(2), dp(6), dp(2))
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             background = GradientDrawable().apply {
                 cornerRadius = dp(4).toFloat()
-                setColor(0xDD0D0C0B.toInt())
+                setColor(0xDD0B0A09.toInt())
             }
         }
         val blp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
-        blp.setMargins(dp(4), dp(6), dp(6), 0)
+        blp.setMargins(dp(6), dp(6), dp(6), 0)
         posterFrame.addView(badge, blp)
 
-        card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(172)))
+        card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(184)))
 
-        val title = tv(item.title, 12f, ivory, Typeface.SANS_SERIF).apply {
+        val title = tv(item.title, 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(2), dp(5), dp(2), 0)
+            setPadding(dp(2), dp(6), dp(2), 0)
         }
         card.addView(title)
 
-        // Muat poster & sinopsis asli dari TMDB di background
         if (item.tmdbId > 0) {
             Thread {
                 val ok = YoutubeCatalog.hydrateFromTmdb(this, item)
@@ -424,13 +450,14 @@ class FilmActivity : AppCompatActivity() {
         if (isFirstHero) renderYoutubeHero(item)
 
         card.setOnFocusChangeListener { _, hasFocus ->
-            card.background = cardBg(hasFocus)
-            card.animate().scaleX(if (hasFocus) 1.05f else 1f).scaleY(if (hasFocus) 1.05f else 1f).setDuration(120).start()
+            posterFrame.foreground = posterStroke(hasFocus)
+            title.setTextColor(if (hasFocus) ivory else mute)
+            card.animate().scaleX(if (hasFocus) 1.07f else 1f).scaleY(if (hasFocus) 1.07f else 1f).setDuration(130).start()
             if (hasFocus) {
                 renderYoutubeHero(item)
                 val parentRow = card.parent?.parent?.parent as? View
                 if (parentRow != null) {
-                    rowsScroll.smoothScrollTo(0, (parentRow.top - dp(16)).coerceAtLeast(0))
+                    rowsScroll.smoothScrollTo(0, (parentRow.top - dp(12)).coerceAtLeast(0))
                 }
             }
         }
@@ -585,17 +612,18 @@ class FilmActivity : AppCompatActivity() {
 
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(12))
+            setPadding(0, dp(4), 0, dp(14))
         }
-        val header = tv(rowTitle, 16f, brassLight, Typeface.SANS_SERIF).apply {
-            setPadding(dp(42), 0, dp(42), dp(8))
+        val header = tv(rowTitle, 17f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+            setPadding(dp(44), 0, dp(44), dp(8))
         }
         section.addView(header)
 
         val hScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
-            setPadding(dp(42), dp(4), dp(42), dp(4))
+            setPadding(dp(44), dp(4), dp(44), dp(4))
         }
         val strip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -603,8 +631,8 @@ class FilmActivity : AppCompatActivity() {
 
         for (cw in items) {
             val card = buildPosterCard(cw.movie, cw)
-            val lp = LinearLayout.LayoutParams(dp(122), -2)
-            lp.rightMargin = dp(12)
+            val lp = LinearLayout.LayoutParams(dp(128), -2)
+            lp.rightMargin = dp(14)
             strip.addView(card, lp)
         }
 
@@ -619,17 +647,18 @@ class FilmActivity : AppCompatActivity() {
 
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(12))
+            setPadding(0, dp(4), 0, dp(14))
         }
-        val header = tv(rowTitle, 16f, ivory, Typeface.SANS_SERIF).apply {
-            setPadding(dp(42), 0, dp(42), dp(8))
+        val header = tv(rowTitle, 17f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+            setPadding(dp(44), 0, dp(44), dp(8))
         }
         section.addView(header)
 
         val hScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
-            setPadding(dp(42), dp(4), dp(42), dp(4))
+            setPadding(dp(44), dp(4), dp(44), dp(4))
         }
         val strip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -637,8 +666,8 @@ class FilmActivity : AppCompatActivity() {
 
         for (m in items) {
             val card = buildPosterCard(m, null)
-            val lp = LinearLayout.LayoutParams(dp(122), -2)
-            lp.rightMargin = dp(12)
+            val lp = LinearLayout.LayoutParams(dp(128), -2)
+            lp.rightMargin = dp(14)
             strip.addView(card, lp)
         }
 
@@ -650,18 +679,20 @@ class FilmActivity : AppCompatActivity() {
     private fun buildPosterCard(m: Movie, cw: ContinueWatch.Entry?): LinearLayout {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(6))
             isFocusable = true
             isClickable = true
-            background = cardBg(false)
         }
 
-        val posterFrame = FrameLayout(this)
+        val posterFrame = FrameLayout(this).apply {
+            foreground = posterStroke(false)
+        }
+        roundPoster(posterFrame, 10)
+
         val img = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(0xFF1B1916.toInt())
         }
-        posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(172)))
+        posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(184)))
 
         val badgeText = when {
             cw != null && cw.posMs > 60000L -> "▶ ${cw.posMs / 60000L}m"
@@ -671,11 +702,11 @@ class FilmActivity : AppCompatActivity() {
             else -> ""
         }
         if (badgeText.isNotEmpty()) {
-            val b = tv(badgeText, 10f, brassLight, Typeface.SANS_SERIF).apply {
+            val b = tv(badgeText, 10f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 setPadding(dp(6), dp(2), dp(6), dp(2))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(4).toFloat()
-                    setColor(0xCC0D0C0B.toInt())
+                    setColor(0xDD0B0A09.toInt())
                 }
             }
             val blp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
@@ -683,23 +714,24 @@ class FilmActivity : AppCompatActivity() {
             posterFrame.addView(b, blp)
         }
 
-        card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(172)))
+        card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(184)))
 
-        val title = tv(m.title, 12f, ivory, Typeface.SANS_SERIF).apply {
+        val title = tv(m.title, 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(2), dp(5), dp(2), 0)
+            setPadding(dp(2), dp(6), dp(2), 0)
         }
         card.addView(title)
 
         card.setOnFocusChangeListener { _, hasFocus ->
-            card.background = cardBg(hasFocus)
-            card.animate().scaleX(if (hasFocus) 1.05f else 1f).scaleY(if (hasFocus) 1.05f else 1f).setDuration(120).start()
+            posterFrame.foreground = posterStroke(hasFocus)
+            title.setTextColor(if (hasFocus) ivory else mute)
+            card.animate().scaleX(if (hasFocus) 1.07f else 1f).scaleY(if (hasFocus) 1.07f else 1f).setDuration(130).start()
             if (hasFocus) {
                 scheduleHero(m, cw)
                 val parentRow = card.parent?.parent?.parent as? View
                 if (parentRow != null) {
-                    rowsScroll.smoothScrollTo(0, (parentRow.top - dp(16)).coerceAtLeast(0))
+                    rowsScroll.smoothScrollTo(0, (parentRow.top - dp(12)).coerceAtLeast(0))
                 }
             }
         }
@@ -711,13 +743,13 @@ class FilmActivity : AppCompatActivity() {
         return card
     }
 
-    private fun cardBg(focused: Boolean): GradientDrawable = GradientDrawable().apply {
-        cornerRadius = dp(8).toFloat()
+    private fun posterStroke(focused: Boolean): GradientDrawable = GradientDrawable().apply {
+        cornerRadius = dp(10).toFloat()
+        setColor(Color.TRANSPARENT)
         if (focused) {
-            setColor(0x28B8975A)
-            setStroke(dp(2), brassLight)
+            setStroke(dp(3), brassLight)
         } else {
-            setColor(0x14FFFFFF)
+            setStroke(dp(1), 0x26FFFFFF)
         }
     }
 
@@ -746,6 +778,7 @@ class FilmActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(0xFF1D1B18.toInt())
         }
+        roundPoster(detailPoster, 12)
         content.addView(detailPoster, LinearLayout.LayoutParams(dp(220), dp(320)))
 
         val right = LinearLayout(this).apply {
@@ -930,7 +963,7 @@ class FilmActivity : AppCompatActivity() {
     }
 
     private fun addDetailButton(label: String, primary: Boolean, onClick: () -> Unit) {
-        val btn = tv(label, 14f, if (primary) Color.BLACK else ivory, Typeface.SANS_SERIF).apply {
+        val btn = tv(label, 14f, if (primary) Color.BLACK else ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             setPadding(dp(18), dp(11), dp(18), dp(11))
             isFocusable = true
             isClickable = true
