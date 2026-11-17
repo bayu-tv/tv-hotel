@@ -37,7 +37,6 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -119,7 +118,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // PEMUAT GAMBAR HEMAT RAM UNTUK TV 1-2 GB (RGB_565 + MAX 240PX + CACHE 3MB)
     // =========================================================================
     object SafeArtLoader {
-        private const val MAX_CACHE_BYTES = 3 * 1024 * 1024 // 3 MB maksimal
+        private const val MAX_CACHE_BYTES = 3 * 1024 * 1024
         private val mainHandler = Handler(Looper.getMainLooper())
         private val pool = Executors.newFixedThreadPool(2)
         private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) {
@@ -184,7 +183,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
                 val opts = BitmapFactory.Options().apply {
                     inSampleSize = inSample
-                    inPreferredConfig = Bitmap.Config.RGB_565 // Hemat 50% memori RAM
+                    inPreferredConfig = Bitmap.Config.RGB_565
                 }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
             } catch (_: Exception) {
@@ -645,14 +644,18 @@ class RadioMusicActivity : AppCompatActivity() {
                 is JSONObject -> {
                     val renderer = node.optJSONObject("musicResponsiveListItemRenderer")
                     if (renderer != null) {
-                        val vid = renderer.optJSONObject("playlistItemData")?.optString("videoId", "")
-                            ?: renderer.optJSONObject("overlay")
+                        val vidFromData = renderer.optJSONObject("playlistItemData")?.optString("videoId", "")
+                        val vid = if (!vidFromData.isNullOrEmpty()) {
+                            vidFromData
+                        } else {
+                            renderer.optJSONObject("overlay")
                                 ?.optJSONObject("musicItemThumbnailOverlayRenderer")
                                 ?.optJSONObject("content")
                                 ?.optJSONObject("musicPlayButtonRenderer")
                                 ?.optJSONObject("playNavigationEndpoint")
                                 ?.optJSONObject("watchEndpoint")
                                 ?.optString("videoId", "") ?: ""
+                        }
 
                         val cols = renderer.optJSONArray("flexColumns")
                         var title = ""
@@ -707,7 +710,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // =========================================================================
     object MusicEngine {
         private const val WEB_UA = GoogleMusicAuth.CHROME_UA
-        private const val IDLE_RELEASE_MS = 5 * 60 * 1000L // Lepas RAM ExoPlayer jika dijeda > 5 menit
+        private const val IDLE_RELEASE_MS = 5 * 60 * 1000L
         private val mainHandler = Handler(Looper.getMainLooper())
         private var appContext: Context? = null
 
@@ -721,10 +724,9 @@ class RadioMusicActivity : AppCompatActivity() {
         var lyricStatus: String = "Pilih lagu untuk melihat lirik karaoke"
         var lyricsEnabled: Boolean = false
         var shuffleEnabled: Boolean = false
-        var repeatMode: Int = 0 // 0 = Normal, 1 = Ulang Semua, 2 = Ulang 1 Lagu
+        var repeatMode: Int = 0
         var onStateChanged: (() -> Unit)? = null
 
-        // Sleep Timer State
         var sleepEndTimeMs: Long = 0L
 
         private var playSeq = 0
@@ -764,7 +766,6 @@ class RadioMusicActivity : AppCompatActivity() {
                     notifyUi()
                     return
                 }
-                // Fade out volume perlahan dalam 10 detik terakhir
                 if (rem <= 10_000L) {
                     try {
                         player?.volume = (rem / 10_000f).coerceIn(0.05f, 1.0f)
@@ -846,7 +847,6 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             notifyUi()
 
-            // Catat ke riwayat terakhir diputar
             Thread {
                 RecentHistoryStore.recordPlay(appCtx, track)
             }.start()
@@ -1008,7 +1008,6 @@ class RadioMusicActivity : AppCompatActivity() {
             statusDetail = "Buffering audio (${resolved.sourceLabel})..."
             notifyUi()
 
-            // Buffer hemat RAM untuk perangkat Android TV 1-2 GB
             val lc = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(8000, 22000, 1500, 2500)
                 .build()
@@ -1106,7 +1105,6 @@ class RadioMusicActivity : AppCompatActivity() {
         fun togglePause() {
             val exo = player
             if (exo == null) {
-                // Jika ExoPlayer sebelumnya dilepas demi hemat RAM, muat ulang & lanjutkan posisi terakhir
                 val track = currentTrack ?: return
                 val ctx = appContext ?: return
                 playTrack(ctx, track, queue, queueIndex.coerceAtLeast(0), resumeFromMs = savedResumePosMs)
@@ -1325,7 +1323,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private val tabViews = ArrayList<TextView>()
     private var activeTab = 0
 
-    // Klasifikasi Pencarian & Genre (Tab 0)
     private val searchCategories = listOf(
         Pair("Semua Lagu", ""),
         Pair("Album", "ALBUM"),
@@ -1342,7 +1339,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private var combinedPlaylists: List<UserPlaylist> = emptyList()
     private var selectedPlaylistIdx = 0
 
-    // Browse Screen Views
     private lateinit var browseContainer: LinearLayout
     private lateinit var btnGoogleAccount: TextView
     private lateinit var searchSectionBox: LinearLayout
@@ -1361,7 +1357,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private val radioScanMap = ConcurrentHashMap<String, RadioScanResult>()
     private var isScanningRadios = false
 
-    // Spotify Mini Player Bar
     private lateinit var miniPlayerBar: LinearLayout
     private lateinit var miniProgressBar: ProgressBar
     private lateinit var miniArtView: ImageView
@@ -1369,7 +1364,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var miniSubtitle: TextView
     private lateinit var miniBtnPlayPause: TextView
 
-    // Spotify Full-Screen Now Playing Overlay
     private var isFullPlayerOpen = false
     private lateinit var fullPlayerOverlay: LinearLayout
     private lateinit var fullBtnSleepTimer: TextView
@@ -1384,7 +1378,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var fullStatusText: TextView
     private val eqBars = ArrayList<View>()
 
-    // Layar Lirik Karaoke
     private lateinit var fullLyricsSection: LinearLayout
     private lateinit var lyricMiniArt: ImageView
     private lateinit var lyricMiniTitle: TextView
@@ -1394,7 +1387,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private val lyricViews = ArrayList<TextView>()
     private var lastHighlightedIdx = -1
 
-    // Kontrol Bawah Full Player
     private lateinit var fullQualityLabel: TextView
     private lateinit var fullTimeLabel: TextView
     private lateinit var fullSeekBar: SeekBar
@@ -1402,7 +1394,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var fullBtnPlayPause: TextView
     private lateinit var fullBtnRepeat: TextView
 
-    // Mode Layar Gelap (Night Mode / Screen Off)
     private var isNightModeOpen = false
     private lateinit var nightModeOverlay: LinearLayout
     private lateinit var nightClockText: TextView
@@ -1450,15 +1441,11 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val root = FrameLayout(this).apply { setBackgroundColor(bgDark) }
 
-        // =========================================================================
-        // 1. HALAMAN UTAMA (JELAJAH LAGU, TERAKHIR, ALBUM, PLAYLIST, RADIO)
-        // =========================================================================
         browseContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padH, dp(10), padH, dp(10))
         }
 
-        // Baris Header 1: Logo Brand & Login Google
         val brandRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1475,7 +1462,6 @@ class RadioMusicActivity : AppCompatActivity() {
         brandRow.addView(btnGoogleAccount)
         browseContainer.addView(brandRow)
 
-        // Baris Header 2: Bar Tab Penuh Selebar Layar
         val tabScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, 0, 0, dp(8))
@@ -1495,7 +1481,6 @@ class RadioMusicActivity : AppCompatActivity() {
         tabScroll.addView(tabRow)
         browseContainer.addView(tabScroll)
 
-        // Sub-bar Tab 0: Kotak Pencarian + Klasifikasi Genre/Album
         searchSectionBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -1554,7 +1539,6 @@ class RadioMusicActivity : AppCompatActivity() {
         searchSectionBox.addView(catScroll)
         browseContainer.addView(searchSectionBox)
 
-        // Sub-bar Tab 1: Riwayat Terakhir Diputar
         recentBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1578,7 +1562,6 @@ class RadioMusicActivity : AppCompatActivity() {
         )
         browseContainer.addView(recentBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Sub-bar Tab 2: Manajemen Playlist
         playlistBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1601,7 +1584,6 @@ class RadioMusicActivity : AppCompatActivity() {
         playlistBarBox.addView(btnDelPl, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
         browseContainer.addView(playlistBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Sub-bar Tab 3: Scan Radio & Tambah Radio Manual
         radioBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1624,7 +1606,6 @@ class RadioMusicActivity : AppCompatActivity() {
         radioBarBox.addView(btnScanRadio, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
         browseContainer.addView(radioBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Daftar Lagu / Album / Radio
         val listScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
         listBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1633,42 +1614,21 @@ class RadioMusicActivity : AppCompatActivity() {
         listScroll.addView(listBox, FrameLayout.LayoutParams(-1, -2))
         browseContainer.addView(listScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Bilah Mini Player Minimalis ala Spotify di Bawah Layar
         miniPlayerBar = buildSpotifyMiniPlayer()
         browseContainer.addView(miniPlayerBar, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
 
         root.addView(browseContainer, FrameLayout.LayoutParams(-1, -1))
 
-        // =========================================================================
-        // 2. HALAMAN PEMUTAR LAYAR PENUH (FULL-SCREEN NOW PLAYING & LIRIK)
-        // =========================================================================
         fullPlayerOverlay = buildSpotifyFullScreenPlayer(isPhonePortrait)
         fullPlayerOverlay.visibility = View.GONE
         root.addView(fullPlayerOverlay, FrameLayout.LayoutParams(-1, -1))
 
-        // =========================================================================
-        // 3. OVERLAY MODE LAYAR GELAP (NIGHT MODE / SCREEN OFF)
-        // =========================================================================
         nightModeOverlay = buildNightModeOverlay()
         nightModeOverlay.visibility = View.GONE
         root.addView(nightModeOverlay, FrameLayout.LayoutParams(-1, -1))
 
         notice = Notice(this, root)
         setContentView(root)
-
-        // Tombol Back: Tutup Night Mode -> Perkecil Full Player -> Keluar Activity
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                when {
-                    isNightModeOpen -> closeNightMode()
-                    isFullPlayerOpen -> closeFullPlayer()
-                    else -> {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
-                    }
-                }
-            }
-        })
 
         MusicEngine.onStateChanged = {
             ui.post {
@@ -1688,9 +1648,16 @@ class RadioMusicActivity : AppCompatActivity() {
         syncAllPlayerViews()
     }
 
-    // =========================================================================
-    // PINTASAN TOMBOL REMOTE TV FISIK (PLAY/PAUSE, NEXT, PREV, REWIND, FF)
-    // =========================================================================
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        when {
+            isNightModeOpen -> closeNightMode()
+            isFullPlayerOpen -> closeFullPlayer()
+            else -> super.onBackPressed()
+        }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isNightModeOpen) {
             if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
@@ -1750,9 +1717,6 @@ class RadioMusicActivity : AppCompatActivity() {
         SafeArtLoader.clearCache()
     }
 
-    // =========================================================================
-    // OVERLAY MODE LAYAR GELAP (HEMAT DAYA & TIDAK SILAU DI MALAM HARI)
-    // =========================================================================
     private fun buildNightModeOverlay(): LinearLayout {
         val screen = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1819,9 +1783,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // =========================================================================
-    // MINI PLAYER ALA SPOTIFY (MINIMALIS DI BAWAH)
-    // =========================================================================
     private fun buildSpotifyMiniPlayer(): LinearLayout {
         val wrapper = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1914,9 +1875,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // =========================================================================
-    // HALAMAN PEMUTAR LAYAR PENUH (FULL-SCREEN + SLEEP TIMER + LAYAR GELAP)
-    // =========================================================================
     private fun buildSpotifyFullScreenPlayer(isPhone: Boolean): LinearLayout {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1928,7 +1886,6 @@ class RadioMusicActivity : AppCompatActivity() {
             isClickable = true
         }
 
-        // Baris Kontrol Atas Full Player
         val topScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, 0, 0, dp(10))
@@ -1966,7 +1923,6 @@ class RadioMusicActivity : AppCompatActivity() {
         topScroll.addView(topHeader)
         page.addView(topScroll)
 
-        // MODE A: SAMPUL ALBUM BESAR (SAAT LIRIK NONAKTIF)
         fullCoverSection = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -2045,7 +2001,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
         page.addView(fullCoverSection, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // MODE B: LAYAR LIRIK KARAOKE PENUH (SAAT LIRIK AKTIF)
         fullLyricsSection = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -2106,7 +2061,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
         page.addView(fullLyricsSection, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // BAGIAN BAWAH FULL PLAYER: SEEKBAR & TOMBOL KONTROL
         val bottomControls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, 0)
@@ -2371,7 +2325,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // --- TAB 1: RIWAYAT TERAKHIR DIPUTAR ---
     private fun loadRecentTracks() {
         listBox.removeAllViews()
         val recents = RecentHistoryStore.getRecent(this)
@@ -2391,7 +2344,6 @@ class RadioMusicActivity : AppCompatActivity() {
         renderTrackList(recents, openFullOnPlay = true)
     }
 
-    // --- GOOGLE ACCOUNT LOGIN (DENGAN PEMBERSIHAN TOTAL MEMORI WEBVIEW) ---
     private fun refreshGoogleAccountButton() {
         val logged = GoogleMusicAuth.isLoggedIn()
         btnGoogleAccount.text = if (logged) "● Google Aktif" else "Login Google"
@@ -2468,7 +2420,6 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
-        // Hancurkan WebView & bebaskan RAM 80-150 MB segera setelah ditutup
         dialog.setOnDismissListener {
             try {
                 wv.stopLoading()
@@ -2486,7 +2437,6 @@ class RadioMusicActivity : AppCompatActivity() {
         wv.loadUrl("https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=id")
     }
 
-    // --- TAB 0: PENCARIAN LAGU & ALBUM YOUTUBE MUSIC ---
     private fun searchYtMusicSongs(query: String, headerLabel: String = "") {
         listBox.removeAllViews()
         listBox.addView(tv("Mencari \"$query\" di YouTube Music...", 13f, mute))
@@ -2852,7 +2802,6 @@ class RadioMusicActivity : AppCompatActivity() {
         return sb.toString().trim()
     }
 
-    // --- TAB 2: PLAYLIST SAYA ---
     private fun loadUserPlaylists() {
         listBox.removeAllViews()
         listBox.addView(tv("Memuat playlist lokal & akun Google...", 13f, mute))
@@ -3051,7 +3000,6 @@ class RadioMusicActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- TAB 3: RADIO INDONESIA + TAMBAH RADIO MANUAL ---
     private fun promptAddCustomRadio() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3242,7 +3190,6 @@ class RadioMusicActivity : AppCompatActivity() {
         return RadioScanResult(3, "MATI", "Terlalu banyak pengalihan")
     }
 
-    // --- TAB 4: MUROTTAL & LOFI ---
     private fun loadMurottalAndLofi() {
         val list = listOf(
             Track("murottal1", "Murottal Al-Qur'an 24 Jam", "Mishary Rashid Alafasy", "https://backup.qurango.net/radio/mishary_alafasi", isLive = true),
@@ -3254,7 +3201,6 @@ class RadioMusicActivity : AppCompatActivity() {
         renderTrackList(list, openFullOnPlay = true)
     }
 
-    // --- TAB 5: MUSIK LOKAL ---
     private fun loadLocalMusic() {
         val perm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
@@ -3412,9 +3358,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // =========================================================================
-    // SINKRONISASI UI MINI PLAYER & FULL-SCREEN PLAYER
-    // =========================================================================
     private fun syncAllPlayerViews() {
         val t = MusicEngine.currentTrack
         val st = MusicEngine.state
@@ -3442,7 +3385,6 @@ class RadioMusicActivity : AppCompatActivity() {
             SafeArtLoader.load(t.thumbUrl, lyricMiniArt)
         }
 
-        // Update label tombol Sleep Timer
         val sleepRem = MusicEngine.getSleepRemainingText()
         if (sleepRem.isNotEmpty()) {
             fullBtnSleepTimer.text = "⏱ $sleepRem"
