@@ -52,7 +52,6 @@ class FilmActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
 
-    // Cache khusus gambar latar HD (1280x720) agar tajam & tetap hemat RAM (~7 MB maks)
     private val heroCache = LruCache<String, Bitmap>(4)
     private val resolvedBackdrops = HashMap<String, String>()
     private var resolvedImdbId: String = ""
@@ -205,7 +204,6 @@ class FilmActivity : AppCompatActivity() {
         val root = FrameLayout(this)
         root.setBackgroundColor(bgDark)
 
-        // Hero Backdrop HD Full-Bleed
         val heroFrame = FrameLayout(this)
         heroBackdrop = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -235,7 +233,6 @@ class FilmActivity : AppCompatActivity() {
             clipChildren = false
         }
 
-        // Top Navigation Bar B-BOX
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -278,12 +275,11 @@ class FilmActivity : AppCompatActivity() {
 
         buildSearchPanel(mainCol)
 
-        // Hero Info Area
         val heroInfo = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(8), dp(44), dp(10))
         }
-        heroBadge = tv("B-BOX STREAMING  ·  BEBAS IKLAN  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        heroBadge = tv("B-BOX STREAMING - BEBAS IKLAN - SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.14f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
@@ -524,13 +520,13 @@ class FilmActivity : AppCompatActivity() {
             else -> "FILM"
         }
         val cwTag = when {
-            cw != null && cw.posMs > 60000L -> "  ·  LANJUTKAN MENIT KE-${cw.posMs / 60000L}"
-            cw != null -> "  ·  TERAKHIR DITONTON"
+            cw != null && cw.posMs > 60000L -> "  |  LANJUTKAN MENIT KE-${cw.posMs / 60000L}"
+            cw != null -> "  |  TERAKHIR DITONTON"
             else -> ""
         }
         val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
-        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  BEBAS IKLAN · SUB INDO")
-        heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   ·   " else "") + "\u2605 " + r + "   ·   Tekan OK untuk Tonton"
+        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  |  TERSEDIA DI KOLEKSI SAYA" else "  |  BEBAS IKLAN - SUB INDO")
+        heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   |   " else "") + "\u2605 " + r + "   |   Tekan OK untuk Tonton"
         heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan episode, dan Subtitle Indonesia otomatis."
 
         val key = watchKey(m)
@@ -624,8 +620,6 @@ class FilmActivity : AppCompatActivity() {
             }
         }
     }
-
-    // ---- Tab YouTube Resmi ----
 
     private fun loadYoutubeOfficialTab(my: Int) {
         notice.hide()
@@ -773,10 +767,10 @@ class FilmActivity : AppCompatActivity() {
         focusedMovie = null
         ui.removeCallbacks(applyHeroRunnable)
         heroTitle.text = item.title
-        val r = if (item.rating > 0) "   ·   \u2605 " + String.format(Locale.US, "%.1f", item.rating) else ""
-        val yr = if (item.year.isNotEmpty()) item.year + "   ·   " else ""
-        heroBadge.text = "YOUTUBE RESMI  ·  ${item.channelName.uppercase()}  ·  SUB INDO"
-        heroMeta.text = yr + item.category + r + "   ·   Gratis & Legal"
+        val r = if (item.rating > 0) "   |   \u2605 " + String.format(Locale.US, "%.1f", item.rating) else ""
+        val yr = if (item.year.isNotEmpty()) item.year + "   |   " else ""
+        heroBadge.text = "YOUTUBE RESMI  |  ${item.channelName.uppercase()}  |  SUB INDO"
+        heroMeta.text = yr + item.category + r + "   |   Gratis & Legal"
         heroOverview.text = item.overview.ifBlank {
             "Tonton episode resmi ${item.title} dengan Subtitle Indonesia jernih melalui kanal ${item.channelName} di YouTube TV."
         }
@@ -793,9 +787,9 @@ class FilmActivity : AppCompatActivity() {
 
     private fun openYoutubeDetail(item: YoutubeCatalog.Entry) {
         detailTitle.text = item.title
-        val r = if (item.rating > 0) "  ·  \u2605 " + String.format(Locale.US, "%.1f", item.rating) else ""
-        val yr = if (item.year.isNotEmpty()) item.year + "  ·  " else ""
-        detailMeta.text = yr + item.category + r + "  ·  Subtitle Indonesia"
+        val r = if (item.rating > 0) "  |  \u2605 " + String.format(Locale.US, "%.1f", item.rating) else ""
+        val yr = if (item.year.isNotEmpty()) item.year + "  |  " else ""
+        detailMeta.text = yr + item.category + r + "  |  Subtitle Indonesia"
         detailOverview.text = item.overview.ifBlank {
             "Tayangan resmi dari ${item.channelName}. Pilih tombol di bawah untuk langsung membuka daftar episode Sub Indo di aplikasi YouTube."
         }
@@ -818,13 +812,13 @@ class FilmActivity : AppCompatActivity() {
 
         detailActions.removeAllViews()
         if (!item.videoUrl.isNullOrBlank()) {
-            addDetailButton("▶  Putar Episode Ini di YouTube", true) {
+            addDetailButton("Putar Episode Ini di YouTube", true) {
                 YoutubeCatalog.openUrl(this, item.videoUrl) {
                     notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
             }
         } else if (item.searchQuery.isNotBlank()) {
-            addDetailButton("▶  Tonton di YouTube (Sub Indo)", true) {
+            addDetailButton("Tonton di YouTube (Sub Indo)", true) {
                 YoutubeCatalog.openYoutubeSearch(this, item.searchQuery, item.channelUrl) {
                     notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
@@ -835,7 +829,7 @@ class FilmActivity : AppCompatActivity() {
                 }
             }
         } else {
-            addDetailButton("▶  Buka Semua Playlist", true) {
+            addDetailButton("Buka Semua Playlist", true) {
                 YoutubeCatalog.openUrl(this, item.channelUrl) {
                     notice.show("YouTube tidak terbuka", "Pastikan aplikasi YouTube terpasang di perangkat.", 4000L)
                 }
@@ -846,8 +840,6 @@ class FilmActivity : AppCompatActivity() {
         detailOverlay.visibility = View.VISIBLE
         detailActions.getChildAt(0)?.requestFocus()
     }
-
-    // ---- Tab Beranda & Kategori Film ----
 
     private fun loadHomeRows(my: Int) {
         val cwList = ContinueWatch.load(this)
@@ -1076,8 +1068,8 @@ class FilmActivity : AppCompatActivity() {
         posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(192)))
 
         val badgeText = when {
-            cw != null && cw.posMs > 60000L -> "▶ ${cw.posMs / 60000L}m"
-            cw != null -> "▶ Lanjut"
+            cw != null && cw.posMs > 60000L -> "Lanjut ${cw.posMs / 60000L}m"
+            cw != null -> "Lanjut"
             m.isJellyfin -> "JF"
             m.rating > 0 -> "\u2605 " + String.format(Locale.US, "%.1f", m.rating)
             else -> ""
@@ -1134,8 +1126,6 @@ class FilmActivity : AppCompatActivity() {
             setStroke(dp(1), 0x26FFFFFF)
         }
     }
-
-    // ---- Layar Detail Sinematik ----
 
     private fun buildDetailOverlay(root: FrameLayout) {
         detailOverlay = FrameLayout(this).apply {
@@ -1198,7 +1188,7 @@ class FilmActivity : AppCompatActivity() {
         resolvedImdbId = ""
         detailTitle.text = m.title
         val menit = if (cw.posMs > 60000L) "Menit ke-${cw.posMs / 60000L}" else "Terakhir ditonton"
-        detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") + menit + "  ·  Subtitle Indonesia"
+        detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  |  " else "") + menit + "  |  Subtitle Indonesia"
         detailOverview.text = m.overview.ifBlank { "Lanjutkan menonton dari posisi terakhir Anda." }
         detailProviders.text = "Riwayat B-BOX tersimpan otomatis di perangkat TV."
         Images.load(m.poster, detailPoster)
@@ -1210,7 +1200,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("▶  Lanjutkan Menonton", true) {
+        addDetailButton("Lanjutkan Menonton", true) {
             closeDetail()
             if (m.isJellyfin) {
                 playJellyfin(m)
@@ -1251,8 +1241,8 @@ class FilmActivity : AppCompatActivity() {
         }
         resolvedImdbId = ""
         detailTitle.text = m.title
-        detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") +
-            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  ·  Bebas Iklan"
+        detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  |  " else "") +
+            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  |  Bebas Iklan"
         detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
         detailProviders.text = "Memuat info durasi & Subtitle Indonesia..."
         Images.load(m.poster, detailPoster)
@@ -1264,7 +1254,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("▶  Tonton Bebas Iklan", true) { startDirectStream(m) }
+        addDetailButton("Tonton Bebas Iklan", true) { startDirectStream(m) }
         addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
@@ -1272,7 +1262,7 @@ class FilmActivity : AppCompatActivity() {
             addDetailButton("Koleksi Saya", false) { playFromCollection(m) }
         }
         val inList = loadWatch().any { watchKey(it) == watchKey(m) }
-        addDetailButton(if (inList) "✓ Di Daftar Saya" else "+ Daftar Saya", false) {
+        addDetailButton(if (inList) "Di Daftar Saya" else "+ Daftar Saya", false) {
             val added = toggleWatch(m)
             notice.show(null, if (added) "Ditambahkan ke Daftar saya" else "Dihapus dari Daftar saya", 2000L)
             closeDetail()
@@ -1305,14 +1295,14 @@ class FilmActivity : AppCompatActivity() {
                 val rt = o.optInt("runtime", 0)
                 if (rt > 0) metaParts.add("$rt menit")
                 val seasons = o.optInt("number_of_seasons", 0)
-                if (seasons > 0) metaParts.add("$seasons Musim · ${o.optInt("number_of_episodes", 0)} Episode")
+                if (seasons > 0) metaParts.add("$seasons Musim - ${o.optInt("number_of_episodes", 0)} Episode")
                 val g = o.optJSONArray("genres")
                 if (g != null && g.length() > 0) {
                     val gl = ArrayList<String>()
                     for (i in 0 until g.length()) gl.add(g.getJSONObject(i).optString("name"))
                     metaParts.add(gl.joinToString(", "))
                 }
-                detailMeta.text = metaParts.joinToString("  ·  ")
+                detailMeta.text = metaParts.joinToString("  |  ")
 
                 val ov = o.optString("overview", "").trim()
                 if (ov.isNotEmpty()) detailOverview.text = ov
@@ -1345,9 +1335,9 @@ class FilmActivity : AppCompatActivity() {
 
                 detailActions.removeAllViews()
                 if (m.kind == "tv" && seasons > 0) {
-                    addDetailButton("▶  Pilih Episode (Bebas Iklan)", true) { pickEpisodeAndStream(m, seasons) }
+                    addDetailButton("Pilih Episode (Bebas Iklan)", true) { pickEpisodeAndStream(m, seasons) }
                 } else {
-                    addDetailButton("▶  Tonton Bebas Iklan", true) { startDirectStream(m) }
+                    addDetailButton("Tonton Bebas Iklan", true) { startDirectStream(m) }
                 }
                 addDetailButton("YouTube TV", false) {
                     openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
@@ -1374,7 +1364,7 @@ class FilmActivity : AppCompatActivity() {
                     }
                 }
                 val curInList = loadWatch().any { watchKey(it) == watchKey(m) }
-                addDetailButton(if (curInList) "✓ Daftar Saya" else "+ Daftar Saya", false) {
+                addDetailButton(if (curInList) "Di Daftar Saya" else "+ Daftar Saya", false) {
                     val added = toggleWatch(m)
                     notice.show(null, if (added) "Ditambahkan ke Daftar saya" else "Dihapus dari Daftar saya", 2000L)
                     closeDetail()
@@ -1431,11 +1421,9 @@ class FilmActivity : AppCompatActivity() {
         detailOverlay.visibility = View.GONE
     }
 
-    // ---- Streaming Langsung + Pilih Episode ----
-
     private fun startDirectStream(m: Movie, season: Int = 1, episode: Int = 1, epTitle: String = "") {
         closeDetail()
-        val fullTitle = if (m.kind == "tv") "${m.title} · S${season}E${episode} $epTitle".trim() else m.title
+        val fullTitle = if (m.kind == "tv") "${m.title} - S${season}E${episode} $epTitle".trim() else m.title
         val rKey = if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
         try {
             val i = Intent(this, WebStreamActivity::class.java)
@@ -1464,7 +1452,7 @@ class FilmActivity : AppCompatActivity() {
         }
         val labels = (1..totalSeasons).map { "Season $it" }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle(m.title + " · Pilih Season")
+            .setTitle(m.title + " - Pilih Season")
             .setItems(labels) { _, which -> loadSeasonEpisodes(m, which + 1) }
             .show()
     }
@@ -1480,7 +1468,7 @@ class FilmActivity : AppCompatActivity() {
                     return@post
                 }
                 AlertDialog.Builder(this)
-                    .setTitle("${m.title} · Season $season")
+                    .setTitle("${m.title} - Season $season")
                     .setItems(eps.map { it.title }.toTypedArray()) { _, w ->
                         val ep = eps[w]
                         startDirectStream(m, ep.season, ep.episode, ep.title)
@@ -1489,8 +1477,6 @@ class FilmActivity : AppCompatActivity() {
             }
         }.start()
     }
-
-    // ---- Koleksi Saya (Jellyfin sebagai cadangan) ----
 
     private fun openJellyfin(m: Movie) {
         if (m.kind == "jf_series") {
@@ -1574,8 +1560,6 @@ class FilmActivity : AppCompatActivity() {
             }
         }.start()
     }
-
-    // ---- Daftar Saya ----
 
     private fun loadWatch(): List<Movie> {
         val out = ArrayList<Movie>()
