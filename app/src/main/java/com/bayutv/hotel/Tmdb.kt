@@ -73,6 +73,18 @@ object Tmdb {
         }
     }
 
+    fun imdbId(ctx: Context, tmdbId: Int, kind: String = "movie"): String? {
+        if (tmdbId <= 0) return null
+        val path = "/" + (if (kind == "tv") "tv" else "movie") + "/$tmdbId/external_ids"
+        val json = get(ctx, path, "") ?: return null
+        return try {
+            val id = JSONObject(json).optString("imdb_id", "").trim()
+            if (id.startsWith("tt")) id else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun toMovie(o: JSONObject, defKind: String = "movie"): Movie? {
         if (o.optString("media_type") == "person") return null
         val title = o.optString("title", "").ifEmpty { o.optString("name", "") }
@@ -83,42 +95,4 @@ object Tmdb {
         var kind = o.optString("kind", "").ifEmpty { o.optString("media_type", "") }
         if (kind != "movie" && kind != "tv") kind = if (!o.has("title") && o.has("name")) "tv" else defKind
         return Movie(
-            o.optInt("id"),
-            title,
-            if (date.length >= 4) date.substring(0, 4) else "",
-            if (p.isEmpty() || p == "null") null else p,
-            o.optDouble("vote_average", 0.0),
-            o.optString("overview", ""),
-            kind,
-            "",
-            if (b.isEmpty() || b == "null") null else b
-        )
-    }
-
-    fun parseList(json: String, defKind: String = "movie"): List<Movie> {
-        val out = ArrayList<Movie>()
-        val arr = JSONObject(json).optJSONArray("results") ?: return out
-        for (i in 0 until arr.length()) {
-            val m = toMovie(arr.getJSONObject(i), defKind)
-            if (m != null) out.add(m)
-        }
-        return out
-    }
-
-    fun episodes(ctx: Context, tvId: Int, season: Int): List<EpisodeItem> {
-        val json = get(ctx, "/tv/$tvId/season/$season", "language=id-ID") ?: return emptyList()
-        return try {
-            val arr = JSONObject(json).optJSONArray("episodes") ?: return emptyList()
-            val out = ArrayList<EpisodeItem>()
-            for (i in 0 until arr.length()) {
-                val e = arr.getJSONObject(i)
-                val epNum = e.optInt("episode_number", i + 1)
-                val name = e.optString("name", "Episode $epNum").ifEmpty { "Episode $epNum" }
-                out.add(EpisodeItem(season, epNum, "E$epNum · $name", e.optString("overview", "")))
-            }
-            out
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-}
+            o.optInt("id
