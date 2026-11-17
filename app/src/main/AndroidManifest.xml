@@ -27,7 +27,8 @@
         android:name=".App"
         android:allowBackup="true"
         android:banner="@drawable/banner"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_bbox_icon"
+        android:roundIcon="@drawable/ic_bbox_icon"
         android:label="@string/app_name"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
