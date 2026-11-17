@@ -37,14 +37,16 @@ object StremioAddons {
     )
 
     private val FALLBACK_TRACKERS = listOf(
+        "http://tracker.opentrackr.org:1337/announce",
+        "https://tracker.tamersunion.org:443/announce",
+        "https://tracker.loligirl.cn:443/announce",
+        "http://tracker.gbitt.info:80/announce",
+        "http://open.acgnxtracker.com:80/announce",
+        "http://tracker.bt4g.com:2095/announce",
         "udp://tracker.opentrackr.org:1337/announce",
         "udp://open.stealth.si:80/announce",
         "udp://tracker.torrent.eu.org:451/announce",
-        "udp://tracker.bittor.pw:1337/announce",
-        "udp://public.popcorn-tracker.org:6969/announce",
-        "udp://tracker.dler.org:6969/announce",
-        "udp://exodus.desync.com:6969/announce",
-        "http://tracker.opentrackr.org:1337/announce"
+        "udp://exodus.desync.com:6969/announce"
     )
 
     fun getAddonUrls(ctx: Context): List<String> {
