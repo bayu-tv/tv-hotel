@@ -191,7 +191,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                     )
                     setBoolean(settings_pack.bool_types.enable_dht.swigValue(), true)
                     setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
-                    setInt(settings_pack.int_types.connections_limit.swigValue(), 120)
+                    setInteger(settings_pack.int_types.connections_limit.swigValue(), 120)
                 }
 
                 val sm = SessionManager()
