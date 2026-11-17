@@ -57,7 +57,10 @@ class FilmActivity : AppCompatActivity() {
     private val resolvedBackdrops = HashMap<String, String>()
     private var resolvedImdbId: String = ""
 
-    private val tabs = arrayOf("Beranda", "Film", "Anime & Serial", "Indonesia", "YouTube Resmi", "Koleksi Saya", "Daftar Saya", "Cari")
+    private val tabs = arrayOf(
+        "Beranda", "Film", "Anime & Serial", "Indonesia",
+        "YouTube Resmi", "Koleksi Saya", "Daftar Saya", "Cari"
+    )
     private val searchIdx = 7
     private val tabViews = ArrayList<TextView>()
     private var tabIdx = -1
@@ -115,13 +118,17 @@ class FilmActivity : AppCompatActivity() {
                 setStroke(dp(1), 0x66FFFFFF)
             }
         }
-        val iconLetter = tv("B", 16f, 0xFF0E0C0A.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            gravity = Gravity.CENTER
-        }
+        val iconLetter = tv(
+            "B", 16f, 0xFF0E0C0A.toInt(),
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply { gravity = Gravity.CENTER }
         iconFrame.addView(iconLetter, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
         box.addView(iconFrame, LinearLayout.LayoutParams(dp(28), dp(28)))
 
-        val brandText = tv("B-BOX", 19f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val brandText = tv(
+            "B-BOX", 19f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             letterSpacing = 0.16f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
             setPadding(dp(10), 0, 0, 0)
@@ -145,7 +152,12 @@ class FilmActivity : AppCompatActivity() {
             .replace("/w780/", "/$targetSize/")
     }
 
-    private fun loadHeroImage(rawUrl: String?, isBackdrop: Boolean, target: ImageView, fallbackDrawable: Drawable? = null) {
+    private fun loadHeroImage(
+        rawUrl: String?,
+        isBackdrop: Boolean,
+        target: ImageView,
+        fallbackDrawable: Drawable? = null
+    ) {
         val hdUrl = upgradeImageUrl(rawUrl, isBackdrop)
         if (hdUrl == null) {
             target.tag = null
@@ -252,7 +264,10 @@ class FilmActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
         }
         for (i in tabs.indices) {
-            val t = tv(tabs[i], 14f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            val t = tv(
+                tabs[i], 14f, mute,
+                Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            ).apply {
                 setPadding(dp(15), dp(7), dp(15), dp(7))
                 isFocusable = true
                 isClickable = true
@@ -277,7 +292,10 @@ class FilmActivity : AppCompatActivity() {
         tabScroll.addView(tabStrip)
         topBar.addView(tabScroll, LinearLayout.LayoutParams(0, -2, 1f))
 
-        val addonBtn = tv("Addon", 12f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val addonBtn = tv(
+            "Addon", 12f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setPadding(dp(14), dp(7), dp(14), dp(7))
             isFocusable = true
             isClickable = true
@@ -306,31 +324,35 @@ class FilmActivity : AppCompatActivity() {
         topBar.addView(addonBtn, alp)
 
         mainCol.addView(topBar)
-
         buildSearchPanel(mainCol)
 
         val heroInfo = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(8), dp(44), dp(10))
         }
-        heroBadge = tv("B-BOX STREAMING - STREMIO JSON - SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        heroBadge = tv(
+            "B-BOX STREAMING - TORRENTIO P2P & STREMIO - SUB INDO", 11f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             letterSpacing = 0.14f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
-        heroTitle = tv("Pilih Film atau Anime", 33f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+        heroTitle = tv(
+            "Pilih Film atau Anime", 33f, ivory,
+            Typeface.create(Typeface.SERIF, Typeface.BOLD)
+        ).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setShadowLayer(10f, 0f, 3f, Color.BLACK)
             setPadding(0, dp(2), 0, dp(4))
         }
-        heroMeta = tv("", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            setShadowLayer(6f, 0f, 2f, Color.BLACK)
-        }
+        heroMeta = tv(
+            "", 13f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply { setShadowLayer(6f, 0f, 2f, Color.BLACK) }
         heroOverview = tv(
             "Geser remote ke poster di bawah untuk melihat sinopsis, lalu tekan OK untuk menonton tanpa iklan.",
-            13f,
-            0xFFE6E0D6.toInt(),
-            Typeface.SANS_SERIF
+            13f, 0xFFE6E0D6.toInt(), Typeface.SANS_SERIF
         ).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
@@ -384,24 +406,24 @@ class FilmActivity : AppCompatActivity() {
         val currentUrls = StremioAddons.getAddonUrls(this).joinToString("\n")
         val input = EditText(this).apply {
             setText(currentUrls)
-            hint = "https://nuviostreams.hayd.uk/manifest.json"
+            hint = "https://torrentio.strem.fun/sort=seeders|qualityfilter=4k,scr,cam"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 3
             maxLines = 6
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
         AlertDialog.Builder(this)
-            .setTitle("Konfigurasi Stremio Addon JSON")
-            .setMessage("Masukkan URL Addon Stremio HTTP (satu per baris, boleh pakai /manifest.json):")
+            .setTitle("Konfigurasi Torrentio / Stremio Addon")
+            .setMessage("Masukkan URL Addon (satu per baris, mendukung Torrentio P2P & Stremio HTTP):")
             .setView(input)
             .setPositiveButton("Simpan") { _, _ ->
                 StremioAddons.saveAddonUrls(this, input.text.toString())
                 val total = StremioAddons.getAddonUrls(this).size
-                notice.show("Addon Tersimpan", "$total sumber Stremio Addon JSON aktif.", 3000L)
+                notice.show("Addon Tersimpan", "$total sumber Addon aktif.", 3000L)
             }
             .setNeutralButton("Reset Default") { _, _ ->
                 StremioAddons.saveAddonUrls(this, "")
-                notice.show("Reset Berhasil", "Kembali ke daftar Addon Stremio bawaan.", 3000L)
+                notice.show("Reset Berhasil", "Kembali ke Torrentio bawaan.", 3000L)
             }
             .setNegativeButton("Batal", null)
             .show()
@@ -436,7 +458,10 @@ class FilmActivity : AppCompatActivity() {
             setPadding(0, dp(8), dp(12), dp(8))
         }
 
-        val clearBtn = tv("Hapus", 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val clearBtn = tv(
+            "Hapus", 12f, mute,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setPadding(dp(12), dp(6), dp(12), dp(6))
             isFocusable = true
             isClickable = true
@@ -470,7 +495,10 @@ class FilmActivity : AppCompatActivity() {
         }
         val quickTags = listOf("Spider-Man", "Anime", "Korea", "Indonesia", "Action", "Komedi", "Horor", "Marvel")
         for (tag in quickTags) {
-            val chip = tv(tag, 12f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            val chip = tv(
+                tag, 12f, ivory,
+                Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            ).apply {
                 setPadding(dp(14), dp(6), dp(14), dp(6))
                 isFocusable = true
                 isClickable = true
@@ -528,9 +556,10 @@ class FilmActivity : AppCompatActivity() {
     private fun runLiveSearch(q: String) {
         val my = ++token
         rowsBox.removeAllViews()
+        val enc = URLEncoder.encode(q, "UTF-8")
         loadCategoryRows(
             my,
-            listOf(Triple("Hasil Pencarian: \"$q\"", "/search/multi", "language=id-ID&include_adult=false&query=" + URLEncoder.encode(q, "UTF-8"))),
+            listOf(Triple("Hasil Pencarian: \"$q\"", "/search/multi", "language=id-ID&include_adult=false&query=$enc")),
             "movie"
         )
     }
@@ -547,7 +576,7 @@ class FilmActivity : AppCompatActivity() {
     private fun styleTab(v: TextView, idx: Int, focused: Boolean) {
         val active = idx == tabIdx
         v.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
-        val g = GradientDrawable().apply {
+        v.background = GradientDrawable().apply {
             cornerRadius = dp(20).toFloat()
             if (focused) {
                 setColor(brassLight)
@@ -559,7 +588,6 @@ class FilmActivity : AppCompatActivity() {
                 setColor(0x18000000)
             }
         }
-        v.background = g
     }
 
     private fun refreshTabStyles() {
@@ -586,9 +614,11 @@ class FilmActivity : AppCompatActivity() {
             else -> ""
         }
         val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
-        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  |  TERSEDIA DI KOLEKSI SAYA" else "  |  STREMIO JSON - SUB INDO")
+        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  |  TERSEDIA DI KOLEKSI SAYA" else "  |  TORRENTIO P2P - SUB INDO")
         heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   |   " else "") + "\u2605 " + r + "   |   Tekan OK untuk Tonton"
-        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan episode, dan Subtitle Indonesia otomatis."
+        heroOverview.text = m.overview.ifBlank {
+            "Tekan OK untuk melihat detail lengkap, pilihan episode, dan Subtitle Indonesia otomatis."
+        }
 
         val key = watchKey(m)
         val bdUrl = resolvedBackdrops[key] ?: m.backdrop
@@ -622,7 +652,6 @@ class FilmActivity : AppCompatActivity() {
         val my = ++token
         rowsBox.removeAllViews()
         rowsScroll.scrollTo(0, 0)
-
         searchPanel.visibility = if (i == searchIdx) View.VISIBLE else View.GONE
 
         when (i) {
@@ -708,7 +737,10 @@ class FilmActivity : AppCompatActivity() {
             clipToPadding = false
             setPadding(0, dp(4), 0, dp(10))
         }
-        val header = tv(rowTitle, 17f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val header = tv(
+            rowTitle, 17f, ivory,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setShadowLayer(4f, 0f, 1f, Color.BLACK)
             setPadding(dp(44), 0, dp(44), dp(6))
         }
@@ -766,7 +798,10 @@ class FilmActivity : AppCompatActivity() {
         }
         posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(192)))
 
-        val badge = tv(item.channelName, 9f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val badge = tv(
+            item.channelName, 9f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setPadding(dp(6), dp(2), dp(6), dp(2))
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -781,7 +816,10 @@ class FilmActivity : AppCompatActivity() {
 
         card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(192)))
 
-        val title = tv(item.title, 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val title = tv(
+            item.title, 12f, mute,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             setPadding(dp(2), dp(6), dp(2), 0)
@@ -810,7 +848,11 @@ class FilmActivity : AppCompatActivity() {
             posterFrame.foreground = posterStroke(hasFocus)
             title.setTextColor(if (hasFocus) ivory else mute)
             card.z = if (hasFocus) 8f else 0f
-            card.animate().scaleX(if (hasFocus) 1.06f else 1f).scaleY(if (hasFocus) 1.06f else 1f).setDuration(130).start()
+            card.animate()
+                .scaleX(if (hasFocus) 1.06f else 1f)
+                .scaleY(if (hasFocus) 1.06f else 1f)
+                .setDuration(130)
+                .start()
             if (hasFocus) {
                 renderYoutubeHero(item)
                 val parentRow = card.parent?.parent?.parent as? View
@@ -989,12 +1031,16 @@ class FilmActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(44), 0, dp(44), dp(6))
         }
-        val header = tv(rowTitle, 17f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            setShadowLayer(4f, 0f, 1f, Color.BLACK)
-        }
+        val header = tv(
+            rowTitle, 17f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply { setShadowLayer(4f, 0f, 1f, Color.BLACK) }
         headerRow.addView(header)
 
-        val clearAllBtn = tv("Hapus Semua", 11f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val clearAllBtn = tv(
+            "Hapus Semua", 11f, mute,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setPadding(dp(12), dp(4), dp(12), dp(4))
             isFocusable = true
             isClickable = true
@@ -1079,7 +1125,10 @@ class FilmActivity : AppCompatActivity() {
             clipToPadding = false
             setPadding(0, dp(4), 0, dp(10))
         }
-        val header = tv(rowTitle, 17f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val header = tv(
+            rowTitle, 17f, ivory,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setShadowLayer(4f, 0f, 1f, Color.BLACK)
             setPadding(dp(44), 0, dp(44), dp(6))
         }
@@ -1136,7 +1185,10 @@ class FilmActivity : AppCompatActivity() {
             else -> ""
         }
         if (badgeText.isNotEmpty()) {
-            val b = tv(badgeText, 10f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            val b = tv(
+                badgeText, 10f, brassLight,
+                Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            ).apply {
                 setPadding(dp(6), dp(2), dp(6), dp(2))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(4).toFloat()
@@ -1150,7 +1202,10 @@ class FilmActivity : AppCompatActivity() {
 
         card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(192)))
 
-        val title = tv(m.title, 12f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val title = tv(
+            m.title, 12f, mute,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             setPadding(dp(2), dp(6), dp(2), 0)
@@ -1161,7 +1216,11 @@ class FilmActivity : AppCompatActivity() {
             posterFrame.foreground = posterStroke(hasFocus)
             title.setTextColor(if (hasFocus) ivory else mute)
             card.z = if (hasFocus) 8f else 0f
-            card.animate().scaleX(if (hasFocus) 1.06f else 1f).scaleY(if (hasFocus) 1.06f else 1f).setDuration(130).start()
+            card.animate()
+                .scaleX(if (hasFocus) 1.06f else 1f)
+                .scaleY(if (hasFocus) 1.06f else 1f)
+                .setDuration(130)
+                .start()
             if (hasFocus) {
                 scheduleHero(m, cw)
                 val parentRow = card.parent?.parent?.parent as? View
@@ -1280,18 +1339,14 @@ class FilmActivity : AppCompatActivity() {
                 selectTab(0)
             }
         }
-        addDetailButton("Hapus Semua", false) {
-            confirmClearAllHistory()
-        }
+        addDetailButton("Hapus Semua", false) { confirmClearAllHistory() }
         addDetailButton("Tutup", false) { closeDetail() }
 
         detailOverlay.visibility = View.VISIBLE
         detailActions.getChildAt(0)?.requestFocus()
 
         if (!m.isJellyfin && m.id > 0) {
-            Thread {
-                resolvedImdbId = Tmdb.imdbId(this, m.id, m.kind)
-            }.start()
+            Thread { resolvedImdbId = Tmdb.imdbId(this, m.id, m.kind) }.start()
         }
     }
 
@@ -1303,7 +1358,7 @@ class FilmActivity : AppCompatActivity() {
         resolvedImdbId = ""
         detailTitle.text = m.title
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  |  " else "") +
-            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  |  Stremio Addon JSON"
+            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  |  Torrentio P2P"
         detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
         detailProviders.text = "Memuat info durasi & Subtitle Indonesia..."
         Images.load(m.poster, detailPoster)
@@ -1315,7 +1370,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("Tonton (Stremio JSON)", true) { startStremioStream(m) }
+        addDetailButton("Tonton Gratis (Torrentio)", true) { startStremioStream(m) }
         addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
@@ -1338,8 +1393,8 @@ class FilmActivity : AppCompatActivity() {
             if (imdb.isNotEmpty()) resolvedImdbId = imdb
 
             val path = "/" + (if (m.kind == "tv") "tv" else "movie") + "/" + m.id
-            val json = Tmdb.get(this, path, "language=id-ID&append_to_response=videos,watch/providers&include_video_language=id,en,ja,null")
-                ?: return@Thread
+            val q = "language=id-ID&append_to_response=videos,watch/providers&include_video_language=id,en,ja,null"
+            val json = Tmdb.get(this, path, q) ?: return@Thread
             val o = try { JSONObject(json) } catch (e: Exception) { return@Thread }
             ui.post {
                 if (detailOverlay.visibility != View.VISIBLE || isFinishing) return@post
@@ -1373,7 +1428,9 @@ class FilmActivity : AppCompatActivity() {
                 if (vs != null) {
                     for (i in 0 until vs.length()) {
                         val v = vs.getJSONObject(i)
-                        if (v.optString("site") == "YouTube" && (v.optString("type") == "Trailer" || v.optString("type") == "Teaser")) {
+                        if (v.optString("site") == "YouTube" &&
+                            (v.optString("type") == "Trailer" || v.optString("type") == "Teaser")
+                        ) {
                             trailer = v.optString("key")
                             break
                         }
@@ -1391,14 +1448,14 @@ class FilmActivity : AppCompatActivity() {
                 detailProviders.text = if (provNames.isNotEmpty()) {
                     "Layanan Resmi ID: " + provNames.distinct().joinToString(", ")
                 } else {
-                    "Pemutar B-BOX Native (Stremio JSON & Sub Indo Otomatis)"
+                    "Pemutar B-BOX Native (Torrentio P2P & Sub Indo Otomatis)"
                 }
 
                 detailActions.removeAllViews()
                 if (m.kind == "tv" && seasons > 0) {
                     addDetailButton("Pilih Episode", true) { pickEpisodeAndStream(m, seasons) }
                 } else {
-                    addDetailButton("Tonton (Stremio JSON)", true) { startStremioStream(m) }
+                    addDetailButton("Tonton Gratis (Torrentio)", true) { startStremioStream(m) }
                 }
                 addDetailButton("YouTube TV", false) {
                     openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
@@ -1447,7 +1504,10 @@ class FilmActivity : AppCompatActivity() {
     }
 
     private fun addDetailButton(label: String, primary: Boolean, onClick: () -> Unit) {
-        val btn = tv(label, 14f, if (primary) Color.BLACK else ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val btn = tv(
+            label, 14f, if (primary) Color.BLACK else ivory,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             setPadding(dp(18), dp(11), dp(18), dp(11))
             isFocusable = true
             isClickable = true
@@ -1483,7 +1543,7 @@ class FilmActivity : AppCompatActivity() {
     }
 
     private fun startStremioStream(m: Movie, season: Int = 1, episode: Int = 1, epTitle: String = "") {
-        notice.show("Mencari Sumber Stremio JSON...", "Mengambil ID IMDb & daftar stream HTTP bebas iklan...")
+        notice.show("Mencari Sumber Torrentio...", "Mengambil ID IMDb & daftar stream bebas iklan...")
         Thread {
             val imdb = resolvedImdbId.ifEmpty { Tmdb.imdbId(this, m.id, m.kind) }
             if (imdb.isNotEmpty()) resolvedImdbId = imdb
@@ -1497,34 +1557,25 @@ class FilmActivity : AppCompatActivity() {
                 if (isFinishing) return@post
                 notice.hide()
                 if (streams.isEmpty()) {
+                    val info = if (imdb.isEmpty()) "IMDb ID tidak tersedia" else imdb
                     AlertDialog.Builder(this)
-                        .setTitle("Stream HTTP Stremio Tidak Ditemukan")
-                        .setMessage("Addon Stremio belum menyediakan stream HTTP untuk judul ini${if (imdb.isEmpty()) " (IMDb ID tidak tersedia)" else " ($imdb)"}. Coba metode lain?")
-                        .setPositiveButton("Server Web Cadangan") { _, _ ->
-                            launchWebStreamFallback(m, season, episode, epTitle, imdb)
-                        }
-                        .setNeutralButton("Cari di YouTube TV") { _, _ ->
+                        .setTitle("Sumber Torrentio Tidak Ditemukan")
+                        .setMessage("Belum ditemukan sumber untuk judul ini ($info). Coba cari di YouTube TV?")
+                        .setPositiveButton("Cari di YouTube TV") { _, _ ->
                             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
                         }
                         .setNegativeButton("Tutup", null)
                         .show()
                 } else if (streams.size == 1) {
                     closeDetail()
-                    launchVodPlayer(m, season, episode, epTitle, imdb, streams[0])
+                    launchSelectedSource(m, season, episode, epTitle, imdb, streams[0])
                 } else {
-                    val labels = ArrayList<String>()
-                    for (s in streams) labels.add(s.displayLabel())
-                    labels.add("Server Web Cadangan (Auto)")
-
+                    val labels = streams.map { it.displayLabel() }.toTypedArray()
                     AlertDialog.Builder(this)
-                        .setTitle("Pilih Stream (${streams.size} Tersedia)")
-                        .setItems(labels.toTypedArray()) { _, which ->
+                        .setTitle("Pilih Sumber (${streams.size} Tersedia - Pilih Seeder Terbanyak)")
+                        .setItems(labels) { _, which ->
                             closeDetail()
-                            if (which < streams.size) {
-                                launchVodPlayer(m, season, episode, epTitle, imdb, streams[which])
-                            } else {
-                                launchWebStreamFallback(m, season, episode, epTitle, imdb)
-                            }
+                            launchSelectedSource(m, season, episode, epTitle, imdb, streams[which])
                         }
                         .show()
                 }
@@ -1532,7 +1583,7 @@ class FilmActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun launchVodPlayer(
+    private fun launchSelectedSource(
         m: Movie,
         season: Int,
         episode: Int,
@@ -1542,49 +1593,40 @@ class FilmActivity : AppCompatActivity() {
     ) {
         val fullTitle = if (m.kind == "tv") "${m.title} - S${season}E${episode} $epTitle".trim() else m.title
         val rKey = if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
-        val i = Intent(this, VodPlayerActivity::class.java)
-        i.putExtra("title", fullTitle)
-        i.putExtra("url", source.url)
-        i.putExtra("referer", source.referer)
-        i.putExtra("origin", source.origin)
-        i.putExtra("user_agent", source.userAgent.ifEmpty { Playlist.DEFAULT_UA })
-        i.putExtra("resume_key", rKey)
-        i.putExtra("tmdb_id", m.id)
-        i.putExtra("imdb_id", imdbId)
-        i.putExtra("tmdb_kind", m.kind)
-        i.putExtra("season", season)
-        i.putExtra("episode", episode)
-        i.putExtra("year", m.year)
-        i.putExtra("poster", m.poster ?: "")
-        i.putExtra("backdrop", resolvedBackdrops[watchKey(m)] ?: m.backdrop ?: "")
-        i.putExtra("rating", m.rating)
-        i.putExtra("overview", m.overview)
-        ContinueWatch.saveFromIntent(this, i, 0L)
-        startActivity(i)
-    }
 
-    private fun launchWebStreamFallback(m: Movie, season: Int = 1, episode: Int = 1, epTitle: String = "", imdbId: String = "") {
-        closeDetail()
-        val fullTitle = if (m.kind == "tv") "${m.title} - S${season}E${episode} $epTitle".trim() else m.title
-        val rKey = if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
-        try {
-            val i = Intent(this, WebStreamActivity::class.java)
-            i.putExtra("title", fullTitle)
-            i.putExtra("tmdb_id", m.id)
-            i.putExtra("imdb_id", imdbId.ifEmpty { resolvedImdbId })
-            i.putExtra("tmdb_kind", m.kind)
-            i.putExtra("season", season)
-            i.putExtra("episode", episode)
-            i.putExtra("resume_key", rKey)
-            i.putExtra("year", m.year)
-            i.putExtra("poster", m.poster ?: "")
-            i.putExtra("backdrop", resolvedBackdrops[watchKey(m)] ?: m.backdrop ?: "")
-            i.putExtra("rating", m.rating)
-            i.putExtra("overview", m.overview)
-            startActivity(i)
-        } catch (e: Exception) {
-            notice.show("Aktivitas belum terdaftar", "Tambahkan WebStreamActivity ke AndroidManifest.xml.", 5000L)
+        val targetClass = if (source.isTorrent) {
+            TorrentBufferActivity::class.java
+        } else {
+            VodPlayerActivity::class.java
         }
+
+        val i = Intent(this, targetClass).apply {
+            putExtra("title", fullTitle)
+            if (source.isTorrent) {
+                putExtra("magnet_url", source.url)
+                putExtra("file_idx", source.fileIdx)
+            } else {
+                putExtra("url", source.url)
+                putExtra("referer", source.referer)
+                putExtra("origin", source.origin)
+                putExtra("user_agent", source.userAgent.ifEmpty { Playlist.DEFAULT_UA })
+            }
+            putExtra("resume_key", rKey)
+            putExtra("tmdb_id", m.id)
+            putExtra("imdb_id", imdbId)
+            putExtra("tmdb_kind", m.kind)
+            putExtra("season", season)
+            putExtra("episode", episode)
+            putExtra("year", m.year)
+            putExtra("poster", m.poster ?: "")
+            putExtra("backdrop", resolvedBackdrops[watchKey(m)] ?: m.backdrop ?: "")
+            putExtra("rating", m.rating)
+            putExtra("overview", m.overview)
+        }
+        if (!source.isTorrent) {
+            ContinueWatch.saveFromIntent(this, i, 0L)
+        }
+        startActivity(i)
     }
 
     private fun pickEpisodeAndStream(m: Movie, totalSeasons: Int) {
@@ -1630,11 +1672,12 @@ class FilmActivity : AppCompatActivity() {
                     if (eps.isNullOrEmpty()) {
                         notice.show(null, "Episode tidak ditemukan.", 3000L)
                     } else {
+                        val labels = eps.map { e ->
+                            e.title + (if (resumeOf(e.jfId) > 0L) "  \u25B6" else "")
+                        }.toTypedArray()
                         AlertDialog.Builder(this)
                             .setTitle(m.title)
-                            .setItems(eps.map { e -> e.title + (if (resumeOf(e.jfId) > 0L) "  \u25B6" else "") }.toTypedArray()) { _, w ->
-                                playJellyfin(eps[w])
-                            }
+                            .setItems(labels) { _, w -> playJellyfin(eps[w]) }
                             .show()
                     }
                 }
@@ -1691,9 +1734,12 @@ class FilmActivity : AppCompatActivity() {
                     closeDetail()
                     openJellyfin(found[0])
                 } else {
+                    val labels = found.map {
+                        it.title + (if (it.year.isNotEmpty()) " (" + it.year + ")" else "")
+                    }.toTypedArray()
                     AlertDialog.Builder(this)
                         .setTitle("Pilih dari Koleksi Saya")
-                        .setItems(found.map { it.title + (if (it.year.isNotEmpty()) " (" + it.year + ")" else "") }.toTypedArray()) { _, w ->
+                        .setItems(labels) { _, w ->
                             closeDetail()
                             openJellyfin(found[w])
                         }
@@ -1797,3 +1843,4 @@ class FilmActivity : AppCompatActivity() {
         super.onDestroy()
     }
 }
+// END OF FilmActivity.kt
