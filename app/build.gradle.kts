@@ -67,5 +67,6 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("com.google.zxing:core:3.5.3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    implementation("com.github.TorrentStream:TorrentStream-Android:2.7.0")
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
 }
