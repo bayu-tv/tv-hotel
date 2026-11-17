@@ -23,6 +23,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -73,6 +74,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sin
@@ -157,8 +159,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 return
             }
 
-            // Mode 1 (NORMAL): potong vokal tengah, pertahankan bass < ~125Hz
-            // Mode 2 (ULTRA): potong frekuensi vokal pria/wanita lebih dalam (< ~85Hz) & angkat instrumen stereo
             val lpAlpha = if (currentMode == 2) 0.012f else 0.018f
             val sideBoost = if (currentMode == 2) 1.15f else 0.95f
             val bassKeep = if (currentMode == 2) 0.42f else 0.50f
@@ -279,7 +279,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // PENYIMPANAN RIWAYAT TERAKHIR DIPUTAR (< 5 KB) & RADIO MANUAL
     // =========================================================================
     object RecentHistoryStore {
-        private const val PREF_NAME = "bayutv_recent"
+        private const val PREF_NAME = "varotv_recent"
         private const val KEY_LIST = "recent_tracks"
         private const val MAX_ITEMS = 15
 
@@ -340,7 +340,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     object CustomRadioStore {
-        private const val PREF_NAME = "bayutv_custom_radios"
+        private const val PREF_NAME = "varotv_custom_radios"
         private const val KEY_LIST = "radios_json"
 
         fun getRadios(ctx: Context): MutableList<Track> {
@@ -506,7 +506,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     object PlaylistStore {
-        private const val PREF_NAME = "bayutv_playlists"
+        private const val PREF_NAME = "varotv_playlists"
         private const val KEY_DATA = "playlists_json"
 
         fun getLocalPlaylists(ctx: Context): MutableList<UserPlaylist> {
@@ -810,16 +810,15 @@ class RadioMusicActivity : AppCompatActivity() {
         var repeatMode: Int = 0
         var onStateChanged: (() -> Unit)? = null
 
-        // Mode Karaoke Real-Time (0 = OFF, 1 = NORMAL, 2 = ULTRA) · 0 Kueri Tambahan ke YouTube
         var vocalReduceLevel: Int = 0
             set(value) {
                 field = value.coerceIn(0, 2)
                 vocalReducer.mode = field
             }
         var lyricOffsetMs: Long = 0L
-
         var sleepEndTimeMs: Long = 0L
 
+        @Volatile
         private var playSeq = 0
         private var newPipeInitialized = false
         private var savedResumePosMs: Long = 0L
@@ -846,15 +845,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 val rem = sleepEndTimeMs - System.currentTimeMillis()
                 if (rem <= 0L) {
                     sleepEndTimeMs = 0L
-                    try {
-                        player?.pause()
-                        player?.volume = 1.0f
-                    } catch (_: Exception) {
-                    }
-                    state = PlayState.PAUSED
-                    statusDetail = "Sleep Timer selesai · Audio dihentikan"
-                    scheduleIdleRelease()
-                    notifyUi()
+                    stopAndReleaseNow(clearTrack = false, customStatus = "Sleep Timer selesai · Audio dimatikan")
                     return
                 }
                 if (rem <= 10_000L) {
@@ -931,6 +922,10 @@ class RadioMusicActivity : AppCompatActivity() {
             queueIndex = index
             savedResumePosMs = resumeFromMs
             lyricOffsetMs = 0L
+
+            if (track.isLive) {
+                vocalReduceLevel = 0
+            }
 
             state = PlayState.RESOLVING
             statusDetail = when {
@@ -1009,7 +1004,10 @@ class RadioMusicActivity : AppCompatActivity() {
         }
 
         fun cycleKaraokeLevel(onChangedMessage: (String) -> Unit) {
-            val track = currentTrack ?: return
+            val track = currentTrack ?: run {
+                onChangedMessage("Putar lagu terlebih dahulu untuk mengaktifkan Karaoke.")
+                return
+            }
             if (track.isLive) {
                 onChangedMessage("Mode Karaoke tidak tersedia untuk siaran radio langsung.")
                 return
@@ -1187,7 +1185,13 @@ class RadioMusicActivity : AppCompatActivity() {
                             notifyUi()
                         }
                         Player.STATE_ENDED -> {
-                            if (currentTrack?.isLive != true) {
+                            if (currentTrack?.isLive == true) {
+                                // Radio live yang terputus tidak boleh melompat ke stasiun lain otomatis
+                                state = PlayState.PAUSED
+                                statusDetail = "Siaran radio terhenti"
+                                scheduleIdleRelease()
+                                notifyUi()
+                            } else {
                                 if (repeatMode == 2) {
                                     exo.seekTo(0)
                                     exo.playWhenReady = true
@@ -1240,6 +1244,15 @@ class RadioMusicActivity : AppCompatActivity() {
         }
 
         fun togglePause() {
+            // Jika sedang resolving server, hentikan proses koneksi saat tombol jeda ditekan
+            if (state == PlayState.RESOLVING) {
+                ++playSeq
+                state = PlayState.PAUSED
+                statusDetail = "Koneksi dibatalkan"
+                notifyUi()
+                return
+            }
+
             val exo = player
             if (exo == null) {
                 val track = currentTrack ?: return
@@ -1254,13 +1267,17 @@ class RadioMusicActivity : AppCompatActivity() {
                 return
             }
             try {
-                if (exo.isPlaying) {
+                // Cek playWhenReady || isPlaying agar saat buffering tetap bisa dijeda
+                if (exo.playWhenReady || exo.isPlaying) {
+                    exo.playWhenReady = false
                     exo.pause()
                     state = PlayState.PAUSED
+                    statusDetail = if (currentTrack?.isLive == true) "Siaran dijeda" else "Dijeda"
                     scheduleIdleRelease()
                 } else {
                     cancelIdleRelease()
                     exo.volume = 1.0f
+                    exo.playWhenReady = true
                     exo.play()
                     state = PlayState.PLAYING
                 }
@@ -1269,18 +1286,39 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
-        fun stopAndReleaseNow() {
+        fun stopAndReleaseNow(
+            clearTrack: Boolean = true,
+            customStatus: String = "Audio dimatikan · RAM dibebaskan"
+        ) {
+            // Batalkan semua proses resolve URL yang masih berjalan di background
+            ++playSeq
             cancelIdleRelease()
+            mainHandler.removeCallbacks(sleepCheckRunnable)
+            sleepEndTimeMs = 0L
+
             try {
                 if (currentTrack?.isLive != true && (player?.currentPosition ?: 0L) > 0L) {
                     savedResumePosMs = player?.currentPosition ?: 0L
                 }
+                player?.playWhenReady = false
+                player?.stop()
                 player?.release()
             } catch (_: Exception) {
             }
             player = null
-            state = PlayState.PAUSED
-            statusDetail = "Dihentikan · RAM dibebaskan"
+            vocalReduceLevel = 0
+
+            if (clearTrack) {
+                currentTrack = null
+                queue = emptyList()
+                queueIndex = -1
+                lyrics = emptyList()
+                savedResumePosMs = 0L
+                state = PlayState.IDLE
+            } else {
+                state = PlayState.PAUSED
+            }
+            statusDetail = customStatus
             notifyUi()
         }
 
@@ -1413,7 +1451,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     val conn = URL(qUrl).openConnection() as HttpURLConnection
                     conn.connectTimeout = 5000
                     conn.readTimeout = 7000
-                    conn.setRequestProperty("User-Agent", "BayuTV/1.0")
+                    conn.setRequestProperty("User-Agent", "VaroTV/1.0")
                     if (conn.responseCode != 200) continue
                     val raw = conn.inputStream.bufferedReader().use { it.readText() }.trim()
                     val obj = if (raw.startsWith("[")) {
@@ -1460,7 +1498,7 @@ class RadioMusicActivity : AppCompatActivity() {
     private val greenOk = 0xFF52C47A.toInt()
     private val redDead = 0xFFE06C65.toInt()
 
-    private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("varotv", MODE_PRIVATE) }
     private val ui = Handler(Looper.getMainLooper())
     private val tabs = arrayOf("Cari Lagu", "Terakhir", "Playlist Saya", "Radio ID", "Murottal & Lofi", "Musik Lokal")
     private val tabViews = ArrayList<TextView>()
@@ -1497,8 +1535,10 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private lateinit var listBox: LinearLayout
     private var currentRenderedTracks: List<Track> = emptyList()
+    private var lastRenderedPlayingTrackId: String? = null
     private val radioScanMap = ConcurrentHashMap<String, RadioScanResult>()
     private var isScanningRadios = false
+    private var activeScanPool: ExecutorService? = null
 
     private lateinit var miniPlayerBar: LinearLayout
     private lateinit var miniProgressBar: ProgressBar
@@ -1531,6 +1571,7 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var lyricBox: LinearLayout
     private val lyricViews = ArrayList<TextView>()
     private var lastHighlightedIdx = -1
+    private var userBrowsingLyricsUntilMs = 0L
 
     private lateinit var fullQualityLabel: TextView
     private lateinit var fullTimeLabel: TextView
@@ -1596,7 +1637,7 @@ class RadioMusicActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(8))
         }
-        val brand = tv("BAYU AUDIO", 18f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+        val brand = tv("VARO AUDIO", 18f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.1f
         }
         brandRow.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
@@ -1609,6 +1650,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val tabScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            isFocusable = false
             setPadding(0, 0, 0, dp(8))
         }
         val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1665,6 +1707,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val catScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            isFocusable = false
             setPadding(0, 0, 0, dp(8))
         }
         val catRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1718,7 +1761,10 @@ class RadioMusicActivity : AppCompatActivity() {
                 setStroke(dp(1), 0x33B8975A)
             }
         }
-        val plScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val plScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFocusable = false
+        }
         playlistChipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         plScroll.addView(playlistChipRow)
         playlistBarBox.addView(plScroll, LinearLayout.LayoutParams(0, -2, 1f))
@@ -1751,7 +1797,10 @@ class RadioMusicActivity : AppCompatActivity() {
         radioBarBox.addView(btnScanRadio, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
         browseContainer.addView(radioBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        val listScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        val listScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            isFocusable = false
+        }
         listBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(2), dp(2), dp(12))
@@ -1779,7 +1828,9 @@ class RadioMusicActivity : AppCompatActivity() {
             ui.post {
                 if (!isFinishing) {
                     syncAllPlayerViews()
-                    if (currentRenderedTracks.isNotEmpty()) {
+                    val newCurId = MusicEngine.currentTrack?.id
+                    // Hanya render ulang daftar lagu di belakang jika layar penuh sedang tertutup DAN lagu aktif berubah
+                    if (!isFullPlayerOpen && currentRenderedTracks.isNotEmpty() && newCurId != lastRenderedPlayingTrackId) {
                         val isLocalPl = (activeTab == 2 && combinedPlaylists.getOrNull(selectedPlaylistIdx)?.isGoogleSynced == false)
                         renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl, openFullOnPlay = true)
                     }
@@ -1844,8 +1895,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_STOP -> {
-                MusicEngine.stopAndReleaseNow()
-                notice.show("Dihentikan", "Audio dihentikan & RAM dibebaskan.", 2500L)
+                stopPlaybackCompletely()
                 return true
             }
         }
@@ -1860,6 +1910,30 @@ class RadioMusicActivity : AppCompatActivity() {
     override fun onLowMemory() {
         super.onLowMemory()
         SafeArtLoader.clearCache()
+    }
+
+    override fun onDestroy() {
+        MusicEngine.onStateChanged = null
+        activeScanPool?.shutdownNow()
+        super.onDestroy()
+    }
+
+    private fun stopPlaybackCompletely() {
+        MusicEngine.stopAndReleaseNow(clearTrack = true)
+        if (isNightModeOpen) {
+            isNightModeOpen = false
+            nightModeOverlay.visibility = View.GONE
+        }
+        if (isFullPlayerOpen) {
+            closeFullPlayer()
+        } else {
+            syncAllPlayerViews()
+            if (currentRenderedTracks.isNotEmpty()) {
+                val isLocalPl = (activeTab == 2 && combinedPlaylists.getOrNull(selectedPlaylistIdx)?.isGoogleSynced == false)
+                renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl, openFullOnPlay = true)
+            }
+        }
+        notice.show("Dimatikan", "Radio / musik dimatikan sepenuhnya.", 2500L)
     }
 
     private fun buildNightModeOverlay(): LinearLayout {
@@ -1904,6 +1978,8 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun openNightMode() {
         isNightModeOpen = true
+        fullPlayerOverlay.visibility = View.GONE
+        browseContainer.visibility = View.GONE
         nightModeOverlay.visibility = View.VISIBLE
         nightModeOverlay.requestFocus()
         updateNightModeClock()
@@ -1912,6 +1988,12 @@ class RadioMusicActivity : AppCompatActivity() {
     private fun closeNightMode() {
         isNightModeOpen = false
         nightModeOverlay.visibility = View.GONE
+        if (isFullPlayerOpen) {
+            fullPlayerOverlay.visibility = View.VISIBLE
+            fullBtnNightMode.requestFocus()
+        } else {
+            browseContainer.visibility = View.VISIBLE
+        }
         syncAllPlayerViews()
     }
 
@@ -1959,8 +2041,18 @@ class RadioMusicActivity : AppCompatActivity() {
         val expandArea = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(6), dp(4))
             isFocusable = true
             isClickable = true
+            setOnFocusChangeListener { _, f ->
+                background = if (f) {
+                    GradientDrawable().apply {
+                        cornerRadius = dp(10).toFloat()
+                        setColor(0x33B8975A)
+                        setStroke(dp(1), brassLight)
+                    }
+                } else null
+            }
             setOnClickListener { openFullPlayer() }
         }
 
@@ -1996,25 +2088,50 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val btnMiniPrev = miniIconBtn("⏮") { MusicEngine.playPrev(this) }
         miniBtnPlayPause = miniIconBtn("▶", primary = true) { MusicEngine.togglePause() }
+        val btnMiniStop = miniIconBtn("⏹", danger = true) { stopPlaybackCompletely() }
         val btnMiniNext = miniIconBtn("⏭") { MusicEngine.playNext(this) }
 
         contentRow.addView(btnMiniPrev)
-        contentRow.addView(miniBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(6), 0, dp(6), 0) })
-        contentRow.addView(btnMiniNext)
+        contentRow.addView(miniBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
+        contentRow.addView(btnMiniStop, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
+        contentRow.addView(btnMiniNext, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
 
         wrapper.addView(contentRow)
         return wrapper
     }
 
-    private fun miniIconBtn(symbol: String, primary: Boolean = false, onClick: () -> Unit): TextView {
-        return tv(symbol, 14f, if (primary) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
+    private fun miniIconBtn(
+        symbol: String,
+        primary: Boolean = false,
+        danger: Boolean = false,
+        onClick: () -> Unit
+    ): TextView {
+        val baseBg = when {
+            primary -> brassLight
+            danger -> 0x38E06C65
+            else -> 0x22FFFFFF
+        }
+        val baseFg = when {
+            primary -> bgDark
+            danger -> redDead
+            else -> ivory
+        }
+        return tv(symbol, 14f, baseFg, Typeface.DEFAULT_BOLD).apply {
             gravity = Gravity.CENTER
             setPadding(dp(10), dp(7), dp(10), dp(7))
             isFocusable = true
             isClickable = true
             background = GradientDrawable().apply {
                 cornerRadius = dp(9).toFloat()
-                setColor(if (primary) brassLight else 0x22FFFFFF)
+                setColor(baseBg)
+            }
+            setOnFocusChangeListener { _, f ->
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(9).toFloat()
+                    setColor(if (f) Color.WHITE else baseBg)
+                    if (f) setStroke(dp(2), brassLight)
+                }
+                setTextColor(if (f) bgDark else baseFg)
             }
             setOnClickListener { onClick() }
         }
@@ -2028,11 +2145,14 @@ class RadioMusicActivity : AppCompatActivity() {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(0xFF241E17.toInt(), 0xFF12100D.toInt(), 0xFF0A0908.toInt())
             )
+            // PENTING: false agar root container tidak mencuri fokus D-Pad TV
+            isFocusable = false
             isClickable = true
         }
 
         val topScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            isFocusable = false
             setPadding(0, 0, 0, dp(10))
         }
         val topHeader = LinearLayout(this).apply {
@@ -2043,12 +2163,14 @@ class RadioMusicActivity : AppCompatActivity() {
         val btnMinimize = actionPillBtn("⌄ Perkecil") { closeFullPlayer() }
         topHeader.addView(btnMinimize)
 
-        // Tombol Karaoke Aman 100% Anti-Banned (OFF -> NORMAL -> ULTRA -> OFF)
         fullBtnKaraoke = actionPillBtn("🎤 Karaoke: OFF") {
             MusicEngine.cycleKaraokeLevel { msg ->
                 notice.show("Mode Karaoke", msg, 3000L)
             }
             syncAllPlayerViews()
+        }
+        fullBtnKaraoke.setOnFocusChangeListener { _, f ->
+            styleKaraokeButton(f)
         }
         topHeader.addView(fullBtnKaraoke, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
 
@@ -2060,9 +2182,15 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             syncAllPlayerViews()
         }
+        fullBtnToggleLyrics.setOnFocusChangeListener { _, f ->
+            styleLyricsToggleButton(f)
+        }
         topHeader.addView(fullBtnToggleLyrics, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
 
         fullBtnSleepTimer = actionPillBtn("⏱ Timer") { showSleepTimerDialog() }
+        fullBtnSleepTimer.setOnFocusChangeListener { _, f ->
+            styleSleepButton(f)
+        }
         topHeader.addView(fullBtnSleepTimer, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
 
         fullBtnNightMode = actionPillBtn("🌙 Layar Gelap") { openNightMode() }
@@ -2080,9 +2208,10 @@ class RadioMusicActivity : AppCompatActivity() {
         fullCoverSection = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            isFocusable = false
         }
 
-        val artSize = dp(if (isPhone) 210 else 220)
+        val artSize = dp(if (isPhone) 200 else 210)
         val bigArtFrame = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
@@ -2094,7 +2223,7 @@ class RadioMusicActivity : AppCompatActivity() {
         fullArtView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         bigArtFrame.addView(fullArtView, FrameLayout.LayoutParams(-1, -1))
         fullCoverSection.addView(bigArtFrame, LinearLayout.LayoutParams(artSize, artSize).apply {
-            bottomMargin = dp(16)
+            bottomMargin = dp(14)
         })
 
         fullNowTitle = tv("Belum ada lagu diputar", if (isPhone) 20f else 22f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
@@ -2114,6 +2243,7 @@ class RadioMusicActivity : AppCompatActivity() {
         fullStatusRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            isFocusable = false
             setPadding(dp(14), dp(6), dp(14), dp(6))
             background = GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
@@ -2158,6 +2288,7 @@ class RadioMusicActivity : AppCompatActivity() {
         fullLyricsSection = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
+            isFocusable = false
         }
 
         val lyricSongBar = LinearLayout(this).apply {
@@ -2215,6 +2346,15 @@ class RadioMusicActivity : AppCompatActivity() {
             setPadding(dp(12), dp(4), dp(12), dp(4))
             isFocusable = true
             isClickable = true
+            setOnFocusChangeListener { _, f ->
+                background = if (f) {
+                    GradientDrawable().apply {
+                        cornerRadius = dp(8).toFloat()
+                        setColor(Color.WHITE)
+                    }
+                } else null
+                setTextColor(if (f) bgDark else brassLight)
+            }
             setOnClickListener {
                 MusicEngine.lyricOffsetMs = 0L
                 updateLyricOffsetLabel()
@@ -2226,12 +2366,14 @@ class RadioMusicActivity : AppCompatActivity() {
             updateLyricOffsetLabel()
         }
         syncControlRow.addView(btnLyricMinus)
-        syncControlRow.addView(lyricOffsetLabel)
+        syncControlRow.addView(lyricOffsetLabel, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(6), 0, dp(6), 0) })
         syncControlRow.addView(btnLyricPlus)
         fullLyricsSection.addView(syncControlRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         lyricScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
+            // Biarkan D-Pad langsung masuk ke tiap baris lirik di dalamnya
+            isFocusable = false
             background = GradientDrawable().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(0xFF0E0D0B.toInt())
@@ -2242,6 +2384,7 @@ class RadioMusicActivity : AppCompatActivity() {
         lyricBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            isFocusable = false
         }
         lyricScroll.addView(lyricBox, FrameLayout.LayoutParams(-1, -2))
         fullLyricsSection.addView(lyricScroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -2257,7 +2400,7 @@ class RadioMusicActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(4), 0, dp(4), dp(2))
         }
-        fullQualityLabel = tv("BAYU HI-FI AUDIO", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
+        fullQualityLabel = tv("VARO HI-FI AUDIO", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
             letterSpacing = 0.1f
         }
         fullTimeLabel = tv("00:00 / 00:00", 12f, brassLight, Typeface.DEFAULT_BOLD).apply {
@@ -2306,9 +2449,15 @@ class RadioMusicActivity : AppCompatActivity() {
             syncAllPlayerViews()
             notice.show("Mode Acak", if (MusicEngine.shuffleEnabled) "Acak lagu aktif" else "Acak lagu nonaktif", 2000L)
         }
+        fullBtnShuffle.setOnFocusChangeListener { _, f ->
+            styleTransportToggleBtn(fullBtnShuffle, MusicEngine.shuffleEnabled, f)
+        }
+
         val btnPrev = controlBtn("⏮") { MusicEngine.playPrev(this) }
         fullBtnPlayPause = controlBtn("▶", primary = true) { MusicEngine.togglePause() }
+        val btnStop = controlBtn("⏹", danger = true) { stopPlaybackCompletely() }
         val btnNext = controlBtn("⏭") { MusicEngine.playNext(this) }
+
         fullBtnRepeat = controlBtn("🔁", small = true) {
             MusicEngine.repeatMode = (MusicEngine.repeatMode + 1) % 3
             syncAllPlayerViews()
@@ -2319,16 +2468,86 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             notice.show("Mode Ulang", msg, 2000L)
         }
+        fullBtnRepeat.setOnFocusChangeListener { _, f ->
+            styleTransportToggleBtn(fullBtnRepeat, MusicEngine.repeatMode > 0, f)
+        }
 
         transportRow.addView(fullBtnShuffle)
-        transportRow.addView(btnPrev, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) })
-        transportRow.addView(fullBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(14), 0, dp(14), 0) })
-        transportRow.addView(btnNext, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
-        transportRow.addView(fullBtnRepeat)
+        transportRow.addView(btnPrev, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
+        transportRow.addView(fullBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
+        transportRow.addView(btnStop, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
+        transportRow.addView(btnNext, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
+        transportRow.addView(fullBtnRepeat, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
         bottomControls.addView(transportRow)
 
         page.addView(bottomControls)
         return page
+    }
+
+    private fun styleKaraokeButton(focused: Boolean) {
+        val level = MusicEngine.vocalReduceLevel
+        val bg = when {
+            focused -> Color.WHITE
+            level == 1 -> brassLight
+            level == 2 -> greenOk
+            else -> 0x26FFFFFF
+        }
+        val fg = if (focused || level > 0) bgDark else ivory
+        fullBtnKaraoke.setTextColor(fg)
+        fullBtnKaraoke.background = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(bg)
+            if (focused) setStroke(dp(2), brassLight)
+        }
+    }
+
+    private fun styleLyricsToggleButton(focused: Boolean) {
+        val active = MusicEngine.lyricsEnabled
+        val bg = when {
+            focused -> Color.WHITE
+            active -> 0x38B8975A
+            else -> 0x26FFFFFF
+        }
+        val fg = when {
+            focused -> bgDark
+            active -> brassLight
+            else -> mute
+        }
+        fullBtnToggleLyrics.setTextColor(fg)
+        fullBtnToggleLyrics.background = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(bg)
+            if (focused) setStroke(dp(2), brassLight)
+        }
+    }
+
+    private fun styleSleepButton(focused: Boolean) {
+        val active = MusicEngine.getSleepRemainingText().isNotEmpty()
+        val bg = when {
+            focused -> Color.WHITE
+            active -> 0x38B8975A
+            else -> 0x26FFFFFF
+        }
+        val fg = when {
+            focused -> bgDark
+            active -> brassLight
+            else -> ivory
+        }
+        fullBtnSleepTimer.setTextColor(fg)
+        fullBtnSleepTimer.background = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(bg)
+            if (focused) setStroke(dp(2), brassLight)
+        }
+    }
+
+    private fun styleTransportToggleBtn(btn: TextView, active: Boolean, focused: Boolean) {
+        btn.background = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            setColor(if (focused) Color.WHITE else if (active) 0x38B8975A else 0x26FFFFFF)
+            if (focused) setStroke(dp(2), brassLight)
+        }
+        btn.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
     }
 
     private fun updateLyricOffsetLabel() {
@@ -2364,37 +2583,73 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun openFullPlayer() {
         isFullPlayerOpen = true
+        // Blokir fokus dan sembunyikan layar daftar di belakang agar remote TV tidak melompat ke belakang
+        browseContainer.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        browseContainer.visibility = View.GONE
         fullPlayerOverlay.visibility = View.VISIBLE
         syncAllPlayerViews()
+        fullPlayerOverlay.post {
+            fullBtnPlayPause.requestFocus()
+        }
     }
 
     private fun closeFullPlayer() {
         isFullPlayerOpen = false
         fullPlayerOverlay.visibility = View.GONE
+        browseContainer.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        browseContainer.visibility = View.VISIBLE
         syncAllPlayerViews()
+        if (currentRenderedTracks.isNotEmpty()) {
+            val isLocalPl = (activeTab == 2 && combinedPlaylists.getOrNull(selectedPlaylistIdx)?.isGoogleSynced == false)
+            renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl, openFullOnPlay = true)
+        }
+        browseContainer.post {
+            if (miniPlayerBar.visibility == View.VISIBLE) {
+                miniBtnPlayPause.requestFocus()
+            } else {
+                tabViews.getOrNull(activeTab)?.requestFocus()
+            }
+        }
     }
 
-    private fun controlBtn(symbol: String, primary: Boolean = false, small: Boolean = false, onClick: () -> Unit): TextView {
-        return tv(symbol, if (primary) 20f else if (small) 14f else 17f, if (primary) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
+    private fun controlBtn(
+        symbol: String,
+        primary: Boolean = false,
+        small: Boolean = false,
+        danger: Boolean = false,
+        onClick: () -> Unit
+    ): TextView {
+        val baseBg = when {
+            primary -> brassLight
+            danger -> 0x38E06C65
+            else -> 0x26FFFFFF
+        }
+        val baseFg = when {
+            primary -> bgDark
+            danger -> redDead
+            else -> ivory
+        }
+        return tv(symbol, if (primary) 20f else if (small) 14f else 17f, baseFg, Typeface.DEFAULT_BOLD).apply {
             gravity = Gravity.CENTER
             setPadding(
-                dp(if (primary) 26 else if (small) 12 else 17),
+                dp(if (primary) 22 else if (small) 12 else 15),
                 dp(if (primary) 12 else if (small) 9 else 11),
-                dp(if (primary) 26 else if (small) 12 else 17),
+                dp(if (primary) 22 else if (small) 12 else 15),
                 dp(if (primary) 12 else if (small) 9 else 11)
             )
             isFocusable = true
             isClickable = true
             background = GradientDrawable().apply {
                 cornerRadius = dp(if (primary) 16 else 12).toFloat()
-                setColor(if (primary) brassLight else 0x26FFFFFF)
+                setColor(baseBg)
             }
             setOnFocusChangeListener { _, f ->
                 background = GradientDrawable().apply {
                     cornerRadius = dp(if (primary) 16 else 12).toFloat()
-                    setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
+                    setColor(if (f) Color.WHITE else baseBg)
+                    if (f) setStroke(dp(2), brassLight)
                 }
-                setTextColor(if (f || primary) bgDark else ivory)
+                setTextColor(if (f) bgDark else baseFg)
             }
             setOnClickListener { onClick() }
         }
@@ -2413,6 +2668,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 background = GradientDrawable().apply {
                     cornerRadius = dp(8).toFloat()
                     setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
+                    if (f) setStroke(dp(2), brassLight)
                 }
                 setTextColor(if (f || primary) bgDark else ivory)
             }
@@ -2506,6 +2762,7 @@ class RadioMusicActivity : AppCompatActivity() {
         playlistBarBox.visibility = if (idx == 2) View.VISIBLE else View.GONE
         radioBarBox.visibility = if (idx == 3) View.VISIBLE else View.GONE
         currentRenderedTracks = emptyList()
+        lastRenderedPlayingTrackId = null
         listBox.removeAllViews()
 
         when (idx) {
@@ -2755,6 +3012,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun renderAlbumList(albums: List<AlbumItem>) {
         currentRenderedTracks = emptyList()
+        lastRenderedPlayingTrackId = null
         listBox.removeAllViews()
         if (albums.isEmpty()) {
             listBox.addView(tv("Album tidak ditemukan. Coba ketik nama penyanyi atau judul album lain.", 13f, mute))
@@ -3257,7 +3515,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 val conn = URL("https://de1.api.radio-browser.info/json/stations/bycountrycodeexact/ID?limit=25&order=clickcount&reverse=true&hidebroken=true").openConnection() as HttpURLConnection
                 conn.connectTimeout = 7000
                 conn.readTimeout = 9000
-                conn.setRequestProperty("User-Agent", "BayuTV/1.0")
+                conn.setRequestProperty("User-Agent", "VaroTV/1.0")
                 if (conn.responseCode == 200) {
                     val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
                     for (i in 0 until arr.length()) {
@@ -3295,7 +3553,9 @@ class RadioMusicActivity : AppCompatActivity() {
         val doneCount = AtomicInteger(0)
         val activeCount = AtomicInteger(0)
         val deadCount = AtomicInteger(0)
+        activeScanPool?.shutdownNow()
         val pool = Executors.newFixedThreadPool(4)
+        activeScanPool = pool
 
         for (t in targets) {
             pool.execute {
@@ -3311,10 +3571,10 @@ class RadioMusicActivity : AppCompatActivity() {
                         isScanningRadios = false
                         btnScanRadio.text = "Scan Ulang"
                         radioScanSummary.text = "Selesai: ${activeCount.get()} Aktif · ${deadCount.get()} Mati"
-                        if (activeTab == 3) {
+                        if (activeTab == 3 && !isFullPlayerOpen) {
                             renderTrackList(sortRadiosByScan(targets), openFullOnPlay = true)
                         }
-                    } else if (activeTab == 3 && done % 3 == 0) {
+                    } else if (activeTab == 3 && !isFullPlayerOpen && done % 4 == 0) {
                         renderTrackList(targets, openFullOnPlay = true)
                     }
                 }
@@ -3435,9 +3695,13 @@ class RadioMusicActivity : AppCompatActivity() {
         isLocalPlaylistTab: Boolean = false,
         openFullOnPlay: Boolean = true
     ) {
+        val previouslyFocusedId = (currentFocus?.tag as? String)
         currentRenderedTracks = items
-        if (clearFirst) listBox.removeAllViews()
         val curId = MusicEngine.currentTrack?.id
+        lastRenderedPlayingTrackId = curId
+
+        if (clearFirst) listBox.removeAllViews()
+        var viewToRefocus: View? = null
 
         for ((index, item) in items.withIndex()) {
             val isPlayingThis = item.id == curId
@@ -3457,6 +3721,7 @@ class RadioMusicActivity : AppCompatActivity() {
             val playArea = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                tag = item.id
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { _, f ->
@@ -3470,6 +3735,9 @@ class RadioMusicActivity : AppCompatActivity() {
                     MusicEngine.playTrack(this@RadioMusicActivity, item, items, index)
                     if (openFullOnPlay) openFullPlayer()
                 }
+            }
+            if (previouslyFocusedId == item.id) {
+                viewToRefocus = playArea
             }
 
             val badge = tv(if (item.isLive) "LIVE" else if (item.isYtMusic) "YT" else "MP3", 10f, brassLight, Typeface.DEFAULT_BOLD).apply {
@@ -3549,6 +3817,10 @@ class RadioMusicActivity : AppCompatActivity() {
 
             listBox.addView(outerRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
+
+        if (!isFullPlayerOpen && viewToRefocus != null) {
+            viewToRefocus?.requestFocus()
+        }
     }
 
     private fun syncAllPlayerViews() {
@@ -3566,72 +3838,50 @@ class RadioMusicActivity : AppCompatActivity() {
             miniTitle.text = t.title
             miniSubtitle.text = "${t.artist} · ${MusicEngine.statusDetail}"
             SafeArtLoader.load(t.thumbUrl, miniArtView)
-            miniBtnPlayPause.text = if (st == PlayState.PLAYING) "⏸" else "▶"
+            miniBtnPlayPause.text = if (st == PlayState.PLAYING || st == PlayState.BUFFERING) "⏸" else "▶"
 
             fullNowTitle.text = t.title
             fullNowArtist.text = t.artist
             SafeArtLoader.load(t.thumbUrl, fullArtView)
-            fullBtnPlayPause.text = if (st == PlayState.PLAYING) "⏸" else "▶"
+            fullBtnPlayPause.text = if (st == PlayState.PLAYING || st == PlayState.BUFFERING) "⏸" else "▶"
 
             lyricMiniTitle.text = t.title
             lyricMiniSub.text = "${t.artist} · ${MusicEngine.statusDetail}"
             SafeArtLoader.load(t.thumbUrl, lyricMiniArt)
         }
 
-        // Update status tombol Karaoke (0 = OFF, 1 = NORMAL, 2 = ULTRA)
-        when (MusicEngine.vocalReduceLevel) {
-            1 -> {
-                fullBtnKaraoke.text = "🎤 Karaoke: NORMAL"
-                fullBtnKaraoke.setTextColor(bgDark)
-                fullBtnKaraoke.background = GradientDrawable().apply {
-                    cornerRadius = dp(8).toFloat()
-                    setColor(brassLight)
-                }
-            }
-            2 -> {
-                fullBtnKaraoke.text = "🎤 Karaoke: ULTRA"
-                fullBtnKaraoke.setTextColor(bgDark)
-                fullBtnKaraoke.background = GradientDrawable().apply {
-                    cornerRadius = dp(8).toFloat()
-                    setColor(greenOk)
-                }
-            }
-            else -> {
-                fullBtnKaraoke.text = "🎤 Karaoke: OFF"
-                fullBtnKaraoke.setTextColor(ivory)
-                fullBtnKaraoke.background = GradientDrawable().apply {
-                    cornerRadius = dp(8).toFloat()
-                    setColor(0x26FFFFFF)
-                }
-            }
+        fullBtnKaraoke.text = when (MusicEngine.vocalReduceLevel) {
+            1 -> "🎤 Karaoke: NORMAL"
+            2 -> "🎤 Karaoke: ULTRA"
+            else -> "🎤 Karaoke: OFF"
         }
+        styleKaraokeButton(fullBtnKaraoke.hasFocus())
 
         updateLyricOffsetLabel()
 
         val sleepRem = MusicEngine.getSleepRemainingText()
-        if (sleepRem.isNotEmpty()) {
-            fullBtnSleepTimer.text = "⏱ $sleepRem"
-            fullBtnSleepTimer.setTextColor(brassLight)
-        } else {
-            fullBtnSleepTimer.text = "⏱ Timer"
-            fullBtnSleepTimer.setTextColor(ivory)
-        }
+        fullBtnSleepTimer.text = if (sleepRem.isNotEmpty()) "⏱ $sleepRem" else "⏱ Timer"
+        styleSleepButton(fullBtnSleepTimer.hasFocus())
 
         fullBtnToggleLyrics.text = if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF"
-        fullBtnToggleLyrics.setTextColor(if (MusicEngine.lyricsEnabled) brassLight else mute)
+        styleLyricsToggleButton(fullBtnToggleLyrics.hasFocus())
 
         if (MusicEngine.lyricsEnabled) {
-            fullCoverSection.visibility = View.GONE
-            fullLyricsSection.visibility = View.VISIBLE
-            rebuildLyricViews()
+            if (fullLyricsSection.visibility != View.VISIBLE) {
+                fullCoverSection.visibility = View.GONE
+                fullLyricsSection.visibility = View.VISIBLE
+                rebuildLyricViews()
+            } else if (lyricViews.size != MusicEngine.lyrics.size) {
+                rebuildLyricViews()
+            }
         } else {
             fullLyricsSection.visibility = View.GONE
             fullCoverSection.visibility = View.VISIBLE
         }
 
-        fullBtnShuffle.setTextColor(if (MusicEngine.shuffleEnabled) brassLight else mute)
+        styleTransportToggleBtn(fullBtnShuffle, MusicEngine.shuffleEnabled, fullBtnShuffle.hasFocus())
         fullBtnRepeat.text = if (MusicEngine.repeatMode == 2) "🔂" else "🔁"
-        fullBtnRepeat.setTextColor(if (MusicEngine.repeatMode > 0) brassLight else mute)
+        styleTransportToggleBtn(fullBtnRepeat, MusicEngine.repeatMode > 0, fullBtnRepeat.hasFocus())
 
         val isBusy = (st == PlayState.RESOLVING || st == PlayState.BUFFERING)
         fullSpinner.visibility = if (isBusy) View.VISIBLE else View.GONE
@@ -3694,17 +3944,37 @@ class RadioMusicActivity : AppCompatActivity() {
             return
         }
 
-        for (line in lines) {
+        for ((idx, line) in lines.withIndex()) {
             val ltv = tv(line.text, 16f, 0xFF8C8478.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(8), dp(10), dp(8), dp(10))
+                setPadding(dp(14), dp(10), dp(14), dp(10))
                 setLineSpacing(0f, 1.2f)
+                // WAJIB isFocusable = true agar remote TV D-Pad bisa memilih & melompat ke baris lirik
+                isFocusable = true
                 isClickable = true
+                setOnFocusChangeListener { v, f ->
+                    val isCurrent = idx == lastHighlightedIdx
+                    if (f) {
+                        userBrowsingLyricsUntilMs = System.currentTimeMillis() + 3500L
+                        v.background = GradientDrawable().apply {
+                            cornerRadius = dp(10).toFloat()
+                            setColor(0x38B8975A)
+                            setStroke(dp(2), brassLight)
+                        }
+                        setTextColor(Color.WHITE)
+                        val targetY = (v.top - lyricScroll.height / 3).coerceAtLeast(0)
+                        lyricScroll.smoothScrollTo(0, targetY)
+                    } else {
+                        v.background = null
+                        setTextColor(if (isCurrent) brassLight else 0xFF8C8478.toInt())
+                    }
+                }
                 setOnClickListener {
                     MusicEngine.player?.seekTo((line.timeMs - MusicEngine.lyricOffsetMs).coerceAtLeast(0L))
+                    notice.show("Lirik", "Melompat ke: ${line.text.take(32)}", 1800L)
                 }
             }
-            lyricBox.addView(ltv, LinearLayout.LayoutParams(-1, -2))
+            lyricBox.addView(ltv, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
             lyricViews.add(ltv)
         }
     }
@@ -3741,16 +4011,23 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
                 if (activeIdx != lastHighlightedIdx && activeIdx >= 0) {
                     if (lastHighlightedIdx in lyricViews.indices) {
-                        lyricViews[lastHighlightedIdx].setTextColor(0xFF8C8478.toInt())
-                        lyricViews[lastHighlightedIdx].setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 16f))
+                        val prevView = lyricViews[lastHighlightedIdx]
+                        if (!prevView.hasFocus()) {
+                            prevView.setTextColor(0xFF8C8478.toInt())
+                        }
+                        prevView.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 16f))
                     }
                     val activeView = lyricViews[activeIdx]
-                    activeView.setTextColor(brassLight)
+                    if (!activeView.hasFocus()) {
+                        activeView.setTextColor(brassLight)
+                    }
                     activeView.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 20f))
                     lastHighlightedIdx = activeIdx
 
-                    val targetY = (activeView.top - lyricScroll.height / 3).coerceAtLeast(0)
-                    lyricScroll.smoothScrollTo(0, targetY)
+                    if (System.currentTimeMillis() > userBrowsingLyricsUntilMs) {
+                        val targetY = (activeView.top - lyricScroll.height / 3).coerceAtLeast(0)
+                        lyricScroll.smoothScrollTo(0, targetY)
+                    }
                 }
             }
         } catch (_: Exception) {
