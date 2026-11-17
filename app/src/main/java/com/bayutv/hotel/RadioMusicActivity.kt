@@ -106,6 +106,14 @@ class RadioMusicActivity : AppCompatActivity() {
         val browseId: String = ""
     )
 
+    data class MusicCategory(
+        val label: String,
+        val defaultQuery: String,
+        val hintText: String,
+        val subPresets: List<Pair<String, String>> = emptyList(),
+        val isAlbumMode: Boolean = false
+    )
+
     data class LyricLine(val timeMs: Long, val text: String)
 
     data class ResolvedStream(
@@ -1186,7 +1194,6 @@ class RadioMusicActivity : AppCompatActivity() {
                         }
                         Player.STATE_ENDED -> {
                             if (currentTrack?.isLive == true) {
-                                // Radio live yang terputus tidak boleh melompat ke stasiun lain otomatis
                                 state = PlayState.PAUSED
                                 statusDetail = "Siaran radio terhenti"
                                 scheduleIdleRelease()
@@ -1244,7 +1251,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
 
         fun togglePause() {
-            // Jika sedang resolving server, hentikan proses koneksi saat tombol jeda ditekan
             if (state == PlayState.RESOLVING) {
                 ++playSeq
                 state = PlayState.PAUSED
@@ -1267,7 +1273,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 return
             }
             try {
-                // Cek playWhenReady || isPlaying agar saat buffering tetap bisa dijeda
                 if (exo.playWhenReady || exo.isPlaying) {
                     exo.playWhenReady = false
                     exo.pause()
@@ -1290,7 +1295,6 @@ class RadioMusicActivity : AppCompatActivity() {
             clearTrack: Boolean = true,
             customStatus: String = "Audio dimatikan · RAM dibebaskan"
         ) {
-            // Batalkan semua proses resolve URL yang masih berjalan di background
             ++playSeq
             cancelIdleRelease()
             mainHandler.removeCallbacks(sleepCheckRunnable)
@@ -1504,16 +1508,113 @@ class RadioMusicActivity : AppCompatActivity() {
     private val tabViews = ArrayList<TextView>()
     private var activeTab = 0
 
-    private val searchCategories = listOf(
-        Pair("Semua Lagu", ""),
-        Pair("Album", "ALBUM"),
-        Pair("Pop Indo", "Top Hits Pop Indonesia Terbaru"),
-        Pair("Lagu Barat", "Top Global Pop Hits Western Songs"),
-        Pair("K-Pop & J-Pop", "Top K-Pop and Japanese Hits"),
-        Pair("Rock & Jazz", "Classic Rock and Smooth Jazz Hits")
+    // Kurasi kategori musik: Trend, Lagu Terbaik Indo, Mancanegara, Era 90-an & 2000-an
+    private val musicCategories = listOf(
+        MusicCategory(
+            label = "🔥 Trend Saat Ini",
+            defaultQuery = "Lagu Viral Trending Indonesia & Barat Terbaru",
+            hintText = "Cari lagu viral & trending saat ini...",
+            subPresets = listOf(
+                Pair("Semua Trend", "Lagu Viral Trending Indonesia & Barat Terbaru"),
+                Pair("Viral TikTok & Reels", "Lagu Viral TikTok Indonesia Terbaru"),
+                Pair("Top Hits Indo", "Top Charts Lagu Pop Indonesia Populer Saat Ini"),
+                Pair("Top Global", "Top Global Hits Trending English Songs")
+            )
+        ),
+        MusicCategory(
+            label = "🇮🇩 Lagu Terbaik Indo",
+            defaultQuery = "Lagu Pop Indonesia Terbaik Terpopuler",
+            hintText = "Cari lagu terbaik Indonesia...",
+            subPresets = listOf(
+                Pair("Semua Terbaik Indo", "Lagu Pop Indonesia Terbaik Terpopuler"),
+                Pair("Galau & Balada", "Lagu Galau Indonesia Terbaik Paling Menyentuh"),
+                Pair("Solois & Diva", "Lagu Terbaik Tulus Mahalini Lyodra Tiara Andini"),
+                Pair("Lagu Timur Viral", "Lagu Timur Indonesia Viral Terbaik")
+            )
+        ),
+        MusicCategory(
+            label = "🌍 Lagu Mancanegara",
+            defaultQuery = "Best International Pop Songs Top Global Hits",
+            hintText = "Cari lagu barat / mancanegara...",
+            subPresets = listOf(
+                Pair("Top Global Hits", "Best International Pop Songs Top Global Hits"),
+                Pair("Love Songs Barat", "Best English Love Songs Romantic Hits"),
+                Pair("R&B & Soul", "Best R&B and Soul International Hits"),
+                Pair("Classic Rock", "Greatest Classic Rock Songs of All Time")
+            )
+        ),
+        MusicCategory(
+            label = "📼 Lagu 90-an",
+            defaultQuery = "Lagu Nostalgia Era 90an Indonesia & Barat Terbaik",
+            hintText = "Cari lagu nostalgia era 90-an...",
+            subPresets = listOf(
+                Pair("Semua 90-an", "Lagu Nostalgia Era 90an Indonesia & Barat Terbaik"),
+                Pair("90-an Indonesia", "Lagu Pop & Slow Rock Indonesia Era 90an Terbaik"),
+                Pair("90-an Barat", "Best 90s Western Pop & Love Songs Hits"),
+                Pair("Slow Rock 90-an", "Lagu Slow Rock Malaysia & Indonesia 90an")
+            )
+        ),
+        MusicCategory(
+            label = "💿 Lagu 2000-an",
+            defaultQuery = "Lagu Pop Indonesia & Barat Era 2000an Terpopuler",
+            hintText = "Cari lagu hits era 2000-an...",
+            subPresets = listOf(
+                Pair("Semua 2000-an", "Lagu Pop Indonesia & Barat Era 2000an Terpopuler"),
+                Pair("2000-an Indonesia", "Lagu Pop Indonesia Terbaik Tahun 2000an"),
+                Pair("2000-an Barat", "Best 2000s English Pop & R&B Hits"),
+                Pair("Band Indo 2000-an", "Lagu Band Indonesia Terbaik Peterpan Dewa 19 Sheila On 7 Ungu")
+            )
+        ),
+        MusicCategory(
+            label = "🎶 Dangdut & Koplo",
+            defaultQuery = "Lagu Dangdut Koplo & Pop Jawa Terpopuler",
+            hintText = "Cari lagu dangdut, koplo, atau pop Jawa...",
+            subPresets = listOf(
+                Pair("Semua Dangdut", "Lagu Dangdut Koplo & Pop Jawa Terpopuler"),
+                Pair("Koplo Pop Jawa", "Lagu Pop Jawa Koplo Denny Caknan Happy Asmara"),
+                Pair("Dangdut Klasik", "Lagu Dangdut Lawas Terbaik Rhoma Irama Elvy Sukaesih"),
+                Pair("Dangdut Remix", "Lagu Dangdut Remix Viral Terbaru")
+            )
+        ),
+        MusicCategory(
+            label = "☕ Santai & Akustik",
+            defaultQuery = "Lagu Akustik Indonesia & Barat Santai",
+            hintText = "Cari lagu santai, akustik, atau cafe...",
+            subPresets = listOf(
+                Pair("Akustik Indo", "Lagu Akustik Indonesia Santai & Cover Terbaik"),
+                Pair("Cafe & Jazz", "Smooth Jazz & Bossa Nova Cafe Relaxing Songs"),
+                Pair("Pengantar Tidur", "Lagu Barat & Indo Pengantar Tidur Tenang")
+            )
+        ),
+        MusicCategory(
+            label = "🇰🇷 K-Pop & J-Pop",
+            defaultQuery = "Top K-Pop and Japanese Anime Hits",
+            hintText = "Cari lagu K-Pop atau J-Pop...",
+            subPresets = listOf(
+                Pair("Top K-Pop", "Top K-Pop Hits BTS BLACKPINK NewJeans SEVENTEEN"),
+                Pair("J-Pop & Anime", "Best Japanese Pop & Anime Songs Hits")
+            )
+        ),
+        MusicCategory(
+            label = "💿 Cari Album",
+            defaultQuery = "Album Pop Indonesia Terbaik",
+            hintText = "Ketik nama artis atau judul album...",
+            isAlbumMode = true
+        ),
+        MusicCategory(
+            label = "🔍 Semua Lagu",
+            defaultQuery = "",
+            hintText = "Cari judul lagu atau penyanyi bebas..."
+        )
     )
+
     private val categoryViews = ArrayList<TextView>()
     private var activeCategoryIdx = 0
+    private var activeSubPresetIdx = 0
+    private val subPresetViews = ArrayList<TextView>()
+    private lateinit var subPresetScroll: HorizontalScrollView
+    private lateinit var subPresetRow: LinearLayout
+
     private var lastAlbumSearchQuery = ""
     private var lastFoundAlbums: List<AlbumItem> = emptyList()
 
@@ -1705,26 +1806,42 @@ class RadioMusicActivity : AppCompatActivity() {
         searchBarBox.addView(searchBtn)
         searchSectionBox.addView(searchBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
+        // Baris 1: Kategori Utama & Era (Trend, Terbaik Indo, Mancanegara, 90-an, 2000-an, dll.)
         val catScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFocusable = false
-            setPadding(0, 0, 0, dp(8))
+            setPadding(0, 0, 0, dp(6))
         }
         val catRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         categoryViews.clear()
-        for (i in searchCategories.indices) {
-            val chip = tv(searchCategories[i].first, 11.5f, mute, Typeface.DEFAULT_BOLD).apply {
+        for (i in musicCategories.indices) {
+            val chip = tv(musicCategories[i].label, 11.5f, mute, Typeface.DEFAULT_BOLD).apply {
                 setPadding(dp(12), dp(5), dp(12), dp(5))
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { _, f -> styleCategoryChip(this, i, f) }
-                setOnClickListener { selectCategory(i) }
+                setOnClickListener {
+                    searchInput.setText("")
+                    selectCategory(i, triggerSearch = true)
+                }
             }
             catRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
             categoryViews.add(chip)
         }
         catScroll.addView(catRow)
         searchSectionBox.addView(catScroll)
+
+        // Baris 2: Sub-Pilihan Kurasi (muncul otomatis sesuai kategori yang dipilih)
+        subPresetScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFocusable = false
+            visibility = View.GONE
+            setPadding(0, 0, 0, dp(8))
+        }
+        subPresetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        subPresetScroll.addView(subPresetRow)
+        searchSectionBox.addView(subPresetScroll)
+
         browseContainer.addView(searchSectionBox)
 
         recentBarBox = LinearLayout(this).apply {
@@ -1829,7 +1946,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 if (!isFinishing) {
                     syncAllPlayerViews()
                     val newCurId = MusicEngine.currentTrack?.id
-                    // Hanya render ulang daftar lagu di belakang jika layar penuh sedang tertutup DAN lagu aktif berubah
                     if (!isFullPlayerOpen && currentRenderedTracks.isNotEmpty() && newCurId != lastRenderedPlayingTrackId) {
                         val isLocalPl = (activeTab == 2 && combinedPlaylists.getOrNull(selectedPlaylistIdx)?.isGoogleSynced == false)
                         renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl, openFullOnPlay = true)
@@ -2145,7 +2261,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(0xFF241E17.toInt(), 0xFF12100D.toInt(), 0xFF0A0908.toInt())
             )
-            // PENTING: false agar root container tidak mencuri fokus D-Pad TV
             isFocusable = false
             isClickable = true
         }
@@ -2372,7 +2487,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
         lyricScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
-            // Biarkan D-Pad langsung masuk ke tiap baris lirik di dalamnya
             isFocusable = false
             background = GradientDrawable().apply {
                 cornerRadius = dp(16).toFloat()
@@ -2583,7 +2697,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun openFullPlayer() {
         isFullPlayerOpen = true
-        // Blokir fokus dan sembunyikan layar daftar di belakang agar remote TV tidak melompat ke belakang
         browseContainer.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         browseContainer.visibility = View.GONE
         fullPlayerOverlay.visibility = View.VISIBLE
@@ -2714,43 +2827,106 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
+    private fun styleSubPresetChip(v: TextView, idx: Int, focused: Boolean) {
+        val active = idx == activeSubPresetIdx
+        v.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
+        v.background = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            when {
+                focused -> {
+                    setColor(Color.WHITE)
+                    setStroke(dp(1), brassLight)
+                }
+                active -> {
+                    setColor(0x30B8975A)
+                    setStroke(dp(1), brass)
+                }
+                else -> {
+                    setColor(0x14FFFFFF)
+                    setStroke(dp(1), 0x1AFFFFFF)
+                }
+            }
+        }
+    }
+
+    private fun rebuildSubPresetRow(cat: MusicCategory) {
+        subPresetRow.removeAllViews()
+        subPresetViews.clear()
+        if (cat.subPresets.isEmpty()) {
+            subPresetScroll.visibility = View.GONE
+            return
+        }
+        subPresetScroll.visibility = View.VISIBLE
+        for (i in cat.subPresets.indices) {
+            val (subLabel, subQuery) = cat.subPresets[i]
+            val chip = tv(subLabel, 11f, mute, Typeface.DEFAULT_BOLD).apply {
+                setPadding(dp(11), dp(4), dp(11), dp(4))
+                isFocusable = true
+                isClickable = true
+                setOnFocusChangeListener { _, f -> styleSubPresetChip(this, i, f) }
+                setOnClickListener {
+                    activeSubPresetIdx = i
+                    searchInput.setText("")
+                    for (j in subPresetViews.indices) {
+                        styleSubPresetChip(subPresetViews[j], j, subPresetViews[j].hasFocus())
+                    }
+                    searchYtMusicSongs(
+                        query = subQuery,
+                        headerLabel = "${cat.label} · $subLabel",
+                        showPlayAllButton = true
+                    )
+                }
+            }
+            styleSubPresetChip(chip, i, false)
+            subPresetRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            subPresetViews.add(chip)
+        }
+    }
+
     private fun selectCategory(idx: Int, triggerSearch: Boolean = true) {
         activeCategoryIdx = idx
+        activeSubPresetIdx = 0
         for (i in categoryViews.indices) {
             styleCategoryChip(categoryViews[i], i, categoryViews[i].hasFocus())
         }
-        val (catName, catQuery) = searchCategories[idx]
-        searchInput.hint = when (idx) {
-            1 -> "Ketik nama artis atau judul album..."
-            2 -> "Cari lagu Pop Indonesia..."
-            3 -> "Cari lagu Barat / Western..."
-            4 -> "Cari lagu K-Pop / Jepang..."
-            5 -> "Cari lagu Rock / Jazz..."
-            else -> "Cari lagu, artis, atau album (Indo & Barat)..."
-        }
+        val cat = musicCategories[idx]
+        searchInput.hint = cat.hintText
+        rebuildSubPresetRow(cat)
 
         if (!triggerSearch) return
 
         val typed = searchInput.text.toString().trim()
-        if (idx == 1) {
-            val q = typed.ifEmpty { "Tulus Album" }
+        if (cat.isAlbumMode) {
+            val q = typed.ifEmpty { cat.defaultQuery }
             searchYtAlbums(q)
-        } else if (catQuery.isNotEmpty()) {
-            val q = typed.ifEmpty { catQuery }
-            searchYtMusicSongs(q, headerLabel = if (typed.isEmpty()) "Klasifikasi: $catName" else "")
+        } else if (typed.isNotEmpty()) {
+            searchYtMusicSongs(typed, showPlayAllButton = true)
+        } else if (cat.subPresets.isNotEmpty()) {
+            val (firstSubName, firstSubQuery) = cat.subPresets[0]
+            searchYtMusicSongs(
+                query = firstSubQuery,
+                headerLabel = "${cat.label} · $firstSubName",
+                showPlayAllButton = true
+            )
         } else {
-            val q = typed.ifEmpty { "Lagu Pop Indonesia & Barat Terbaru" }
-            searchYtMusicSongs(q)
+            val q = cat.defaultQuery.ifEmpty { "Lagu Pop Indonesia & Barat Terbaru" }
+            searchYtMusicSongs(
+                query = q,
+                headerLabel = if (cat.defaultQuery.isNotEmpty()) cat.label else "",
+                showPlayAllButton = true
+            )
         }
     }
 
     private fun executeSearchWithCategory() {
         val typed = searchInput.text.toString().trim()
-        if (activeCategoryIdx == 1) {
-            searchYtAlbums(typed.ifEmpty { "Album Pop Indonesia" })
+        val cat = musicCategories[activeCategoryIdx]
+        if (cat.isAlbumMode) {
+            searchYtAlbums(typed.ifEmpty { cat.defaultQuery })
+        } else if (typed.isNotEmpty()) {
+            searchYtMusicSongs(typed, showPlayAllButton = true)
         } else {
-            val defaultQ = searchCategories[activeCategoryIdx].second.ifEmpty { "Lagu Pop Indonesia & Barat Terbaru" }
-            searchYtMusicSongs(typed.ifEmpty { defaultQ })
+            selectCategory(activeCategoryIdx, triggerSearch = true)
         }
     }
 
@@ -2887,9 +3063,13 @@ class RadioMusicActivity : AppCompatActivity() {
         wv.loadUrl("https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=id")
     }
 
-    private fun searchYtMusicSongs(query: String, headerLabel: String = "") {
+    private fun searchYtMusicSongs(
+        query: String,
+        headerLabel: String = "",
+        showPlayAllButton: Boolean = false
+    ) {
         listBox.removeAllViews()
-        listBox.addView(tv("Mencari \"$query\" di YouTube Music...", 13f, mute))
+        listBox.addView(tv("Memuat daftar \"$query\"...", 13f, mute))
         Thread {
             val results = ArrayList<Track>()
             try {
@@ -2922,15 +3102,34 @@ class RadioMusicActivity : AppCompatActivity() {
                 if (isFinishing || activeTab != 0) return@post
                 listBox.removeAllViews()
                 if (results.isEmpty()) {
-                    listBox.addView(tv("Tidak ditemukan hasil. Coba kata kunci lain.", 13f, mute))
+                    listBox.addView(tv("Tidak ditemukan hasil. Coba kata kunci atau kategori lain.", 13f, mute))
                 } else {
-                    if (headerLabel.isNotEmpty()) {
-                        listBox.addView(
-                            tv(headerLabel.uppercase(Locale.US), 11f, brassLight, Typeface.DEFAULT_BOLD).apply {
-                                letterSpacing = 0.1f
-                                setPadding(dp(4), 0, 0, dp(8))
+                    if (headerLabel.isNotEmpty() || showPlayAllButton) {
+                        val headerBar = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(2), 0, dp(2), dp(8))
+                        }
+                        val titleLbl = tv(
+                            (headerLabel.ifEmpty { "Hasil Pencarian" }).uppercase(Locale.US),
+                            11f,
+                            brassLight,
+                            Typeface.DEFAULT_BOLD
+                        ).apply {
+                            letterSpacing = 0.08f
+                            maxLines = 1
+                            ellipsize = TextUtils.TruncateAt.END
+                        }
+                        headerBar.addView(titleLbl, LinearLayout.LayoutParams(0, -2, 1f))
+
+                        if (showPlayAllButton) {
+                            val playAllBtn = actionPillBtn("▶ Putar Semua (${results.size})", primary = true) {
+                                MusicEngine.playTrack(this, results[0], results, 0)
+                                openFullPlayer()
                             }
-                        )
+                            headerBar.addView(playAllBtn)
+                        }
+                        listBox.addView(headerBar)
                     }
                     renderTrackList(results, clearFirst = false, openFullOnPlay = true)
                 }
@@ -3116,7 +3315,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     if (lastFoundAlbums.isNotEmpty()) {
                         renderAlbumList(lastFoundAlbums)
                     } else {
-                        searchYtAlbums(lastAlbumSearchQuery.ifEmpty { "Album Pop Indonesia" })
+                        searchYtAlbums(lastAlbumSearchQuery.ifEmpty { "Album Pop Indonesia Terbaik" })
                     }
                 }
                 backRow.addView(btnBackAlbums)
@@ -3949,7 +4148,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(10), dp(14), dp(10))
                 setLineSpacing(0f, 1.2f)
-                // WAJIB isFocusable = true agar remote TV D-Pad bisa memilih & melompat ke baris lirik
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { v, f ->
