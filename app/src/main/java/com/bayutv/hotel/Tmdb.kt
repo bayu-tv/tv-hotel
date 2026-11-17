@@ -6,10 +6,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-/**
- * kind: "movie" / "tv" (katalog TMDB), "jf_movie" / "jf_series" / "jf_episode" (Koleksi Saya di Jellyfin)
- * poster & backdrop: jalur TMDB ("/abc.jpg") atau alamat lengkap untuk Jellyfin.
- */
 data class Movie(
     val id: Int,
     val title: String,
@@ -31,7 +27,6 @@ data class EpisodeItem(
     val overview: String
 )
 
-// Data film dari TMDB (gratis untuk pemakaian non-komersial dengan atribusi).
 object Tmdb {
     private const val BASE = "https://api.themoviedb.org/3"
     private val cache = LinkedHashMap<String, Pair<Long, String>>()
@@ -73,15 +68,15 @@ object Tmdb {
         }
     }
 
-    fun imdbId(ctx: Context, tmdbId: Int, kind: String = "movie"): String? {
-        if (tmdbId <= 0) return null
-        val path = "/" + (if (kind == "tv") "tv" else "movie") + "/$tmdbId/external_ids"
-        val json = get(ctx, path, "") ?: return null
+    fun imdbId(ctx: Context, id: Int, kind: String = "movie"): String {
+        if (id <= 0) return ""
+        val path = "/" + (if (kind == "tv") "tv" else "movie") + "/$id/external_ids"
+        val json = get(ctx, path, "") ?: return ""
         return try {
-            val id = JSONObject(json).optString("imdb_id", "").trim()
-            if (id.startsWith("tt")) id else null
-        } catch (_: Exception) {
-            null
+            val imdb = JSONObject(json).optString("imdb_id", "").trim()
+            if (imdb.startsWith("tt")) imdb else ""
+        } catch (e: Exception) {
+            ""
         }
     }
 
@@ -95,4 +90,42 @@ object Tmdb {
         var kind = o.optString("kind", "").ifEmpty { o.optString("media_type", "") }
         if (kind != "movie" && kind != "tv") kind = if (!o.has("title") && o.has("name")) "tv" else defKind
         return Movie(
-            o.optInt("id
+            o.optInt("id"),
+            title,
+            if (date.length >= 4) date.substring(0, 4) else "",
+            if (p.isEmpty() || p == "null") null else p,
+            o.optDouble("vote_average", 0.0),
+            o.optString("overview", ""),
+            kind,
+            "",
+            if (b.isEmpty() || b == "null") null else b
+        )
+    }
+
+    fun parseList(json: String, defKind: String = "movie"): List<Movie> {
+        val out = ArrayList<Movie>()
+        val arr = JSONObject(json).optJSONArray("results") ?: return out
+        for (i in 0 until arr.length()) {
+            val m = toMovie(arr.getJSONObject(i), defKind)
+            if (m != null) out.add(m)
+        }
+        return out
+    }
+
+    fun episodes(ctx: Context, tvId: Int, season: Int): List<EpisodeItem> {
+        val json = get(ctx, "/tv/$tvId/season/$season", "language=id-ID") ?: return emptyList()
+        return try {
+            val arr = JSONObject(json).optJSONArray("episodes") ?: return emptyList()
+            val out = ArrayList<EpisodeItem>()
+            for (i in 0 until arr.length()) {
+                val e = arr.getJSONObject(i)
+                val epNum = e.optInt("episode_number", i + 1)
+                val name = e.optString("name", "Episode $epNum").ifEmpty { "Episode $epNum" }
+                out.add(EpisodeItem(season, epNum, "E$epNum - $name", e.optString("overview", "")))
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+}
