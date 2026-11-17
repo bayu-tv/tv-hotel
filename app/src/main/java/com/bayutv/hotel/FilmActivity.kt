@@ -6,12 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -20,11 +16,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
-import android.text.SpannableString
-import android.text.Spanned
 import android.text.TextUtils
 import android.text.TextWatcher
-import android.text.style.ForegroundColorSpan
 import android.util.LruCache
 import android.util.TypedValue
 import android.view.Gravity
@@ -62,6 +55,7 @@ class FilmActivity : AppCompatActivity() {
     // Cache khusus gambar latar HD (1280x720) agar tajam & tetap hemat RAM (~7 MB maks)
     private val heroCache = LruCache<String, Bitmap>(4)
     private val resolvedBackdrops = HashMap<String, String>()
+    private var resolvedImdbId: String = ""
 
     private val tabs = arrayOf("Beranda", "Film", "Anime & Serial", "Indonesia", "YouTube Resmi", "Koleksi Saya", "Daftar Saya", "Cari")
     private val searchIdx = 7
@@ -106,64 +100,33 @@ class FilmActivity : AppCompatActivity() {
         return v
     }
 
-    private fun buildBBoxBrand(): LinearLayout {
+    private fun buildBBoxLogo(): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, dp(22), 0)
-            isFocusable = false
         }
-
-        val iconView = object : View(this) {
-            private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFF1A1713.toInt()
-                style = Paint.Style.FILL
-            }
-            private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = brassLight
-                style = Paint.Style.STROKE
-                strokeWidth = dp(2).toFloat()
-            }
-            private val playPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = brassLight
-                style = Paint.Style.FILL
-            }
-            private val rect = RectF()
-            private val playPath = Path()
-
-            override fun onDraw(canvas: Canvas) {
-                super.onDraw(canvas)
-                val pad = dp(2).toFloat()
-                rect.set(pad, pad, width - pad, height - pad)
-                val r = dp(7).toFloat()
-                canvas.drawRoundRect(rect, r, r, bgPaint)
-                canvas.drawRoundRect(rect, r, r, strokePaint)
-
-                val cx = width * 0.52f
-                val cy = height * 0.50f
-                val tri = width * 0.22f
-                playPath.reset()
-                playPath.moveTo(cx - tri * 0.65f, cy - tri)
-                playPath.lineTo(cx + tri * 0.95f, cy)
-                playPath.lineTo(cx - tri * 0.65f, cy + tri)
-                playPath.close()
-                canvas.drawPath(playPath, playPaint)
+        val iconFrame = FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(brassLight, brass)
+            ).apply {
+                cornerRadius = dp(7).toFloat()
+                setStroke(dp(1), 0x66FFFFFF)
             }
         }
-        val ilp = LinearLayout.LayoutParams(dp(28), dp(28))
-        ilp.rightMargin = dp(9)
-        box.addView(iconView, ilp)
-
-        val spannable = SpannableString("B-BOX").apply {
-            setSpan(ForegroundColorSpan(brassLight), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            setSpan(ForegroundColorSpan(ivory), 1, 5, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val iconLetter = tv("B", 16f, 0xFF0E0C0A.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            gravity = Gravity.CENTER
         }
-        val wordmark = tv("B-BOX", 20f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            text = spannable
+        iconFrame.addView(iconLetter, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+        box.addView(iconFrame, LinearLayout.LayoutParams(dp(28), dp(28)))
+
+        val brandText = tv("B-BOX", 19f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.16f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            setPadding(dp(10), 0, 0, 0)
         }
-        box.addView(wordmark)
+        box.addView(brandText)
         return box
     }
 
@@ -195,7 +158,7 @@ class FilmActivity : AppCompatActivity() {
                 val conn = URL(hdUrl).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
                 conn.readTimeout = 10000
-                conn.setRequestProperty("User-Agent", "B-BOX-TV/1.0")
+                conn.setRequestProperty("User-Agent", "B-BOX-TV")
                 val bytes = conn.inputStream.use { it.readBytes() }
 
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -278,7 +241,7 @@ class FilmActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(44), dp(18), dp(44), dp(8))
         }
-        topBar.addView(buildBBoxBrand())
+        topBar.addView(buildBBoxLogo())
 
         val tabScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -320,7 +283,7 @@ class FilmActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(8), dp(44), dp(10))
         }
-        heroBadge = tv("B-BOX STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        heroBadge = tv("B-BOX STREAMING  ·  BEBAS IKLAN  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.14f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
@@ -334,7 +297,7 @@ class FilmActivity : AppCompatActivity() {
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
         heroOverview = tv(
-            "Geser remote ke poster di bawah untuk melihat sinopsis, lalu tekan OK untuk menonton.",
+            "Geser remote ke poster di bawah untuk melihat sinopsis, lalu tekan OK untuk menonton tanpa iklan.",
             13f,
             0xFFE6E0D6.toInt(),
             Typeface.SANS_SERIF
@@ -566,9 +529,9 @@ class FilmActivity : AppCompatActivity() {
             else -> ""
         }
         val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
-        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  SUB INDO")
+        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  BEBAS IKLAN · SUB INDO")
         heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   ·   " else "") + "\u2605 " + r + "   ·   Tekan OK untuk Tonton"
-        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pemutar bebas iklan, dan Subtitle Indonesia."
+        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan episode, dan Subtitle Indonesia otomatis."
 
         val key = watchKey(m)
         val bdUrl = resolvedBackdrops[key] ?: m.backdrop
@@ -1232,11 +1195,12 @@ class FilmActivity : AppCompatActivity() {
 
     private fun openContinueDetail(cw: ContinueWatch.Entry) {
         val m = cw.movie
+        resolvedImdbId = ""
         detailTitle.text = m.title
         val menit = if (cw.posMs > 60000L) "Menit ke-${cw.posMs / 60000L}" else "Terakhir ditonton"
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") + menit + "  ·  Subtitle Indonesia"
         detailOverview.text = m.overview.ifBlank { "Lanjutkan menonton dari posisi terakhir Anda." }
-        detailProviders.text = "Riwayat tersimpan otomatis di B-BOX."
+        detailProviders.text = "Riwayat B-BOX tersimpan otomatis di perangkat TV."
         Images.load(m.poster, detailPoster)
         val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
         if (!bdUrl.isNullOrBlank()) {
@@ -1254,7 +1218,7 @@ class FilmActivity : AppCompatActivity() {
                 startDirectStream(m, cw.season, cw.episode)
             }
         }
-        addDetailButton("YouTube TV", false) {
+        addDetailButton("Cari di YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
         addDetailButton("Hapus Riwayat", false) {
@@ -1272,6 +1236,12 @@ class FilmActivity : AppCompatActivity() {
 
         detailOverlay.visibility = View.VISIBLE
         detailActions.getChildAt(0)?.requestFocus()
+
+        if (!m.isJellyfin && m.id > 0) {
+            Thread {
+                resolvedImdbId = Tmdb.imdbId(this, m.id, m.kind)
+            }.start()
+        }
     }
 
     private fun openDetail(m: Movie) {
@@ -1279,11 +1249,12 @@ class FilmActivity : AppCompatActivity() {
             openJellyfin(m)
             return
         }
+        resolvedImdbId = ""
         detailTitle.text = m.title
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") +
-            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  ·  Subtitle Indonesia"
+            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  ·  Bebas Iklan"
         detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
-        detailProviders.text = "Memuat info durasi & episode..."
+        detailProviders.text = "Memuat info durasi & Subtitle Indonesia..."
         Images.load(m.poster, detailPoster)
         val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
         if (!bdUrl.isNullOrBlank()) {
@@ -1293,7 +1264,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("▶  Tonton (Bebas Iklan)", true) { startDirectStream(m) }
+        addDetailButton("▶  Tonton Bebas Iklan", true) { startDirectStream(m) }
         addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
@@ -1312,6 +1283,9 @@ class FilmActivity : AppCompatActivity() {
         detailActions.getChildAt(0)?.requestFocus()
 
         Thread {
+            val imdb = Tmdb.imdbId(this, m.id, m.kind)
+            if (imdb.isNotEmpty()) resolvedImdbId = imdb
+
             val path = "/" + (if (m.kind == "tv") "tv" else "movie") + "/" + m.id
             val json = Tmdb.get(this, path, "language=id-ID&append_to_response=videos,watch/providers&include_video_language=id,en,ja,null")
                 ?: return@Thread
@@ -1366,14 +1340,14 @@ class FilmActivity : AppCompatActivity() {
                 detailProviders.text = if (provNames.isNotEmpty()) {
                     "Layanan Resmi ID: " + provNames.distinct().joinToString(", ")
                 } else {
-                    "Pemutar Native B-BOX (Bebas Iklan & Sub Indo Otomatis)."
+                    "Pemutar B-BOX Native (Bebas Iklan & Sub Indo Otomatis)"
                 }
 
                 detailActions.removeAllViews()
                 if (m.kind == "tv" && seasons > 0) {
-                    addDetailButton("▶  Pilih Episode", true) { pickEpisodeAndStream(m, seasons) }
+                    addDetailButton("▶  Pilih Episode (Bebas Iklan)", true) { pickEpisodeAndStream(m, seasons) }
                 } else {
-                    addDetailButton("▶  Tonton (Bebas Iklan)", true) { startDirectStream(m) }
+                    addDetailButton("▶  Tonton Bebas Iklan", true) { startDirectStream(m) }
                 }
                 addDetailButton("YouTube TV", false) {
                     openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
@@ -1467,6 +1441,7 @@ class FilmActivity : AppCompatActivity() {
             val i = Intent(this, WebStreamActivity::class.java)
             i.putExtra("title", fullTitle)
             i.putExtra("tmdb_id", m.id)
+            i.putExtra("imdb_id", resolvedImdbId)
             i.putExtra("tmdb_kind", m.kind)
             i.putExtra("season", season)
             i.putExtra("episode", episode)
