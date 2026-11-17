@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Latar belakang hitam arang -->
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M0,0 L320,0 L320,180 L0,180 Z" />
+
+    <!-- Bingkai tipis emas -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#44B8975A"
+        android:strokeWidth="2"
+        android:pathData="M6,6 L314,6 L314,174 L6,174 Z" />
+
+    <!-- Logo B-Box di sisi kiri -->
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M52,58 L76,58 C86,58 91,63.8 91,72.2 C91,78.5 87.3,83.2 81.6,85.3 C88.4,87.4 93,92.6 93,101 C93,110.4 86.2,117 75.3,117 L52,117 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M60.5,66 L74.5,66 C79.8,66 83,68.8 83,73.2 C83,77.4 79.8,80.2 74.5,80.5 L71,80.5 L71,90 L75,90 C81.1,90 84.6,93.5 84.6,99.4 C84.6,105.4 80.8,109 74.5,109 L60.5,109 Z" />
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M65,76.5 L79.8,87.5 L65,98.5 Z" />
+
+    <!-- 3 gelombang suara -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M99.5,79 C100.3,79 101,79.7 101,80.5 L101,94.5 C101,95.3 100.3,96 99.5,96 C98.7,96 98,95.3 98,94.5 L98,80.5 C98,79.7 98.7,79 99.5,79 Z" />
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M105,71.5 C105.8,71.5 106.5,72.2 106.5,73 L106.5,102 C106.5,102.8 105.8,103.5 105,103.5 C104.2,103.5 103.5,102.8 103.5,102 L103.5,73 C103.5,72.2 104.2,71.5 105,71.5 Z" />
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M110.5,77 C111.3,77 112,77.7 112,78.5 L112,96.5 C112,97.3 111.3,98 110.5,98 C109.7,98 109,97.3 109,96.5 L109,78.5 C109,77.7 109.7,77 110.5,77 Z" />
+
+    <!-- Tulisan B-BOX di sisi kanan -->
+    <!-- Huruf B -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M124,69 L139,69 C145,69 148,72.5 148,78 C148,82 145.5,85 142,86.3 C146.2,87.6 149,91 149,96 C149,101.5 145,105 138.5,105 L124,105 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M130,74.5 L137.5,74.5 C140.5,74.5 142,76 142,78.8 C142,81.5 140.5,83 137.5,83 L130,83 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M130,88.8 L138,88.8 C141.2,88.8 143,90.5 143,94 C143,97.5 141.2,99.5 138,99.5 L130,99.5 Z" />
+
+    <!-- Tanda hubung (-) -->
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M155,84.5 L167,84.5 L167,89.5 L155,89.5 Z" />
+
+    <!-- Huruf B -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M173,69 L188,69 C194,69 197,72.5 197,78 C197,82 194.5,85 191,86.3 C195.2,87.6 198,91 198,96 C198,101.5 194,105 187.5,105 L173,105 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M179,74.5 L186.5,74.5 C189.5,74.5 191,76 191,78.8 C191,81.5 189.5,83 186.5,83 L179,83 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M179,88.8 L187,88.8 C190.2,88.8 192,90.5 192,94 C192,97.5 190.2,99.5 187,99.5 L179,99.5 Z" />
+
+    <!-- Huruf O -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M219,69 C228.5,69 234,75.5 234,87 C234,98.5 228.5,105 219,105 C209.5,105 204,98.5 204,87 C204,75.5 209.5,69 219,69 Z" />
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M219,75 C224.5,75 227.5,79.5 227.5,87 C227.5,94.5 224.5,99 219,99 C213.5,99 210.5,94.5 210.5,87 C210.5,79.5 213.5,75 219,75 Z" />
+
+    <!-- Huruf X -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M240,69 L247,69 L268,105 L261,105 Z" />
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M261,69 L268,69 L247,105 L240,105 Z" />
+
+    <!-- Garis aksen emas di bawah tulisan B-BOX -->
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M124,113 L268,113 L268,116 L124,116 Z" />
+</vector>
