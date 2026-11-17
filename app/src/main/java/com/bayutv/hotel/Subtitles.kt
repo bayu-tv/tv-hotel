@@ -14,9 +14,6 @@ object Subtitles {
         val isVtt: Boolean
     )
 
-    /**
-     * Mencari subtitle gratis berdasarkan TMDB ID & IMDb ID (prioritas: Indonesia -> Melayu -> Inggris).
-     */
     fun fetch(
         tmdbId: Int,
         kind: String = "movie",
@@ -29,7 +26,6 @@ object Subtitles {
         val malay = ArrayList<Track>()
         val eng = ArrayList<Track>()
 
-        // 1. Sumber Utama: Wyzie (TMDB ID)
         if (tmdbId > 0) {
             val q1 = if (kind == "tv" && season > 0 && episode > 0) {
                 "https://sub.wyzie.ru/search?id=$tmdbId&season=$season&episode=$episode"
@@ -39,7 +35,6 @@ object Subtitles {
             parseWyzie(httpGet(q1), seen, indo, malay, eng)
         }
 
-        // 2. Sumber Cadangan Wyzie via IMDb ID jika Subtitle Indonesia belum ditemukan
         if (indo.isEmpty() && imdbId.startsWith("tt")) {
             val q2 = if (kind == "tv" && season > 0 && episode > 0) {
                 "https://sub.wyzie.ru/search?id=$imdbId&season=$season&episode=$episode"
@@ -49,7 +44,6 @@ object Subtitles {
             parseWyzie(httpGet(q2), seen, indo, malay, eng)
         }
 
-        // 3. Sumber Cadangan OpenSubtitles v3 via IMDb ID
         if (indo.isEmpty() && imdbId.startsWith("tt")) {
             val q3 = if (kind == "tv" && season > 0 && episode > 0) {
                 "https://opensubtitles-v3.strem.io/subtitles/series/$imdbId:$season:$episode.json"
@@ -82,11 +76,11 @@ object Subtitles {
                 val isVtt = fmt == "vtt" || url.lowercase().contains(".vtt")
                 when {
                     lang == "id" || lang == "in" || lang == "ind" || disp.contains("indonesia", true) ->
-                        indo.add(Track(url, "id", "Indonesia · $disp", isVtt))
+                        indo.add(Track(url, "id", "Indonesia - $disp", isVtt))
                     lang == "ms" || lang == "may" || lang == "msa" || disp.contains("malay", true) ->
-                        malay.add(Track(url, "ms", "Melayu · $disp", isVtt))
+                        malay.add(Track(url, "ms", "Melayu - $disp", isVtt))
                     lang == "en" || lang == "eng" ->
-                        eng.add(Track(url, "en", "English · $disp", isVtt))
+                        eng.add(Track(url, "en", "English - $disp", isVtt))
                 }
             }
         } catch (_: Exception) {
@@ -110,9 +104,9 @@ object Subtitles {
                 val lang = o.optString("lang", "").lowercase().trim()
                 val isVtt = url.lowercase().contains(".vtt")
                 when (lang) {
-                    "ind", "id", "in" -> indo.add(Track(url, "id", "Indonesia · OpenSubtitles", isVtt))
-                    "may", "msa", "ms" -> malay.add(Track(url, "ms", "Melayu · OpenSubtitles", isVtt))
-                    "eng", "en" -> eng.add(Track(url, "en", "English · OpenSubtitles", isVtt))
+                    "ind", "id", "in" -> indo.add(Track(url, "id", "Indonesia - OpenSubtitles", isVtt))
+                    "may", "msa", "ms" -> malay.add(Track(url, "ms", "Melayu - OpenSubtitles", isVtt))
+                    "eng", "en" -> eng.add(Track(url, "en", "English - OpenSubtitles", isVtt))
                 }
             }
         } catch (_: Exception) {
