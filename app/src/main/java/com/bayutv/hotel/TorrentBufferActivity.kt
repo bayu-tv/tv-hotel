@@ -108,8 +108,13 @@ class TorrentBufferActivity : AppCompatActivity() {
             }
         }
 
+        val resumeMs = intent.getLongExtra("resume_ms", 0L)
         val badge = TextView(this).apply {
-            text = "B-BOX P2P STREAMING - HTTP BRIDGE"
+            text = if (resumeMs > 60000L) {
+                "B-BOX P2P STREAMING - LANJUTKAN MENIT KE-${resumeMs / 60000L}"
+            } else {
+                "B-BOX P2P STREAMING - HTTP BRIDGE"
+            }
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 11f))
             setTextColor(brassLight)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -179,10 +184,10 @@ class TorrentBufferActivity : AppCompatActivity() {
         cancelBtn.requestFocus()
 
         ui.postDelayed(waitTicker, 1000L)
-        startModernTorrentStream(magnetUrl)
+        startModernTorrentStream(magnetUrl, resumeMs)
     }
 
-    private fun startModernTorrentStream(magnetUrl: String) {
+    private fun startModernTorrentStream(magnetUrl: String, resumeMs: Long) {
         Thread {
             try {
                 val saveDir = File(cacheDir, "torrent_cache")
@@ -211,7 +216,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                 sm.start(SessionParams(sp))
                 sessionManager = sm
 
-                val metadataBytes = sm.fetchMagnet(magnetUrl, 40, saveDir)
+                val metadataBytes = sm.fetchMagnet(magnetUrl, 45, saveDir)
                 if (cancelled || isFinishing) return@Thread
 
                 if (metadataBytes == null || metadataBytes.isEmpty()) {
@@ -219,7 +224,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                         if (!cancelled && !isFinishing) {
                             progressBar.isIndeterminate = false
                             statusText.text = "Metadata Tidak Ditemukan"
-                            detailText.text = "Seeder tidak merespons. Pilih sumber urutan lain dengan seeder lebih besar."
+                            detailText.text = "Seeder server ini sedang offline. Kembali dan pilih Ganti Server."
                         }
                     }
                     return@Thread
@@ -232,12 +237,17 @@ class TorrentBufferActivity : AppCompatActivity() {
                 val relPath = files.filePath(selectedIdx)
                 val fileNameLower = relPath.lowercase(Locale.US)
                 val isMp4Like = fileNameLower.endsWith(".mp4") || fileNameLower.endsWith(".mov")
+                val tmdbKind = intent.getStringExtra("tmdb_kind") ?: "movie"
 
                 ui.post {
                     if (!cancelled && !isFinishing) {
                         progressBar.isIndeterminate = false
                         progressBar.progress = 2
-                        statusText.text = "Metadata ditemukan, menyiapkan buffer cepat..."
+                        statusText.text = if (resumeMs > 60000L) {
+                            "Metadata ditemukan, menyiapkan posisi menit ke-${resumeMs / 60000L}..."
+                        } else {
+                            "Metadata ditemukan, menyiapkan buffer cepat..."
+                        }
                     }
                 }
 
@@ -262,22 +272,38 @@ class TorrentBufferActivity : AppCompatActivity() {
                 val lastPiece = ti.mapFile(selectedIdx, (fileSize - 1L).coerceAtLeast(0L), 1).piece()
                 val pieceLen = ti.pieceLength().coerceAtLeast(16384)
 
-                val headPieces = ((6L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 16)
+                val headBytesTarget = if (resumeMs > 60000L) 3L * 1024L * 1024L else 6L * 1024L * 1024L
+                val headPieces = (headBytesTarget / pieceLen.toLong()).toInt().coerceIn(2, 16)
                 val headEnd = (firstPiece + headPieces).coerceAtMost(lastPiece)
 
-                val criticalPieces = ArrayList<Int>()
+                val criticalSet = LinkedHashSet<Int>()
                 for (p in firstPiece..headEnd) {
-                    criticalPieces.add(p)
-                }
-                if (isMp4Like && lastPiece > headEnd) {
-                    criticalPieces.add(lastPiece)
+                    criticalSet.add(p)
                 }
 
+                if (resumeMs > 60000L && fileSize > 20L * 1024L * 1024L) {
+                    val estTotalMs = if (tmdbKind == "tv") 24L * 60000L else 110L * 60000L
+                    val ratio = (resumeMs.toDouble() / estTotalMs.toDouble()).coerceIn(0.02, 0.96)
+                    val estByte = (fileSize.toDouble() * ratio).toLong().coerceIn(0L, fileSize - 1L)
+                    val resumePiece = ti.mapFile(selectedIdx, estByte, 1).piece()
+                    val resumeSpan = ((3L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 8)
+                    val rStart = (resumePiece - 1).coerceAtLeast(firstPiece)
+                    val rEnd = (resumePiece + resumeSpan).coerceAtMost(lastPiece)
+                    for (p in rStart..rEnd) {
+                        criticalSet.add(p)
+                    }
+                }
+
+                if (isMp4Like && lastPiece > headEnd) {
+                    criticalSet.add(lastPiece)
+                }
+
+                val criticalPieces = ArrayList(criticalSet)
                 val targetMb = (criticalPieces.size * pieceLen.toLong()) / (1024f * 1024f)
 
                 for ((idx, p) in criticalPieces.withIndex()) {
                     th.piecePriority(p, Priority.TOP_PRIORITY)
-                    th.setPieceDeadline(p, 300 + (idx * 250))
+                    th.setPieceDeadline(p, 250 + (idx * 200))
                 }
                 th.resume()
 
@@ -288,7 +314,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                             readyCount++
                         } else {
                             th.piecePriority(p, Priority.TOP_PRIORITY)
-                            th.setPieceDeadline(p, 300 + (idx * 250))
+                            th.setPieceDeadline(p, 250 + (idx * 200))
                         }
                     }
 
@@ -333,7 +359,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                                         putExtras(intent)
                                         putExtra("url", streamUrl)
                                     }
-                                    ContinueWatch.saveFromIntent(this, playIntent, 0L)
+                                    ContinueWatch.saveFromIntent(this, playIntent, resumeMs)
                                     playerLauncher.launch(playIntent)
                                 }
                             }
@@ -419,7 +445,8 @@ class TorrentBufferActivity : AppCompatActivity() {
         pieceLen: Int
     ) {
         try {
-            socket.soTimeout = 30000
+            socket.soTimeout = 90000
+            socket.tcpNoDelay = true
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
             val requestLine = reader.readLine() ?: return
             val isHead = requestLine.startsWith("HEAD ", ignoreCase = true)
@@ -475,7 +502,7 @@ class TorrentBufferActivity : AppCompatActivity() {
             if (isHead || contentLength <= 0L) return
 
             var waitFile = 0
-            while (!videoFile.exists() && waitFile < 50 && serverRunning && !cancelled) {
+            while (!videoFile.exists() && waitFile < 80 && serverRunning && !cancelled) {
                 Thread.sleep(100L)
                 waitFile++
             }
@@ -493,11 +520,11 @@ class TorrentBufferActivity : AppCompatActivity() {
 
                     if (piece != lastPrioritizedPiece) {
                         lastPrioritizedPiece = piece
-                        val lookAheadEnd = (piece + 8).coerceAtMost(lastPiece)
+                        val lookAheadEnd = (piece + 16).coerceAtMost(lastPiece)
                         for (p in piece..lookAheadEnd) {
                             try {
                                 th.piecePriority(p, Priority.TOP_PRIORITY)
-                                th.setPieceDeadline(p, 150 + (p - piece) * 150)
+                                th.setPieceDeadline(p, 120 + (p - piece) * 120)
                             } catch (_: Throwable) {
                             }
                         }
@@ -507,13 +534,13 @@ class TorrentBufferActivity : AppCompatActivity() {
                     while ((!th.havePiece(piece) || !th.havePiece(nextPiece)) &&
                         serverRunning && !cancelled && !isFinishing && !socket.isClosed
                     ) {
-                        if (stallLoops % 12 == 0) {
+                        if (stallLoops % 10 == 0) {
                             try {
                                 th.piecePriority(piece, Priority.TOP_PRIORITY)
-                                th.setPieceDeadline(piece, 100)
+                                th.setPieceDeadline(piece, 80)
                                 if (nextPiece != piece) {
                                     th.piecePriority(nextPiece, Priority.TOP_PRIORITY)
-                                    th.setPieceDeadline(nextPiece, 200)
+                                    th.setPieceDeadline(nextPiece, 160)
                                 }
                             } catch (_: Throwable) {
                             }
