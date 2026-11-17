@@ -279,7 +279,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // PENYIMPANAN RIWAYAT TERAKHIR DIPUTAR (< 5 KB) & RADIO MANUAL
     // =========================================================================
     object RecentHistoryStore {
-        private const val PREF_NAME = "varotv_recent"
+        private const val PREF_NAME = "bbox_recent"
         private const val KEY_LIST = "recent_tracks"
         private const val MAX_ITEMS = 15
 
@@ -340,7 +340,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     object CustomRadioStore {
-        private const val PREF_NAME = "varotv_custom_radios"
+        private const val PREF_NAME = "bbox_custom_radios"
         private const val KEY_LIST = "radios_json"
 
         fun getRadios(ctx: Context): MutableList<Track> {
@@ -506,7 +506,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     object PlaylistStore {
-        private const val PREF_NAME = "varotv_playlists"
+        private const val PREF_NAME = "bbox_playlists"
         private const val KEY_DATA = "playlists_json"
 
         fun getLocalPlaylists(ctx: Context): MutableList<UserPlaylist> {
@@ -1451,7 +1451,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     val conn = URL(qUrl).openConnection() as HttpURLConnection
                     conn.connectTimeout = 5000
                     conn.readTimeout = 7000
-                    conn.setRequestProperty("User-Agent", "VaroTV/1.0")
+                    conn.setRequestProperty("User-Agent", "BBoxTV/1.0")
                     if (conn.responseCode != 200) continue
                     val raw = conn.inputStream.bufferedReader().use { it.readText() }.trim()
                     val obj = if (raw.startsWith("[")) {
@@ -1498,7 +1498,7 @@ class RadioMusicActivity : AppCompatActivity() {
     private val greenOk = 0xFF52C47A.toInt()
     private val redDead = 0xFFE06C65.toInt()
 
-    private val prefs by lazy { getSharedPreferences("varotv", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("bbox", MODE_PRIVATE) }
     private val ui = Handler(Looper.getMainLooper())
     private val tabs = arrayOf("Cari Lagu", "Terakhir", "Playlist Saya", "Radio ID", "Murottal & Lofi", "Musik Lokal")
     private val tabViews = ArrayList<TextView>()
@@ -1637,7 +1637,7 @@ class RadioMusicActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(8))
         }
-        val brand = tv("VARO AUDIO", 18f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+        val brand = tv("B-BOX AUDIO", 18f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.1f
         }
         brandRow.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
@@ -2400,7 +2400,7 @@ class RadioMusicActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(4), 0, dp(4), dp(2))
         }
-        fullQualityLabel = tv("VARO HI-FI AUDIO", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
+        fullQualityLabel = tv("B-BOX HI-FI AUDIO", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
             letterSpacing = 0.1f
         }
         fullTimeLabel = tv("00:00 / 00:00", 12f, brassLight, Typeface.DEFAULT_BOLD).apply {
@@ -3515,7 +3515,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 val conn = URL("https://de1.api.radio-browser.info/json/stations/bycountrycodeexact/ID?limit=25&order=clickcount&reverse=true&hidebroken=true").openConnection() as HttpURLConnection
                 conn.connectTimeout = 7000
                 conn.readTimeout = 9000
-                conn.setRequestProperty("User-Agent", "VaroTV/1.0")
+                conn.setRequestProperty("User-Agent", "BBoxTV/1.0")
                 if (conn.responseCode == 200) {
                     val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
                     for (i in 0 until arr.length()) {
