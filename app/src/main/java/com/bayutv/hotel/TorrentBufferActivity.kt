@@ -64,7 +64,7 @@ class TorrentBufferActivity : AppCompatActivity() {
             } catch (_: Throwable) {
                 0L
             }
-            statusText.text = "Menghubungkan ke jaringan seeder... (${waitSeconds}d)"
+            statusText.text = "Menghubungkan ke seeder... (${waitSeconds}d)"
             detailText.text = "Node DHT aktif: $nodes  |  Mengambil metadata magnet..."
             ui.postDelayed(this, 1000L)
         }
@@ -100,7 +100,7 @@ class TorrentBufferActivity : AppCompatActivity() {
         }
 
         val badge = TextView(this).apply {
-            text = "B-BOX P2P ENGINE - LIBTORRENT4J 2.1"
+            text = "B-BOX P2P STREAMING - FAST BUFFER"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 11f))
             setTextColor(brassLight)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -127,7 +127,7 @@ class TorrentBufferActivity : AppCompatActivity() {
         card.addView(progressBar, LinearLayout.LayoutParams(dp(440), dp(14)))
 
         statusText = TextView(this).apply {
-            text = "Menghubungkan ke jaringan seeder..."
+            text = "Menghubungkan ke seeder..."
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 15f))
             setTextColor(ivory)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -137,7 +137,7 @@ class TorrentBufferActivity : AppCompatActivity() {
         card.addView(statusText)
 
         detailText = TextView(this).apply {
-            text = "Menginisialisasi DHT & tracker modern..."
+            text = "Menyiapkan koneksi cepat P2P..."
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 12f))
             setTextColor(mute)
             gravity = Gravity.CENTER
@@ -191,22 +191,26 @@ class TorrentBufferActivity : AppCompatActivity() {
                     )
                     setBoolean(settings_pack.bool_types.enable_dht.swigValue(), true)
                     setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
-                    setInteger(settings_pack.int_types.connections_limit.swigValue(), 120)
+                    setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), true)
+                    setBoolean(settings_pack.bool_types.enable_natpmp.swigValue(), true)
+                    setInteger(settings_pack.int_types.connections_limit.swigValue(), 200)
+                    setInteger(settings_pack.int_types.max_out_request_queue.swigValue(), 1500)
+                    setInteger(settings_pack.int_types.max_allowed_in_request_queue.swigValue(), 2000)
                 }
 
                 val sm = SessionManager()
                 sm.start(SessionParams(sp))
                 sessionManager = sm
 
-                val metadataBytes = sm.fetchMagnet(magnetUrl, 45, saveDir)
+                val metadataBytes = sm.fetchMagnet(magnetUrl, 40, saveDir)
                 if (cancelled || isFinishing) return@Thread
 
                 if (metadataBytes == null || metadataBytes.isEmpty()) {
                     ui.post {
                         if (!cancelled && !isFinishing) {
                             progressBar.isIndeterminate = false
-                            statusText.text = "Metadata Tidak Ditemukan (Timeout)"
-                            detailText.text = "Seeder tidak merespons dalam 45 detik. Coba pilih sumber urutan lain."
+                            statusText.text = "Metadata Tidak Ditemukan"
+                            detailText.text = "Seeder tidak merespons. Pilih sumber urutan lain dengan seeder lebih besar."
                         }
                     }
                     return@Thread
@@ -215,12 +219,15 @@ class TorrentBufferActivity : AppCompatActivity() {
                 metadataReady = true
                 val ti = TorrentInfo(metadataBytes)
                 val selectedIdx = pickVideoFileIndex(ti, intent.getIntExtra("file_idx", -1))
+                val files = ti.files()
+                val fileNameLower = files.filePath(selectedIdx).lowercase(Locale.US)
+                val isMp4Like = fileNameLower.endsWith(".mp4") || fileNameLower.endsWith(".mov")
 
                 ui.post {
                     if (!cancelled && !isFinishing) {
                         progressBar.isIndeterminate = false
                         progressBar.progress = 2
-                        statusText.text = "Metadata ditemukan, menyiapkan buffer video..."
+                        statusText.text = "Metadata ditemukan, menyiapkan buffer cepat..."
                     }
                 }
 
@@ -230,7 +237,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                     if (cancelled || isFinishing) return@Thread
                     handle = sm.find(ti.infoHash())
                     if (handle != null && handle.isValid) break
-                    Thread.sleep(200L)
+                    Thread.sleep(150L)
                 }
 
                 val th = handle ?: return@Thread
@@ -240,41 +247,45 @@ class TorrentBufferActivity : AppCompatActivity() {
                     th.filePriority(i, if (i == selectedIdx) Priority.DEFAULT else Priority.IGNORE)
                 }
 
-                val files = ti.files()
                 val fileSize = files.fileSize(selectedIdx).coerceAtLeast(1L)
                 val firstPiece = ti.mapFile(selectedIdx, 0L, 1).piece()
                 val lastPiece = ti.mapFile(selectedIdx, (fileSize - 1L).coerceAtLeast(0L), 1).piece()
                 val pieceLen = ti.pieceLength().coerceAtLeast(16384)
-                val headPieces = ((14L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 40)
+
+                // Target buffer awal ~6 MB agar film cepat terbuka
+                val headPieces = ((6L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 16)
                 val headEnd = (firstPiece + headPieces).coerceAtMost(lastPiece)
 
-                val criticalPieces = LinkedHashSet<Int>()
+                val criticalPieces = ArrayList<Int>()
                 for (p in firstPiece..headEnd) {
                     criticalPieces.add(p)
                 }
-                if (lastPiece > firstPiece) {
-                    criticalPieces.add((lastPiece - 1).coerceAtLeast(firstPiece))
+                // Hanya MP4/MOV yang butuh 1 blok paling akhir untuk membaca moov atom
+                if (isMp4Like && lastPiece > headEnd) {
                     criticalPieces.add(lastPiece)
                 }
 
-                for (p in criticalPieces) {
+                val targetMb = (criticalPieces.size * pieceLen.toLong()) / (1024f * 1024f)
+
+                for ((idx, p) in criticalPieces.withIndex()) {
                     th.piecePriority(p, Priority.TOP_PRIORITY)
-                    th.setPieceDeadline(p, 1000)
+                    th.setPieceDeadline(p, 300 + (idx * 250))
                 }
                 th.resume()
 
                 while (!cancelled && !isFinishing && !playerLaunched) {
                     var readyCount = 0
-                    for (p in criticalPieces) {
+                    for ((idx, p) in criticalPieces.withIndex()) {
                         if (th.havePiece(p)) {
                             readyCount++
                         } else {
                             th.piecePriority(p, Priority.TOP_PRIORITY)
-                            th.setPieceDeadline(p, 1000)
+                            th.setPieceDeadline(p, 300 + (idx * 250))
                         }
                     }
 
                     val bufPct = ((readyCount * 100) / criticalPieces.size.coerceAtLeast(1)).coerceIn(0, 100)
+                    val doneMb = (readyCount * pieceLen.toLong()) / (1024f * 1024f)
                     val st = th.status()
                     val seeds = st.numSeeds()
                     val peers = st.numPeers()
@@ -289,8 +300,8 @@ class TorrentBufferActivity : AppCompatActivity() {
                         if (!cancelled && !isFinishing && !playerLaunched) {
                             progressBar.isIndeterminate = false
                             progressBar.progress = bufPct
-                            statusText.text = "Buffering Awal: $bufPct%"
-                            detailText.text = "Seeder aktif: $seeds ($peers peer)  |  Kecepatan: $speedStr"
+                            statusText.text = String.format(Locale.US, "Buffering Cepat: %d%% (%.1f / %.1f MB)", bufPct, doneMb, targetMb)
+                            detailText.text = "Seeder: $seeds ($peers peer)  |  Kecepatan: $speedStr"
                         }
                     }
 
@@ -312,7 +323,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                             break
                         }
                     }
-                    Thread.sleep(500L)
+                    Thread.sleep(350L)
                 }
             } catch (e: Throwable) {
                 ui.post {
