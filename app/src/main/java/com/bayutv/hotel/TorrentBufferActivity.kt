@@ -18,15 +18,18 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import com.github.se_bastiaan.torrentstream.StreamStatus
-import com.github.se_bastiaan.torrentstream.Torrent
-import com.github.se_bastiaan.torrentstream.TorrentOptions
-import com.github.se_bastiaan.torrentstream.TorrentStream
-import com.github.se_bastiaan.torrentstream.listeners.TorrentListener
+import org.libtorrent4j.Priority
+import org.libtorrent4j.SessionManager
+import org.libtorrent4j.SessionParams
+import org.libtorrent4j.SettingsPack
+import org.libtorrent4j.TorrentFlags
+import org.libtorrent4j.TorrentHandle
+import org.libtorrent4j.TorrentInfo
+import org.libtorrent4j.swig.settings_pack
 import java.io.File
 import java.util.Locale
 
-class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
+class TorrentBufferActivity : AppCompatActivity() {
 
     private val brass = 0xFFB8975A.toInt()
     private val brassLight = 0xFFE6C88F.toInt()
@@ -35,10 +38,10 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
     private val bgDark = 0xFF0B0A09.toInt()
 
     private val ui = Handler(Looper.getMainLooper())
-    private var torrentStream: TorrentStream? = null
-    private var streamPrepared = false
-    private var playerLaunched = false
-    private var cancelled = false
+    @Volatile private var sessionManager: SessionManager? = null
+    @Volatile private var metadataReady = false
+    @Volatile private var playerLaunched = false
+    @Volatile private var cancelled = false
     private var waitSeconds = 0
 
     private lateinit var titleText: TextView
@@ -54,15 +57,15 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
 
     private val waitTicker = object : Runnable {
         override fun run() {
-            if (cancelled || isFinishing || streamPrepared || playerLaunched) return
+            if (cancelled || isFinishing || metadataReady || playerLaunched) return
             waitSeconds++
-            val dhtNodes = getLiveDhtNodes()
-            statusText.text = "Menghubungkan ke jaringan seeder... (${waitSeconds}d)"
-            detailText.text = if (waitSeconds >= 30 && dhtNodes == 0L) {
-                "Node DHT: 0 — ISP memblokir semua jalur UDP/P2P."
-            } else {
-                "Node DHT aktif: $dhtNodes  |  Port acak & enkripsi aktif..."
+            val nodes = try {
+                sessionManager?.dhtNodes() ?: 0L
+            } catch (_: Throwable) {
+                0L
             }
+            statusText.text = "Menghubungkan ke jaringan seeder... (${waitSeconds}d)"
+            detailText.text = "Node DHT aktif: $nodes  |  Mengambil metadata magnet..."
             ui.postDelayed(this, 1000L)
         }
     }
@@ -97,7 +100,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         }
 
         val badge = TextView(this).apply {
-            text = "B-BOX P2P STREAMING - ENKRIPSI AKTIF"
+            text = "B-BOX P2P ENGINE - LIBTORRENT4J 2.1"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 11f))
             setTextColor(brassLight)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -134,7 +137,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         card.addView(statusText)
 
         detailText = TextView(this).apply {
-            text = "Menyiapkan jalur P2P terenkripsi..."
+            text = "Menginisialisasi DHT & tracker modern..."
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 12f))
             setTextColor(mute)
             gravity = Gravity.CENTER
@@ -166,194 +169,198 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         setContentView(root)
         cancelBtn.requestFocus()
 
-        startTorrentEngine(magnetUrl)
+        ui.postDelayed(waitTicker, 1000L)
+        startModernTorrentStream(magnetUrl)
     }
 
-    private fun startTorrentEngine(magnetUrl: String) {
+    private fun startModernTorrentStream(magnetUrl: String) {
         Thread {
-            val saveDir = File(cacheDir, "torrent_cache")
-            deleteDirRecursive(saveDir)
-            saveDir.mkdirs()
+            try {
+                val saveDir = File(cacheDir, "torrent_cache")
+                deleteDirRecursive(saveDir)
+                saveDir.mkdirs()
 
-            val options = TorrentOptions.Builder()
-                .saveLocation(saveDir)
-                .removeFilesAfterStop(true)
-                .prepareSize(12L * 1024L * 1024L)
-                .maxConnections(120)
-                .build()
+                val sp = SettingsPack().apply {
+                    setString(
+                        settings_pack.string_types.dht_bootstrap_nodes.swigValue(),
+                        "router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401,router.silotis.us:6881"
+                    )
+                    setString(
+                        settings_pack.string_types.listen_interfaces.swigValue(),
+                        "0.0.0.0:0,[::]:0"
+                    )
+                    setBoolean(settings_pack.bool_types.enable_dht.swigValue(), true)
+                    setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
+                    setInt(settings_pack.int_types.connections_limit.swigValue(), 120)
+                }
 
-            ui.post {
-                if (cancelled || isFinishing) return@post
-                try {
-                    val ts = TorrentStream.init(options)
-                    configureAntiBlockSession(ts)
-                    torrentStream = ts
-                    ts.addListener(this)
-                    ts.startStream(magnetUrl)
-                    ui.postDelayed(waitTicker, 1000L)
-                } catch (e: Throwable) {
-                    statusText.text = "Gagal memulai engine P2P"
-                    detailText.text = e.message ?: "Error tidak diketahui"
+                val sm = SessionManager()
+                sm.start(SessionParams(sp))
+                sessionManager = sm
+
+                val metadataBytes = sm.fetchMagnet(magnetUrl, 45, saveDir)
+                if (cancelled || isFinishing) return@Thread
+
+                if (metadataBytes == null || metadataBytes.isEmpty()) {
+                    ui.post {
+                        if (!cancelled && !isFinishing) {
+                            progressBar.isIndeterminate = false
+                            statusText.text = "Metadata Tidak Ditemukan (Timeout)"
+                            detailText.text = "Seeder tidak merespons dalam 45 detik. Coba pilih sumber urutan lain."
+                        }
+                    }
+                    return@Thread
+                }
+
+                metadataReady = true
+                val ti = TorrentInfo(metadataBytes)
+                val selectedIdx = pickVideoFileIndex(ti, intent.getIntExtra("file_idx", -1))
+
+                ui.post {
+                    if (!cancelled && !isFinishing) {
+                        progressBar.isIndeterminate = false
+                        progressBar.progress = 2
+                        statusText.text = "Metadata ditemukan, menyiapkan buffer video..."
+                    }
+                }
+
+                sm.download(ti, saveDir)
+                var handle: TorrentHandle? = null
+                for (attempt in 0 until 20) {
+                    if (cancelled || isFinishing) return@Thread
+                    handle = sm.find(ti.infoHash())
+                    if (handle != null && handle.isValid) break
+                    Thread.sleep(200L)
+                }
+
+                val th = handle ?: return@Thread
+                th.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+
+                for (i in 0 until ti.numFiles()) {
+                    th.filePriority(i, if (i == selectedIdx) Priority.DEFAULT else Priority.IGNORE)
+                }
+
+                val files = ti.files()
+                val fileSize = files.fileSize(selectedIdx).coerceAtLeast(1L)
+                val firstPiece = ti.mapFile(selectedIdx, 0L, 1).piece()
+                val lastPiece = ti.mapFile(selectedIdx, (fileSize - 1L).coerceAtLeast(0L), 1).piece()
+                val pieceLen = ti.pieceLength().coerceAtLeast(16384)
+                val headPieces = ((14L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 40)
+                val headEnd = (firstPiece + headPieces).coerceAtMost(lastPiece)
+
+                val criticalPieces = LinkedHashSet<Int>()
+                for (p in firstPiece..headEnd) {
+                    criticalPieces.add(p)
+                }
+                if (lastPiece > firstPiece) {
+                    criticalPieces.add((lastPiece - 1).coerceAtLeast(firstPiece))
+                    criticalPieces.add(lastPiece)
+                }
+
+                for (p in criticalPieces) {
+                    th.piecePriority(p, Priority.TOP_PRIORITY)
+                    th.setPieceDeadline(p, 1000)
+                }
+                th.resume()
+
+                while (!cancelled && !isFinishing && !playerLaunched) {
+                    var readyCount = 0
+                    for (p in criticalPieces) {
+                        if (th.havePiece(p)) {
+                            readyCount++
+                        } else {
+                            th.piecePriority(p, Priority.TOP_PRIORITY)
+                            th.setPieceDeadline(p, 1000)
+                        }
+                    }
+
+                    val bufPct = ((readyCount * 100) / criticalPieces.size.coerceAtLeast(1)).coerceIn(0, 100)
+                    val st = th.status()
+                    val seeds = st.numSeeds()
+                    val peers = st.numPeers()
+                    val speedKb = st.downloadPayloadRate() / 1024f
+                    val speedStr = if (speedKb >= 1024f) {
+                        String.format(Locale.US, "%.2f MB/s", speedKb / 1024f)
+                    } else {
+                        String.format(Locale.US, "%.0f KB/s", speedKb)
+                    }
+
+                    ui.post {
+                        if (!cancelled && !isFinishing && !playerLaunched) {
+                            progressBar.isIndeterminate = false
+                            progressBar.progress = bufPct
+                            statusText.text = "Buffering Awal: $bufPct%"
+                            detailText.text = "Seeder aktif: $seeds ($peers peer)  |  Kecepatan: $speedStr"
+                        }
+                    }
+
+                    if (readyCount >= criticalPieces.size) {
+                        val videoFile = File(saveDir, files.filePath(selectedIdx))
+                        if (videoFile.exists() && videoFile.length() > 0L) {
+                            playerLaunched = true
+                            ui.post {
+                                if (!cancelled && !isFinishing) {
+                                    val fileUri = Uri.fromFile(videoFile).toString()
+                                    val playIntent = Intent(this, VodPlayerActivity::class.java).apply {
+                                        putExtras(intent)
+                                        putExtra("url", fileUri)
+                                    }
+                                    ContinueWatch.saveFromIntent(this, playIntent, 0L)
+                                    playerLauncher.launch(playIntent)
+                                }
+                            }
+                            break
+                        }
+                    }
+                    Thread.sleep(500L)
+                }
+            } catch (e: Throwable) {
+                ui.post {
+                    if (!cancelled && !isFinishing) {
+                        progressBar.isIndeterminate = false
+                        statusText.text = "Gagal Memulai Stream P2P"
+                        detailText.text = e.message ?: "Error tidak diketahui"
+                    }
                 }
             }
         }.start()
     }
 
-    private var cachedSessionManager: Any? = null
+    private fun pickVideoFileIndex(ti: TorrentInfo, requestedIdx: Int): Int {
+        val total = ti.numFiles()
+        if (requestedIdx in 0 until total) return requestedIdx
+        val files = ti.files()
+        var bestVideoIdx = -1
+        var bestVideoSize = -1L
+        var largestIdx = 0
+        var largestSize = -1L
 
-    private fun getLiveDhtNodes(): Long {
-        try {
-            val sm = cachedSessionManager
-            if (sm != null) {
-                val dhtMethod = sm.javaClass.getMethod("dhtNodes")
-                val count = dhtMethod.invoke(sm) as? Long ?: 0L
-                if (count > 0L) return count
+        for (i in 0 until total) {
+            val sz = files.fileSize(i)
+            val name = files.filePath(i).lowercase(Locale.US)
+            if (sz > largestSize) {
+                largestSize = sz
+                largestIdx = i
             }
-        } catch (_: Throwable) {
-        }
-        return try {
-            torrentStream?.totalDhtNodes?.toLong() ?: 0L
-        } catch (_: Throwable) {
-            0L
-        }
-    }
-
-    private fun configureAntiBlockSession(ts: TorrentStream) {
-        try {
-            val smField = TorrentStream::class.java.getDeclaredField("sessionManager")
-            smField.isAccessible = true
-            val sm = smField.get(ts) ?: return
-            cachedSessionManager = sm
-
-            val spClass = Class.forName("com.frostwire.jlibtorrent.SettingsPack")
-            val sp = spClass.getDeclaredConstructor().newInstance()
-            val setStr = spClass.getMethod("setString", Int::class.javaPrimitiveType, String::class.java)
-            val setInt = spClass.getMethod("setInteger", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            val setBool = spClass.getMethod("setBoolean", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-
-            val strTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$string_types")
-            val dhtNodesKey = strTypesClass.getField("dht_bootstrap_nodes").get(null)
-            val listenIfKey = strTypesClass.getField("listen_interfaces").get(null)
-            val swigValueMethod = dhtNodesKey.javaClass.getMethod("swigValue")
-
-            setStr.invoke(
-                sp,
-                swigValueMethod.invoke(dhtNodesKey) as Int,
-                "router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401,router.silotis.us:6881"
-            )
-            setStr.invoke(
-                sp,
-                swigValueMethod.invoke(listenIfKey) as Int,
-                "0.0.0.0:0,[::]:0"
-            )
-
-            val intTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$int_types")
-            val outEncKey = intTypesClass.getField("out_enc_policy").get(null)
-            val inEncKey = intTypesClass.getField("in_enc_policy").get(null)
-            setInt.invoke(sp, swigValueMethod.invoke(outEncKey) as Int, 0)
-            setInt.invoke(sp, swigValueMethod.invoke(inEncKey) as Int, 0)
-
-            val boolTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$bool_types")
-            val enableDhtKey = boolTypesClass.getField("enable_dht").get(null)
-            setBool.invoke(sp, swigValueMethod.invoke(enableDhtKey) as Int, true)
-
-            val applyMethod = sm.javaClass.getMethod("applySettings", spClass)
-            applyMethod.invoke(sm, sp)
-
-            val restartDhtMethod = sm.javaClass.getMethod("restartDht")
-            restartDhtMethod.invoke(sm)
-        } catch (_: Throwable) {
-        }
-    }
-
-    override fun onStreamPrepared(torrent: Torrent?) {
-        if (torrent == null) return
-        streamPrepared = true
-        val fileIdx = intent.getIntExtra("file_idx", -1)
-        if (fileIdx >= 0) {
-            try {
-                torrent.setSelectedFileIndex(fileIdx)
-            } catch (_: Exception) {
+            val isVideo = name.endsWith(".mp4") || name.endsWith(".mkv") ||
+                name.endsWith(".avi") || name.endsWith(".webm") || name.endsWith(".mov")
+            if (isVideo && sz > bestVideoSize) {
+                bestVideoSize = sz
+                bestVideoIdx = i
             }
         }
-        ui.post {
-            if (!cancelled && !isFinishing) {
-                statusText.text = "Metadata torrent ditemukan, mulai buffering..."
-            }
-        }
-    }
-
-    override fun onStreamStarted(torrent: Torrent?) {
-        streamPrepared = true
-        ui.post {
-            if (!cancelled && !isFinishing) {
-                progressBar.isIndeterminate = false
-                statusText.text = "Mengunduh buffer awal (0%)..."
-            }
-        }
-    }
-
-    override fun onStreamProgress(torrent: Torrent?, status: StreamStatus?) {
-        if (status == null || cancelled || isFinishing) return
-        streamPrepared = true
-        val buf = status.bufferProgress.coerceIn(0, 100)
-        val seeds = status.seeds
-        val speedKb = status.downloadSpeed / 1024f
-        val speedStr = if (speedKb >= 1024f) {
-            String.format(Locale.US, "%.2f MB/s", speedKb / 1024f)
-        } else {
-            String.format(Locale.US, "%.0f KB/s", speedKb)
-        }
-        ui.post {
-            if (!playerLaunched && !cancelled && !isFinishing) {
-                progressBar.isIndeterminate = false
-                progressBar.progress = buf
-                statusText.text = "Buffering Awal: $buf%"
-                detailText.text = "Seeder aktif: $seeds  |  Kecepatan: $speedStr"
-            }
-        }
-    }
-
-    override fun onStreamReady(torrent: Torrent?) {
-        val videoFile = torrent?.videoFile ?: return
-        if (playerLaunched || cancelled || isFinishing) return
-        playerLaunched = true
-
-        ui.post {
-            val fileUri = Uri.fromFile(videoFile).toString()
-            val playIntent = Intent(this, VodPlayerActivity::class.java).apply {
-                putExtras(intent)
-                putExtra("url", fileUri)
-            }
-            ContinueWatch.saveFromIntent(this, playIntent, 0L)
-            playerLauncher.launch(playIntent)
-        }
-    }
-
-    override fun onStreamError(torrent: Torrent?, e: Exception?) {
-        streamPrepared = true
-        ui.post {
-            if (!cancelled && !isFinishing) {
-                progressBar.isIndeterminate = false
-                statusText.text = "Sumber Tidak Merespons"
-                detailText.text = "Coba pilih sumber urutan lain atau aktifkan 1.1.1.1 (WARP) di TV."
-            }
-        }
-    }
-
-    override fun onStreamStopped() {
+        return if (bestVideoIdx >= 0) bestVideoIdx else largestIdx
     }
 
     private fun cleanupAndFinish() {
         ui.removeCallbacks(waitTicker)
-        try {
-            torrentStream?.removeListener(this)
-            if (torrentStream?.isStreaming == true) {
-                torrentStream?.stopStream()
-            }
-        } catch (_: Exception) {
-        }
+        val sm = sessionManager
+        sessionManager = null
         Thread {
+            try {
+                sm?.stop()
+            } catch (_: Throwable) {
+            }
             deleteDirRecursive(File(cacheDir, "torrent_cache"))
         }.start()
         if (!isFinishing) {
@@ -380,13 +387,14 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
-        try {
-            torrentStream?.removeListener(this)
-            if (torrentStream?.isStreaming == true) {
-                torrentStream?.stopStream()
+        val sm = sessionManager
+        sessionManager = null
+        Thread {
+            try {
+                sm?.stop()
+            } catch (_: Throwable) {
             }
-        } catch (_: Exception) {
-        }
+        }.start()
         super.onDestroy()
     }
 }
