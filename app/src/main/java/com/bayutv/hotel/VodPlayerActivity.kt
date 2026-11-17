@@ -149,7 +149,6 @@ object ContinueWatch {
     }
 }
 
-// Pemutar B-BOX Native (Streaming Bebas Iklan & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
 class VodPlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
@@ -305,7 +304,7 @@ class VodPlayerActivity : AppCompatActivity() {
         p.playWhenReady = true
 
         val title = intent.getStringExtra("title") ?: ""
-        if (resume > 60000L) notice.show("B-BOX · $title", "Melanjutkan dari menit " + (resume / 60000L), 3000L)
+        if (resume > 60000L) notice.show("B-BOX - $title", "Melanjutkan dari menit " + (resume / 60000L), 3000L)
         else if (title.isNotEmpty()) notice.show(null, title, 2500L)
 
         val tmdbId = intent.getIntExtra("tmdb_id", 0)
@@ -401,7 +400,7 @@ class VodPlayerActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         ramadanBox.addView(
-            tv("SELAMAT BERBUKA PUASA · DOA BERBUKA", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            tv("SELAMAT BERBUKA PUASA - DOA BERBUKA", 13f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 letterSpacing = 0.08f
             }
         )
@@ -571,7 +570,7 @@ class VodPlayerActivity : AppCompatActivity() {
                 if (player?.isPlaying == true) {
                     val sisa = magrib - now
                     notice.show(
-                        "Menjelang Berbuka Puasa ($sisa menit lagi) · Dzikir Dianjurkan",
+                        "Menjelang Berbuka Puasa ($sisa menit lagi) - Dzikir Dianjurkan",
                         "Perbanyak Istighfar, Tasbih & baca:\n\"Asyhadu allā ilāha illallāh, astaghfirullāh, as'alukal-jannata wa a'ūdzu bika minan-nār.\"",
                         35000L
                     )
@@ -602,7 +601,7 @@ class VodPlayerActivity : AppCompatActivity() {
                     return
                 }
                 if (secLeft > 0) {
-                    countdownBanner.text = "⏳ Adzan ${Prayer.NAMES[i]} dalam $secLeft detik..."
+                    countdownBanner.text = "Adzan ${Prayer.NAMES[i]} dalam $secLeft detik..."
                     countdownBanner.visibility = View.VISIBLE
                     secLeft--
                     ui.postDelayed(this, 1000L)
@@ -627,9 +626,9 @@ class VodPlayerActivity : AppCompatActivity() {
         val mins = (prefs.getString("adzan_min", "4") ?: "4").toIntOrNull()?.coerceIn(1, 30) ?: 4
         val isMagribRamadan = (i == 3 && isRamadanNow())
         adzanTitleView.text = if (isMagribRamadan) {
-            "WAKTU MAGRIB · SELAMAT BERBUKA PUASA (${Prayer.fmt(minute)})"
+            "WAKTU MAGRIB - SELAMAT BERBUKA PUASA (${Prayer.fmt(minute)})"
         } else {
-            "WAKTU ADZAN ${Prayer.NAMES[i].uppercase()} · ${Prayer.fmt(minute)}"
+            "WAKTU ADZAN ${Prayer.NAMES[i].uppercase()} - ${Prayer.fmt(minute)}"
         }
         ramadanBox.visibility = if (isMagribRamadan) View.VISIBLE else View.GONE
         adzanOverlay.visibility = View.VISIBLE
