@@ -120,7 +120,6 @@ class HomeActivity : AppCompatActivity() {
         return v
     }
 
-    // Ikon vektor nada musik bawaan kode (anti-error resource hilang)
     private fun musicIconDrawable(color: Int): Drawable {
         return object : Drawable() {
             private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -131,7 +130,6 @@ class HomeActivity : AppCompatActivity() {
                 val w = bounds.width().toFloat()
                 val h = bounds.height().toFloat()
                 if (w <= 0f || h <= 0f) return
-                // Batang & palang nada ganda
                 canvas.drawRoundRect(RectF(w * 0.34f, h * 0.16f, w * 0.82f, h * 0.27f), w * 0.04f, w * 0.04f, p)
                 canvas.drawRect(RectF(w * 0.34f, h * 0.20f, w * 0.42f, h * 0.72f), p)
                 canvas.drawRect(RectF(w * 0.74f, h * 0.16f, w * 0.82f, h * 0.66f), p)
@@ -287,8 +285,8 @@ class HomeActivity : AppCompatActivity() {
         val brand = LinearLayout(this)
         brand.gravity = Gravity.CENTER_VERTICAL
         val logo = ImageView(this)
-        logo.setImageResource(R.drawable.logo_mark)
-        val logoSz = dp(if (isPhoneLayout) 22 else 30)
+        logo.setImageResource(R.drawable.ic_bbox_mark)
+        val logoSz = dp(if (isPhoneLayout) 24 else 32)
         brand.addView(logo, LinearLayout.LayoutParams(logoSz, logoSz))
         tvWelcome.setPadding(dp(8), 0, 0, 0)
         brand.addView(tvWelcome)
@@ -568,7 +566,7 @@ class HomeActivity : AppCompatActivity() {
             val c = URL(u).openConnection() as HttpURLConnection
             c.connectTimeout = 8000
             c.readTimeout = 12000
-            c.setRequestProperty("User-Agent", "BayuTV")
+            c.setRequestProperty("User-Agent", "B-Box")
             c.inputStream.bufferedReader().use { it.readText() }
         } catch (e: Exception) {
             null
@@ -753,7 +751,7 @@ class HomeActivity : AppCompatActivity() {
         prefs.edit().putString("overlay_asked", mode).apply()
         AlertDialog.Builder(this)
             .setTitle("Buka otomatis saat TV menyala")
-            .setMessage("Agar Bayu TV bisa terbuka sendiri saat TV dinyalakan, izinkan \"Tampilkan di atas aplikasi lain\" untuk Bayu TV.")
+            .setMessage("Agar B-Box bisa terbuka sendiri saat TV dinyalakan, izinkan \"Tampilkan di atas aplikasi lain\" untuk B-Box.")
             .setPositiveButton("Buka pengaturan") { _, _ ->
                 try {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
@@ -773,7 +771,7 @@ class HomeActivity : AppCompatActivity() {
             c.connectTimeout = 8000
             c.readTimeout = 10000
             c.setRequestProperty("Accept", "application/vnd.github+json")
-            c.setRequestProperty("User-Agent", "BayuTV")
+            c.setRequestProperty("User-Agent", "B-Box")
             val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
             val tag = o.getString("tag_name").removePrefix("v").toIntOrNull() ?: return
             val now = PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
@@ -802,7 +800,7 @@ class HomeActivity : AppCompatActivity() {
 
     private fun startUpdate(url: String) {
         if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-            notice.show("Perlu izin", "Izinkan 'Pasang aplikasi tak dikenal' untuk Bayu TV, lalu buka lagi aplikasinya dan tekan Perbarui.", 9000L)
+            notice.show("Perlu izin", "Izinkan 'Pasang aplikasi tak dikenal' untuk B-Box, lalu buka lagi aplikasinya dan tekan Perbarui.", 9000L)
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + packageName)))
             return
         }
@@ -814,7 +812,7 @@ class HomeActivity : AppCompatActivity() {
                 val c = URL(url).openConnection() as HttpURLConnection
                 c.connectTimeout = 10000
                 c.readTimeout = 30000
-                c.setRequestProperty("User-Agent", "BayuTV")
+                c.setRequestProperty("User-Agent", "B-Box")
                 val expect = c.contentLength
                 c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
                 if (f.length() < 100000L || (expect > 0 && f.length() != expect.toLong())) throw java.io.IOException("unduhan tidak lengkap")
