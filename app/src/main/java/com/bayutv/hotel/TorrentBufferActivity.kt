@@ -56,16 +56,12 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         override fun run() {
             if (cancelled || isFinishing || streamPrepared || playerLaunched) return
             waitSeconds++
-            val dhtNodes = try {
-                torrentStream?.totalDhtNodes ?: 0
-            } catch (_: Throwable) {
-                0
-            }
+            val dhtNodes = getLiveDhtNodes()
             statusText.text = "Menghubungkan ke jaringan seeder... (${waitSeconds}d)"
-            detailText.text = if (waitSeconds >= 35 && dhtNodes == 0) {
-                "Node DHT: 0 — Jaringan operator memblokir P2P. Aktifkan aplikasi 1.1.1.1 (WARP) di TV lalu coba lagi."
+            detailText.text = if (waitSeconds >= 30 && dhtNodes == 0L) {
+                "Node DHT: 0 — ISP memblokir semua jalur UDP/P2P."
             } else {
-                "Node DHT aktif: $dhtNodes  |  Mencari peer terenkripsi..."
+                "Node DHT aktif: $dhtNodes  |  Port acak & enkripsi aktif..."
             }
             ui.postDelayed(this, 1000L)
         }
@@ -203,11 +199,31 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         }.start()
     }
 
+    private var cachedSessionManager: Any? = null
+
+    private fun getLiveDhtNodes(): Long {
+        try {
+            val sm = cachedSessionManager
+            if (sm != null) {
+                val dhtMethod = sm.javaClass.getMethod("dhtNodes")
+                val count = dhtMethod.invoke(sm) as? Long ?: 0L
+                if (count > 0L) return count
+            }
+        } catch (_: Throwable) {
+        }
+        return try {
+            torrentStream?.totalDhtNodes?.toLong() ?: 0L
+        } catch (_: Throwable) {
+            0L
+        }
+    }
+
     private fun configureAntiBlockSession(ts: TorrentStream) {
         try {
             val smField = TorrentStream::class.java.getDeclaredField("sessionManager")
             smField.isAccessible = true
             val sm = smField.get(ts) ?: return
+            cachedSessionManager = sm
 
             val spClass = Class.forName("com.frostwire.jlibtorrent.SettingsPack")
             val sp = spClass.getDeclaredConstructor().newInstance()
@@ -217,29 +233,35 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
 
             val strTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$string_types")
             val dhtNodesKey = strTypesClass.getField("dht_bootstrap_nodes").get(null)
+            val listenIfKey = strTypesClass.getField("listen_interfaces").get(null)
             val swigValueMethod = dhtNodesKey.javaClass.getMethod("swigValue")
-            val dhtNodesId = swigValueMethod.invoke(dhtNodesKey) as Int
+
             setStr.invoke(
                 sp,
-                dhtNodesId,
+                swigValueMethod.invoke(dhtNodesKey) as Int,
                 "router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401,router.silotis.us:6881"
+            )
+            setStr.invoke(
+                sp,
+                swigValueMethod.invoke(listenIfKey) as Int,
+                "0.0.0.0:0,[::]:0"
             )
 
             val intTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$int_types")
             val outEncKey = intTypesClass.getField("out_enc_policy").get(null)
             val inEncKey = intTypesClass.getField("in_enc_policy").get(null)
-            val outEncId = swigValueMethod.invoke(outEncKey) as Int
-            val inEncId = swigValueMethod.invoke(inEncKey) as Int
-            setInt.invoke(sp, outEncId, 0)
-            setInt.invoke(sp, inEncId, 0)
+            setInt.invoke(sp, swigValueMethod.invoke(outEncKey) as Int, 0)
+            setInt.invoke(sp, swigValueMethod.invoke(inEncKey) as Int, 0)
 
             val boolTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$bool_types")
             val enableDhtKey = boolTypesClass.getField("enable_dht").get(null)
-            val enableDhtId = swigValueMethod.invoke(enableDhtKey) as Int
-            setBool.invoke(sp, enableDhtId, true)
+            setBool.invoke(sp, swigValueMethod.invoke(enableDhtKey) as Int, true)
 
             val applyMethod = sm.javaClass.getMethod("applySettings", spClass)
             applyMethod.invoke(sm, sp)
+
+            val restartDhtMethod = sm.javaClass.getMethod("restartDht")
+            restartDhtMethod.invoke(sm)
         } catch (_: Throwable) {
         }
     }
