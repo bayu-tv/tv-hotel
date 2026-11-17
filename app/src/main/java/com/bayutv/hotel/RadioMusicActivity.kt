@@ -37,16 +37,24 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.BaseAudioProcessor
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import org.json.JSONArray
 import org.json.JSONObject
@@ -59,6 +67,7 @@ import org.schabi.newpipe.extractor.downloader.Response
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -112,6 +121,75 @@ class RadioMusicActivity : AppCompatActivity() {
 
     enum class PlayState {
         IDLE, RESOLVING, BUFFERING, PLAYING, PAUSED, ERROR
+    }
+
+    // =========================================================================
+    // DSP VOCAL REDUCER RINGAN (0 MB RAM TAMBAHAN · REAL-TIME STEREO PHASE)
+    // =========================================================================
+    @OptIn(UnstableApi::class)
+    class VocalReducerAudioProcessor : BaseAudioProcessor() {
+        @Volatile
+        var enabled: Boolean = false
+
+        private var lowPassL = 0f
+        private var lowPassR = 0f
+
+        override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+            if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount != 2) {
+                return AudioProcessor.AudioFormat.NOT_SET
+            }
+            lowPassL = 0f
+            lowPassR = 0f
+            return inputAudioFormat
+        }
+
+        override fun queueInput(inputBuffer: ByteBuffer) {
+            val pos = inputBuffer.position()
+            val limit = inputBuffer.limit()
+            val size = limit - pos
+            if (size <= 0) return
+
+            val out = replaceOutputBuffer(size)
+            if (!enabled) {
+                out.put(inputBuffer)
+                out.flip()
+                return
+            }
+
+            var i = pos
+            while (i + 3 < limit) {
+                val l = ((inputBuffer.get(i + 1).toInt() shl 8) or (inputBuffer.get(i).toInt() and 0xFF)).toShort().toInt()
+                val r = ((inputBuffer.get(i + 3).toInt() shl 8) or (inputBuffer.get(i + 2).toInt() and 0xFF)).toShort().toInt()
+
+                // Pertahankan frekuensi rendah (bass & drum) agar musik tetap bulat
+                lowPassL += 0.025f * (l - lowPassL)
+                lowPassR += 0.025f * (r - lowPassR)
+                val bassMono = ((lowPassL + lowPassR) * 0.5f).toInt()
+
+                // Kurangi vokal di kanal tengah (L - R) pada frekuensi menengah & tinggi
+                val side = ((l - r) * 0.88f).toInt()
+                val outL = (bassMono + side).coerceIn(-32768, 32767)
+                val outR = (bassMono - side).coerceIn(-32768, 32767)
+
+                out.put((outL and 0xFF).toByte())
+                out.put(((outL shr 8) and 0xFF).toByte())
+                out.put((outR and 0xFF).toByte())
+                out.put(((outR shr 8) and 0xFF).toByte())
+                i += 4
+            }
+            inputBuffer.position(limit)
+            out.flip()
+        }
+
+        override fun onFlush() {
+            lowPassL = 0f
+            lowPassR = 0f
+        }
+
+        override fun onReset() {
+            lowPassL = 0f
+            lowPassR = 0f
+        }
     }
 
     // =========================================================================
@@ -376,7 +454,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // Downloader HTTP untuk NewPipeExtractor
     class NativeHttpDownloader : Downloader() {
         override fun execute(request: Request): Response {
             val targetUrl = URL(request.url())
@@ -423,7 +500,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // Penyimpanan Playlist Lokal & Sinkronisasi Playlist/Album YouTube Music
     object PlaylistStore {
         private const val PREF_NAME = "bayutv_playlists"
         private const val KEY_DATA = "playlists_json"
@@ -706,13 +782,15 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // MESIN PEMUTAR GLOBAL + SLEEP TIMER + AUTO-RELEASE RAM
+    // MESIN PEMUTAR GLOBAL + KARAOKE GABUNGAN (MINUS-ONE & VOCAL REDUCER)
     // =========================================================================
     object MusicEngine {
         private const val WEB_UA = GoogleMusicAuth.CHROME_UA
         private const val IDLE_RELEASE_MS = 5 * 60 * 1000L
         private val mainHandler = Handler(Looper.getMainLooper())
         private var appContext: Context? = null
+
+        val vocalReducer = VocalReducerAudioProcessor()
 
         var player: ExoPlayer? = null
         var currentTrack: Track? = null
@@ -726,6 +804,15 @@ class RadioMusicActivity : AppCompatActivity() {
         var shuffleEnabled: Boolean = false
         var repeatMode: Int = 0
         var onStateChanged: (() -> Unit)? = null
+
+        // State Karaoke Gabungan
+        var isKaraokeMinusOneActive: Boolean = false
+        var vocalReducerEnabled: Boolean = false
+            set(value) {
+                field = value
+                vocalReducer.enabled = value
+            }
+        var lyricOffsetMs: Long = 0L
 
         var sleepEndTimeMs: Long = 0L
 
@@ -823,7 +910,14 @@ class RadioMusicActivity : AppCompatActivity() {
             mainHandler.post { onStateChanged?.invoke() }
         }
 
-        fun playTrack(ctx: Context, track: Track, list: List<Track>, index: Int, resumeFromMs: Long = 0L) {
+        fun playTrack(
+            ctx: Context,
+            track: Track,
+            list: List<Track>,
+            index: Int,
+            resumeFromMs: Long = 0L,
+            forceMinusOne: Boolean = false
+        ) {
             val appCtx = ctx.applicationContext
             appContext = appCtx
             cancelIdleRelease()
@@ -833,23 +927,37 @@ class RadioMusicActivity : AppCompatActivity() {
             queue = list
             queueIndex = index
             savedResumePosMs = resumeFromMs
+            isKaraokeMinusOneActive = forceMinusOne
+            lyricOffsetMs = 0L
+
+            if (forceMinusOne) {
+                lyricsEnabled = true
+            }
+
             state = PlayState.RESOLVING
             statusDetail = when {
+                forceMinusOne -> "Mencari musik Karaoke Minus-One..."
                 track.isYtMusic -> "Mendekripsi aliran audio YouTube..."
                 track.isLive -> "Menghubungkan ke server siaran..."
                 else -> "Membuka file audio..."
             }
-            lyrics = emptyList()
-            lyricStatus = when {
-                !lyricsEnabled -> "Lirik dinonaktifkan"
-                track.isLive -> "Siaran Langsung · Lirik tidak tersedia"
-                else -> "Mencari lirik karaoke..."
+
+            // Pertahankan lirik jika beralih mode karaoke pada lagu yang sama
+            if (!forceMinusOne || lyrics.isEmpty()) {
+                lyrics = emptyList()
+                lyricStatus = when {
+                    !lyricsEnabled -> "Lirik dinonaktifkan"
+                    track.isLive -> "Siaran Langsung · Lirik tidak tersedia"
+                    else -> "Mencari lirik karaoke..."
+                }
             }
             notifyUi()
 
-            Thread {
-                RecentHistoryStore.recordPlay(appCtx, track)
-            }.start()
+            if (!forceMinusOne) {
+                Thread {
+                    RecentHistoryStore.recordPlay(appCtx, track)
+                }.start()
+            }
 
             mainHandler.post {
                 try {
@@ -860,26 +968,8 @@ class RadioMusicActivity : AppCompatActivity() {
 
             Thread {
                 try {
-                    val resolved: ResolvedStream? = when {
-                        track.isYtMusic && track.streamUrl.isEmpty() -> resolveViaNewPipe(track)
-                        track.isLive -> resolveRadioUrl(track.streamUrl)
-                        else -> ResolvedStream(track.streamUrl, WEB_UA, "Lokal")
-                    }
-
-                    if (seq != playSeq) return@Thread
-
-                    if (resolved == null || resolved.url.isBlank()) {
-                        state = PlayState.ERROR
-                        if (statusDetail.startsWith("Mendekripsi")) {
-                            statusDetail = "Gagal memuat audio lagu ini. Coba lagu lain."
-                        }
-                        lyricStatus = statusDetail
-                        scheduleIdleRelease()
-                        notifyUi()
-                        return@Thread
-                    }
-
-                    if (!track.isLive && lyricsEnabled) {
+                    // Ambil lirik dari judul lagu asli terlebih dahulu
+                    if (!track.isLive && lyricsEnabled && lyrics.isEmpty()) {
                         val fetchedLyrics = fetchSyncedLyrics(track.title, track.artist)
                         if (seq == playSeq) {
                             lyrics = fetchedLyrics
@@ -890,6 +980,44 @@ class RadioMusicActivity : AppCompatActivity() {
                             }
                             notifyUi()
                         }
+                    }
+
+                    val resolved: ResolvedStream? = when {
+                        forceMinusOne -> resolveKaraokeMinusOne(track)
+                        track.isYtMusic && track.streamUrl.isEmpty() -> resolveViaNewPipe(track)
+                        track.isLive -> resolveRadioUrl(track.streamUrl)
+                        else -> ResolvedStream(track.streamUrl, WEB_UA, "Lokal")
+                    }
+
+                    if (seq != playSeq) return@Thread
+
+                    if (resolved == null || resolved.url.isBlank()) {
+                        if (forceMinusOne) {
+                            // Jika versi Minus-One tidak ditemukan, otomatis kembali ke lagu asli + Vocal Reducer
+                            isKaraokeMinusOneActive = false
+                            vocalReducerEnabled = true
+                            statusDetail = "Minus-One tidak ada · Beralih ke Vocal Reducer"
+                            notifyUi()
+                            val fallbackOriginal = when {
+                                track.isYtMusic && track.streamUrl.isEmpty() -> resolveViaNewPipe(track)
+                                track.isLive -> resolveRadioUrl(track.streamUrl)
+                                else -> ResolvedStream(track.streamUrl, WEB_UA, "Lokal")
+                            }
+                            if (seq == playSeq && fallbackOriginal != null && fallbackOriginal.url.isNotBlank()) {
+                                mainHandler.post {
+                                    if (seq == playSeq) startExoPlayer(appCtx, fallbackOriginal, seq, resumeFromMs)
+                                }
+                                return@Thread
+                            }
+                        }
+                        state = PlayState.ERROR
+                        if (statusDetail.startsWith("Mendekripsi") || statusDetail.startsWith("Mencari musik")) {
+                            statusDetail = "Gagal memuat audio lagu ini. Coba lagu lain."
+                        }
+                        lyricStatus = statusDetail
+                        scheduleIdleRelease()
+                        notifyUi()
+                        return@Thread
                     }
 
                     mainHandler.post {
@@ -906,6 +1034,59 @@ class RadioMusicActivity : AppCompatActivity() {
                     }
                 }
             }.start()
+        }
+
+        fun toggleKaraokeMinusOne(ctx: Context, onFallbackMessage: (String) -> Unit) {
+            val track = currentTrack ?: return
+            if (track.isLive) {
+                onFallbackMessage("Mode Karaoke tidak tersedia untuk siaran radio langsung.")
+                return
+            }
+            if (!track.isYtMusic) {
+                // Untuk file MP3 lokal, langsung aktifkan Vocal Reducer + Lirik
+                lyricsEnabled = true
+                vocalReducerEnabled = !vocalReducerEnabled
+                refreshLyricsIfNeeded()
+                notifyUi()
+                onFallbackMessage(
+                    if (vocalReducerEnabled) {
+                        "File lokal: Vocal Reducer diaktifkan untuk mengurangi suara penyanyi."
+                    } else {
+                        "Vocal Reducer dinonaktifkan."
+                    }
+                )
+                return
+            }
+
+            if (isKaraokeMinusOneActive) {
+                // Kembali ke versi audio asli
+                playTrack(ctx, track, queue, queueIndex.coerceAtLeast(0), resumeFromMs = 0L, forceMinusOne = false)
+            } else {
+                // Matikan Vocal Reducer sementara karena versi Minus-One sudah tanpa vokal
+                vocalReducerEnabled = false
+                playTrack(ctx, track, queue, queueIndex.coerceAtLeast(0), resumeFromMs = 0L, forceMinusOne = true)
+            }
+        }
+
+        private fun resolveKaraokeMinusOne(track: Track): ResolvedStream? {
+            ensureNewPipeInit()
+            val cleanTitle = track.title.replace(Regex("""\(.*?\)|\[.*?]"""), "").trim()
+            val cleanArtist = track.artist.split("•", "·", ",", "feat.", "ft.").firstOrNull()?.trim() ?: ""
+
+            val queries = listOf(
+                "$cleanTitle $cleanArtist karaoke minus one",
+                "$cleanTitle $cleanArtist karaoke",
+                "$cleanTitle $cleanArtist instrumental"
+            )
+            for (q in queries) {
+                val vid = searchFallbackVideoId(q.trim(), track.id)
+                if (vid != null) {
+                    extractSingleVideoWithNewPipe(vid)?.let { st ->
+                        return ResolvedStream(st.url, st.userAgent, "Karaoke Minus-One", st.cookie)
+                    }
+                }
+            }
+            return null
         }
 
         private fun resolveViaNewPipe(track: Track): ResolvedStream? {
@@ -998,6 +1179,7 @@ class RadioMusicActivity : AppCompatActivity() {
             }.start()
         }
 
+        @OptIn(UnstableApi::class)
         private fun startExoPlayer(appCtx: Context, resolved: ResolvedStream, seq: Int, resumeFromMs: Long) {
             try {
                 player?.release()
@@ -1012,9 +1194,25 @@ class RadioMusicActivity : AppCompatActivity() {
                 .setBufferDurationsMs(8000, 22000, 1500, 2500)
                 .build()
 
+            val renderersFactory = object : DefaultRenderersFactory(appCtx) {
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): AudioSink {
+                    return DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(arrayOf(vocalReducer))
+                        .build()
+                }
+            }
+
             val isLocalFile = !resolved.url.startsWith("http", ignoreCase = true)
             val exo = if (isLocalFile) {
-                ExoPlayer.Builder(appCtx).setLoadControl(lc).build()
+                ExoPlayer.Builder(appCtx, renderersFactory)
+                    .setLoadControl(lc)
+                    .build()
             } else {
                 val dsf = DefaultHttpDataSource.Factory()
                     .setAllowCrossProtocolRedirects(true)
@@ -1024,7 +1222,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 if (resolved.cookie.isNotBlank()) {
                     dsf.setDefaultRequestProperties(mapOf("Cookie" to resolved.cookie))
                 }
-                ExoPlayer.Builder(appCtx)
+                ExoPlayer.Builder(appCtx, renderersFactory)
                     .setLoadControl(lc)
                     .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
                     .build()
@@ -1107,7 +1305,14 @@ class RadioMusicActivity : AppCompatActivity() {
             if (exo == null) {
                 val track = currentTrack ?: return
                 val ctx = appContext ?: return
-                playTrack(ctx, track, queue, queueIndex.coerceAtLeast(0), resumeFromMs = savedResumePosMs)
+                playTrack(
+                    ctx,
+                    track,
+                    queue,
+                    queueIndex.coerceAtLeast(0),
+                    resumeFromMs = savedResumePosMs,
+                    forceMinusOne = isKaraokeMinusOneActive
+                )
                 return
             }
             try {
@@ -1366,6 +1571,8 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private var isFullPlayerOpen = false
     private lateinit var fullPlayerOverlay: LinearLayout
+    private lateinit var fullBtnKaraokeMode: TextView
+    private lateinit var fullBtnVocalReducer: TextView
     private lateinit var fullBtnSleepTimer: TextView
     private lateinit var fullBtnNightMode: TextView
     private lateinit var fullBtnToggleLyrics: TextView
@@ -1382,6 +1589,7 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var lyricMiniArt: ImageView
     private lateinit var lyricMiniTitle: TextView
     private lateinit var lyricMiniSub: TextView
+    private lateinit var lyricOffsetLabel: TextView
     private lateinit var lyricScroll: ScrollView
     private lateinit var lyricBox: LinearLayout
     private val lyricViews = ArrayList<TextView>()
@@ -1839,7 +2047,7 @@ class RadioMusicActivity : AppCompatActivity() {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
-        miniSubtitle = tv("Ketuk untuk layar penuh & lirik ▲", 11f, brassLight).apply {
+        miniSubtitle = tv("Ketuk untuk layar penuh & karaoke ▲", 11f, brassLight).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
@@ -1897,6 +2105,33 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val btnMinimize = actionPillBtn("⌄ Perkecil") { closeFullPlayer() }
         topHeader.addView(btnMinimize)
+
+        fullBtnKaraokeMode = actionPillBtn("🎤 Karaoke: OFF") {
+            MusicEngine.toggleKaraokeMinusOne(this) { msg ->
+                notice.show("Mode Karaoke", msg, 3500L)
+            }
+            syncAllPlayerViews()
+        }
+        topHeader.addView(fullBtnKaraokeMode, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
+
+        fullBtnVocalReducer = actionPillBtn("🔇 Vokal: OFF") {
+            MusicEngine.vocalReducerEnabled = !MusicEngine.vocalReducerEnabled
+            if (MusicEngine.vocalReducerEnabled && !MusicEngine.lyricsEnabled && MusicEngine.currentTrack?.isLive != true) {
+                MusicEngine.lyricsEnabled = true
+                MusicEngine.refreshLyricsIfNeeded()
+            }
+            syncAllPlayerViews()
+            notice.show(
+                "Vocal Reducer",
+                if (MusicEngine.vocalReducerEnabled) {
+                    "Suara vokal dikurangi secara real-time."
+                } else {
+                    "Suara vokal dikembalikan normal."
+                },
+                2500L
+            )
+        }
+        topHeader.addView(fullBtnVocalReducer, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
 
         fullBtnToggleLyrics = actionPillBtn(if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF") {
             MusicEngine.lyricsEnabled = !MusicEngine.lyricsEnabled
@@ -2041,7 +2276,41 @@ class RadioMusicActivity : AppCompatActivity() {
         lyricMetaCol.addView(lyricMiniTitle)
         lyricMetaCol.addView(lyricMiniSub)
         lyricSongBar.addView(lyricMetaCol, LinearLayout.LayoutParams(0, -2, 1f))
-        fullLyricsSection.addView(lyricSongBar, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        fullLyricsSection.addView(lyricSongBar, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+
+        // Baris Penyelaras Ketukan Lirik (Untuk menyesuaikan intro musik Karaoke Minus-One)
+        val syncControlRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0x18FFFFFF)
+            }
+        }
+        val btnLyricMinus = actionPillBtn("⏪ -0.5 dtk") {
+            MusicEngine.lyricOffsetMs -= 500L
+            updateLyricOffsetLabel()
+        }
+        lyricOffsetLabel = tv("Sinkron Lirik: 0.0 dtk", 11.5f, brassLight, Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                MusicEngine.lyricOffsetMs = 0L
+                updateLyricOffsetLabel()
+                notice.show("Sinkron Lirik", "Waktu lirik direset ke 0.0 detik.", 2000L)
+            }
+        }
+        val btnLyricPlus = actionPillBtn("⏩ +0.5 dtk") {
+            MusicEngine.lyricOffsetMs += 500L
+            updateLyricOffsetLabel()
+        }
+        syncControlRow.addView(btnLyricMinus)
+        syncControlRow.addView(lyricOffsetLabel)
+        syncControlRow.addView(btnLyricPlus)
+        fullLyricsSection.addView(syncControlRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         lyricScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -2142,6 +2411,12 @@ class RadioMusicActivity : AppCompatActivity() {
 
         page.addView(bottomControls)
         return page
+    }
+
+    private fun updateLyricOffsetLabel() {
+        val sec = MusicEngine.lyricOffsetMs / 1000.0
+        val sign = if (sec > 0) "+" else ""
+        lyricOffsetLabel.text = String.format(Locale.US, "Sinkron Lirik: %s%.1f dtk", sign, sec)
     }
 
     private fun showSleepTimerDialog() {
@@ -3385,6 +3660,41 @@ class RadioMusicActivity : AppCompatActivity() {
             SafeArtLoader.load(t.thumbUrl, lyricMiniArt)
         }
 
+        // Update tombol Mode Karaoke Minus-One & Vocal Reducer
+        if (MusicEngine.isKaraokeMinusOneActive) {
+            fullBtnKaraokeMode.text = "🎤 Karaoke: MINUS-ONE"
+            fullBtnKaraokeMode.setTextColor(bgDark)
+            fullBtnKaraokeMode.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(brassLight)
+            }
+        } else {
+            fullBtnKaraokeMode.text = "🎤 Karaoke: OFF"
+            fullBtnKaraokeMode.setTextColor(ivory)
+            fullBtnKaraokeMode.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0x26FFFFFF)
+            }
+        }
+
+        if (MusicEngine.vocalReducerEnabled) {
+            fullBtnVocalReducer.text = "🔇 Vokal: REDUKSI"
+            fullBtnVocalReducer.setTextColor(bgDark)
+            fullBtnVocalReducer.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(greenOk)
+            }
+        } else {
+            fullBtnVocalReducer.text = "🔇 Vokal: OFF"
+            fullBtnVocalReducer.setTextColor(ivory)
+            fullBtnVocalReducer.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0x26FFFFFF)
+            }
+        }
+
+        updateLyricOffsetLabel()
+
         val sleepRem = MusicEngine.getSleepRemainingText()
         if (sleepRem.isNotEmpty()) {
             fullBtnSleepTimer.text = "⏱ $sleepRem"
@@ -3478,7 +3788,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 setLineSpacing(0f, 1.2f)
                 isClickable = true
                 setOnClickListener {
-                    MusicEngine.player?.seekTo(line.timeMs)
+                    MusicEngine.player?.seekTo((line.timeMs - MusicEngine.lyricOffsetMs).coerceAtLeast(0L))
                 }
             }
             lyricBox.addView(ltv, LinearLayout.LayoutParams(-1, -2))
@@ -3510,10 +3820,11 @@ class RadioMusicActivity : AppCompatActivity() {
             if (!MusicEngine.lyricsEnabled || !isFullPlayerOpen) return
 
             val lines = MusicEngine.lyrics
+            val adjustedPos = pos + MusicEngine.lyricOffsetMs
             if (lines.isNotEmpty() && lyricViews.size == lines.size) {
                 var activeIdx = -1
                 for (i in lines.indices) {
-                    if (pos >= lines[i].timeMs) activeIdx = i else break
+                    if (adjustedPos >= lines[i].timeMs) activeIdx = i else break
                 }
                 if (activeIdx != lastHighlightedIdx && activeIdx >= 0) {
                     if (lastHighlightedIdx in lyricViews.indices) {
