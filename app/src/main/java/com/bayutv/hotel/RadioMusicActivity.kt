@@ -33,6 +33,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -73,6 +74,13 @@ class RadioMusicActivity : AppCompatActivity() {
         val thumbUrl: String? = null,
         val isLive: Boolean = false,
         val isYtMusic: Boolean = false
+    )
+
+    data class AlbumItem(
+        val browseId: String,
+        val title: String,
+        val subtitle: String,
+        val thumbUrl: String?
     )
 
     data class UserPlaylist(
@@ -203,7 +211,7 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // Penyimpanan Playlist Lokal & Sinkronisasi Playlist Akun Google
+    // Penyimpanan Playlist Lokal & Sinkronisasi Playlist/Album YouTube Music
     object PlaylistStore {
         private const val PREF_NAME = "bayutv_playlists"
         private const val KEY_DATA = "playlists_json"
@@ -300,6 +308,21 @@ class RadioMusicActivity : AppCompatActivity() {
             return true
         }
 
+        fun addManyTracksToPlaylist(ctx: Context, playlistIndex: Int, newTracks: List<Track>): Int {
+            val all = getLocalPlaylists(ctx)
+            if (playlistIndex !in all.indices) return 0
+            val target = all[playlistIndex]
+            var addedCount = 0
+            for (t in newTracks) {
+                if (target.tracks.none { it.id == t.id && it.title == t.title }) {
+                    target.tracks.add(t)
+                    addedCount++
+                }
+            }
+            if (addedCount > 0) saveLocalPlaylists(ctx, all)
+            return addedCount
+        }
+
         fun removeTrackFromPlaylist(ctx: Context, playlistIndex: Int, trackIndex: Int) {
             val all = getLocalPlaylists(ctx)
             if (playlistIndex in all.indices && trackIndex in all[playlistIndex].tracks.indices) {
@@ -363,8 +386,12 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
-        fun fetchGooglePlaylistTracks(browseId: String): List<Track> {
-            val auth = GoogleMusicAuth.buildSapisidHashAuth() ?: return emptyList()
+        fun fetchBrowseTracks(
+            browseId: String,
+            fallbackArtist: String = "",
+            fallbackThumb: String? = null
+        ): List<Track> {
+            val auth = GoogleMusicAuth.buildSapisidHashAuth()
             val cookie = GoogleMusicAuth.getCookie()
             val tracks = ArrayList<Track>()
             try {
@@ -374,31 +401,46 @@ class RadioMusicActivity : AppCompatActivity() {
                 conn.readTimeout = 10000
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("Authorization", auth)
-                conn.setRequestProperty("Cookie", cookie)
                 conn.setRequestProperty("Origin", "https://music.youtube.com")
                 conn.setRequestProperty("X-Origin", "https://music.youtube.com")
                 conn.setRequestProperty("User-Agent", GoogleMusicAuth.CHROME_UA)
+                if (auth != null) {
+                    conn.setRequestProperty("Authorization", auth)
+                    conn.setRequestProperty("Cookie", cookie)
+                }
 
                 val body = """{"context":{"client":{"clientName":"WEB_REMIX","clientVersion":"1.20241106.01.00","hl":"id","gl":"ID"}},"browseId":"$browseId"}"""
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
                 if (conn.responseCode == 200) {
                     val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    extractTracksFromBrowse(json, tracks)
+                    extractTracksFromBrowse(json, tracks, fallbackArtist, fallbackThumb)
                 }
             } catch (_: Exception) {
             }
             return tracks
         }
 
-        private fun extractTracksFromBrowse(node: Any?, out: MutableList<Track>) {
+        private fun extractTracksFromBrowse(
+            node: Any?,
+            out: MutableList<Track>,
+            fallbackArtist: String,
+            fallbackThumb: String?
+        ) {
             if (out.size >= 80 || node == null) return
             when (node) {
                 is JSONObject -> {
                     val renderer = node.optJSONObject("musicResponsiveListItemRenderer")
                     if (renderer != null) {
-                        val vid = renderer.optJSONObject("playlistItemData")?.optString("videoId", "") ?: ""
+                        val vid = renderer.optJSONObject("playlistItemData")?.optString("videoId", "")
+                            ?: renderer.optJSONObject("overlay")
+                                ?.optJSONObject("musicItemThumbnailOverlayRenderer")
+                                ?.optJSONObject("content")
+                                ?.optJSONObject("musicPlayButtonRenderer")
+                                ?.optJSONObject("playNavigationEndpoint")
+                                ?.optJSONObject("watchEndpoint")
+                                ?.optString("videoId", "") ?: ""
+
                         val cols = renderer.optJSONArray("flexColumns")
                         var title = ""
                         var artist = ""
@@ -407,12 +449,17 @@ class RadioMusicActivity : AppCompatActivity() {
                             if (cols.length() > 1) artist = readRuns(cols.getJSONObject(1))
                         }
                         if (vid.isNotEmpty() && title.isNotEmpty() && out.none { it.id == vid }) {
+                            val resolvedArtist = if (artist.isNotBlank() && !artist.matches(Regex("""\d+:\d+"""))) {
+                                artist
+                            } else {
+                                fallbackArtist.ifBlank { "YouTube Music" }
+                            }
                             out.add(
                                 Track(
                                     id = vid,
                                     title = title,
-                                    artist = artist.ifBlank { "YouTube Music" },
-                                    thumbUrl = "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
+                                    artist = resolvedArtist,
+                                    thumbUrl = fallbackThumb ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
                                     isLive = false,
                                     isYtMusic = true
                                 )
@@ -420,10 +467,14 @@ class RadioMusicActivity : AppCompatActivity() {
                         }
                     }
                     val keys = node.keys()
-                    while (keys.hasNext()) extractTracksFromBrowse(node.opt(keys.next()), out)
+                    while (keys.hasNext()) {
+                        extractTracksFromBrowse(node.opt(keys.next()), out, fallbackArtist, fallbackThumb)
+                    }
                 }
                 is JSONArray -> {
-                    for (i in 0 until node.length()) extractTracksFromBrowse(node.opt(i), out)
+                    for (i in 0 until node.length()) {
+                        extractTracksFromBrowse(node.opt(i), out, fallbackArtist, fallbackThumb)
+                    }
                 }
             }
         }
@@ -447,7 +498,7 @@ class RadioMusicActivity : AppCompatActivity() {
         var queue: List<Track> = emptyList()
         var queueIndex: Int = -1
         var state: PlayState = PlayState.IDLE
-        var statusDetail: String = "Pilih lagu, radio, atau playlist untuk mulai"
+        var statusDetail: String = "Pilih lagu, album, atau radio untuk mulai"
         var lyrics: List<LyricLine> = emptyList()
         var lyricStatus: String = "Pilih lagu untuk melihat lirik karaoke"
         var lyricsEnabled: Boolean = false
@@ -548,10 +599,8 @@ class RadioMusicActivity : AppCompatActivity() {
         private fun resolveViaNewPipe(track: Track): ResolvedStream? {
             ensureNewPipeInit()
 
-            // 1. Ekstraksi langsung ID utama lewat NewPipeExtractor
             extractSingleVideoWithNewPipe(track.id)?.let { return it }
 
-            // 2. Fallback otomatis: cari video musik reguler di YouTube jika Art Track YT Music dikunci
             statusDetail = "Mencari versi video musik alternatif..."
             notifyUi()
             val cleanArtist = track.artist.split("•", "·", ",").firstOrNull()?.trim() ?: ""
@@ -588,7 +637,6 @@ class RadioMusicActivity : AppCompatActivity() {
                     )
                 }
 
-                // Cadangan aliran video muxed (ExoPlayer memutar audionya saja)
                 val muxed = extractor.videoStreams.firstOrNull { it.content.startsWith("http") }
                 if (muxed != null) {
                     return ResolvedStream(
@@ -920,11 +968,27 @@ class RadioMusicActivity : AppCompatActivity() {
     private val tabViews = ArrayList<TextView>()
     private var activeTab = 0
 
+    // Klasifikasi Pencarian & Genre (Tab 0)
+    private val searchCategories = listOf(
+        Pair("Semua Lagu", ""),
+        Pair("Album", "ALBUM"),
+        Pair("Pop Indo", "Top Hits Pop Indonesia Terbaru"),
+        Pair("Lagu Barat", "Top Global Pop Hits Western Songs"),
+        Pair("K-Pop & J-Pop", "Top K-Pop and Japanese Hits"),
+        Pair("Rock & Jazz", "Classic Rock and Smooth Jazz Hits")
+    )
+    private val categoryViews = ArrayList<TextView>()
+    private var activeCategoryIdx = 0
+    private var lastAlbumSearchQuery = ""
+    private var lastFoundAlbums: List<AlbumItem> = emptyList()
+
     private var combinedPlaylists: List<UserPlaylist> = emptyList()
     private var selectedPlaylistIdx = 0
 
+    // Browse Screen Views
+    private lateinit var browseContainer: LinearLayout
     private lateinit var btnGoogleAccount: TextView
-    private lateinit var searchBarBox: LinearLayout
+    private lateinit var searchSectionBox: LinearLayout
     private lateinit var searchInput: EditText
 
     private lateinit var playlistBarBox: LinearLayout
@@ -939,28 +1003,44 @@ class RadioMusicActivity : AppCompatActivity() {
     private val radioScanMap = ConcurrentHashMap<String, RadioScanResult>()
     private var isScanningRadios = false
 
-    private var isPhonePortrait = false
-    private lateinit var artFrame: FrameLayout
-    private lateinit var artView: ImageView
-    private lateinit var nowTitle: TextView
-    private lateinit var nowArtist: TextView
-    private lateinit var statusRow: LinearLayout
-    private lateinit var loadingSpinner: ProgressBar
-    private lateinit var statusTextView: TextView
-    private val eqBars = ArrayList<View>()
-    private lateinit var timeLabel: TextView
-    private lateinit var seekBar: SeekBar
-    private lateinit var btnPlayPause: TextView
-    private lateinit var btnShuffle: TextView
-    private lateinit var btnRepeat: TextView
-    private lateinit var btnToggleLyrics: TextView
-    private lateinit var btnSaveCurrentPl: TextView
+    // Spotify Mini Player Bar (Bottom of Browse Screen)
+    private lateinit var miniPlayerBar: LinearLayout
+    private lateinit var miniProgressBar: ProgressBar
+    private lateinit var miniArtView: ImageView
+    private lateinit var miniTitle: TextView
+    private lateinit var miniSubtitle: TextView
+    private lateinit var miniBtnPlayPause: TextView
 
-    private lateinit var lyricSectionBox: LinearLayout
+    // Spotify Full-Screen Now Playing Overlay
+    private var isFullPlayerOpen = false
+    private lateinit var fullPlayerOverlay: LinearLayout
+    private lateinit var fullBtnToggleLyrics: TextView
+    private lateinit var fullCoverSection: LinearLayout
+    private lateinit var fullArtView: ImageView
+    private lateinit var fullNowTitle: TextView
+    private lateinit var fullNowArtist: TextView
+    private lateinit var fullStatusRow: LinearLayout
+    private lateinit var fullSpinner: ProgressBar
+    private lateinit var fullStatusText: TextView
+    private val eqBars = ArrayList<View>()
+
+    // Header Kompak di Dalam Full Player Saat Lirik Aktif
+    private lateinit var fullLyricsSection: LinearLayout
+    private lateinit var lyricMiniArt: ImageView
+    private lateinit var lyricMiniTitle: TextView
+    private lateinit var lyricMiniSub: TextView
     private lateinit var lyricScroll: ScrollView
     private lateinit var lyricBox: LinearLayout
     private val lyricViews = ArrayList<TextView>()
     private var lastHighlightedIdx = -1
+
+    // Kontrol Bawah Full Player
+    private lateinit var fullQualityLabel: TextView
+    private lateinit var fullTimeLabel: TextView
+    private lateinit var fullSeekBar: SeekBar
+    private lateinit var fullBtnShuffle: TextView
+    private lateinit var fullBtnPlayPause: TextView
+    private lateinit var fullBtnRepeat: TextView
 
     private lateinit var notice: Notice
     private var isSeeking = false
@@ -990,27 +1070,42 @@ class RadioMusicActivity : AppCompatActivity() {
 
         MusicEngine.lyricsEnabled = prefs.getBoolean("music_lyrics_enabled", false)
 
-        isPhonePortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
+        val isPhonePortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
+        val padH = dp(if (isPhonePortrait) 14 else 28)
 
         val root = FrameLayout(this).apply { setBackgroundColor(bgDark) }
-        val outer = LinearLayout(this).apply {
+
+        // =========================================================================
+        // 1. HALAMAN UTAMA (JELAJAH LAGU, ALBUM, PLAYLIST, RADIO + MINI PLAYER)
+        // =========================================================================
+        browseContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(if (isPhonePortrait) 14 else 32), dp(12), dp(if (isPhonePortrait) 14 else 32), dp(12))
+            setPadding(padH, dp(10), padH, dp(10))
         }
 
-        val topBar = LinearLayout(this).apply {
+        // Baris Header 1: Logo Brand & Login Google (Tidak lagi menghimpit tab!)
+        val brandRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(10))
+            setPadding(0, 0, 0, dp(8))
         }
-        val brand = tv("BAYU AUDIO", 17f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+        val brand = tv("BAYU AUDIO", 18f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.1f
-            setPadding(0, 0, dp(12), 0)
         }
-        topBar.addView(brand)
+        brandRow.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
 
-        val tabScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        btnGoogleAccount = actionPillBtn(if (GoogleMusicAuth.isLoggedIn()) "● Google Aktif" else "Login Google") {
+            handleGoogleAccountButton()
+        }
+        brandRow.addView(btnGoogleAccount)
+        browseContainer.addView(brandRow)
+
+        // Baris Header 2: Bar Tab Penuh Selebar Layar
+        val tabScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, 0, 0, dp(8))
+        }
         val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (i in tabs.indices) {
             val t = tv(tabs[i], 13f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
@@ -1020,21 +1115,17 @@ class RadioMusicActivity : AppCompatActivity() {
                 setOnFocusChangeListener { _, f -> styleTab(this, i, f) }
                 setOnClickListener { selectTab(i) }
             }
-            val lp = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) }
-            tabRow.addView(t, lp)
+            tabRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
             tabViews.add(t)
         }
         tabScroll.addView(tabRow)
-        topBar.addView(tabScroll, LinearLayout.LayoutParams(0, -2, 1f))
+        browseContainer.addView(tabScroll)
 
-        btnGoogleAccount = actionPillBtn(if (GoogleMusicAuth.isLoggedIn()) "● Google Aktif" else "Login Google") {
-            handleGoogleAccountButton()
+        // Sub-bar Tab 0: Kotak Pencarian + Klasifikasi Genre/Album
+        searchSectionBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
-        topBar.addView(btnGoogleAccount, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
-        outer.addView(topBar)
-
-        // 1. Bar Pencarian Lagu YT Music (Tab 0)
-        searchBarBox = LinearLayout(this).apply {
+        val searchBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(3), dp(8), dp(3))
@@ -1045,7 +1136,7 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
         searchInput = EditText(this).apply {
-            hint = "Cari judul lagu atau penyanyi (YT Music)..."
+            hint = "Cari lagu, artis, atau album (Indo & Barat)..."
             setHintTextColor(0xFF8C8578.toInt())
             setTextColor(ivory)
             textSize = 14f
@@ -1054,23 +1145,43 @@ class RadioMusicActivity : AppCompatActivity() {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
-                    val q = text.toString().trim()
-                    if (q.isNotEmpty()) searchYtMusic(q)
+                    executeSearchWithCategory()
                     hideKeyboard()
                     true
                 } else false
             }
         }
         val searchBtn = actionPillBtn("Cari", primary = true) {
-            val q = searchInput.text.toString().trim()
-            if (q.isNotEmpty()) searchYtMusic(q)
+            executeSearchWithCategory()
             hideKeyboard()
         }
         searchBarBox.addView(searchInput, LinearLayout.LayoutParams(0, -2, 1f))
         searchBarBox.addView(searchBtn)
-        outer.addView(searchBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        searchSectionBox.addView(searchBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // 2. Bar Manajemen Playlist (Tab 1)
+        // Deretan Chip Klasifikasi (Semua Lagu, Album, Pop Indo, Lagu Barat, K-Pop, Rock & Jazz)
+        val catScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, 0, 0, dp(8))
+        }
+        val catRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        categoryViews.clear()
+        for (i in searchCategories.indices) {
+            val chip = tv(searchCategories[i].first, 11.5f, mute, Typeface.DEFAULT_BOLD).apply {
+                setPadding(dp(12), dp(5), dp(12), dp(5))
+                isFocusable = true
+                isClickable = true
+                setOnFocusChangeListener { _, f -> styleCategoryChip(this, i, f) }
+                setOnClickListener { selectCategory(i) }
+            }
+            catRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            categoryViews.add(chip)
+        }
+        catScroll.addView(catRow)
+        searchSectionBox.addView(catScroll)
+        browseContainer.addView(searchSectionBox)
+
+        // Sub-bar Tab 1: Manajemen Playlist
         playlistBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1091,9 +1202,9 @@ class RadioMusicActivity : AppCompatActivity() {
         val btnDelPl = actionPillBtn("Hapus") { promptDeleteCurrentPlaylist() }
         playlistBarBox.addView(btnNewPl, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
         playlistBarBox.addView(btnDelPl, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
-        outer.addView(playlistBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        browseContainer.addView(playlistBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // 3. Bar Scan Radio Otomatis (Tab 2)
+        // Sub-bar Tab 2: Scan Radio Otomatis
         radioBarBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1112,52 +1223,601 @@ class RadioMusicActivity : AppCompatActivity() {
         btnScanRadio = actionPillBtn("Scan Radio", primary = true) { startRadioScan() }
         radioBarBox.addView(radioScanSummary, LinearLayout.LayoutParams(0, -2, 1f))
         radioBarBox.addView(btnScanRadio)
-        outer.addView(radioBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        browseContainer.addView(radioBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        val bodyContainer = LinearLayout(this).apply {
-            orientation = if (isPhonePortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        }
-
+        // Daftar Lagu / Album / Radio Penuh dari Atas ke Bawah
         val listScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
         listBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), dp(2), if (isPhonePortrait) dp(2) else dp(14), dp(16))
+            setPadding(dp(2), dp(2), dp(2), dp(12))
         }
         listScroll.addView(listBox, FrameLayout.LayoutParams(-1, -2))
+        browseContainer.addView(listScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        val playerPanel = buildPlayerAndLyricsPanel(isPhonePortrait)
+        // Bilah Mini Player Minimalis ala Spotify di Bawah Layar
+        miniPlayerBar = buildSpotifyMiniPlayer()
+        browseContainer.addView(miniPlayerBar, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
 
-        if (isPhonePortrait) {
-            bodyContainer.addView(listScroll, LinearLayout.LayoutParams(-1, 0, 1.05f))
-            val plp = LinearLayout.LayoutParams(-1, 0, 1.05f).apply { topMargin = dp(8) }
-            bodyContainer.addView(playerPanel, plp)
-        } else {
-            bodyContainer.addView(listScroll, LinearLayout.LayoutParams(0, -1, 1.05f))
-            bodyContainer.addView(playerPanel, LinearLayout.LayoutParams(0, -1, 1f))
-        }
+        root.addView(browseContainer, FrameLayout.LayoutParams(-1, -1))
 
-        outer.addView(bodyContainer, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(outer, FrameLayout.LayoutParams(-1, -1))
+        // =========================================================================
+        // 2. HALAMAN PEMUTAR LAYAR PENUH (FULL-SCREEN NOW PLAYING & LIRIK)
+        // =========================================================================
+        fullPlayerOverlay = buildSpotifyFullScreenPlayer(isPhonePortrait)
+        fullPlayerOverlay.visibility = View.GONE
+        root.addView(fullPlayerOverlay, FrameLayout.LayoutParams(-1, -1))
+
         notice = Notice(this, root)
         setContentView(root)
+
+        // Tombol Back memperkecil pemutar penuh ke Mini Player terlebih dahulu
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isFullPlayerOpen) {
+                    closeFullPlayer()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
 
         MusicEngine.onStateChanged = {
             ui.post {
                 if (!isFinishing) {
-                    syncPlayerUi()
+                    syncAllPlayerViews()
                     if (currentRenderedTracks.isNotEmpty()) {
                         val isLocalPl = (activeTab == 1 && combinedPlaylists.getOrNull(selectedPlaylistIdx)?.isGoogleSynced == false)
-                        renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl)
+                        renderTrackList(currentRenderedTracks, isLocalPlaylistTab = isLocalPl, openFullOnPlay = true)
                     }
                 }
             }
         }
 
         refreshGoogleAccountButton()
+        selectCategory(0, triggerSearch = false)
         selectTab(0)
-        syncPlayerUi()
+        syncAllPlayerViews()
     }
 
+    // =========================================================================
+    // MINI PLAYER ALA SPOTIFY (MINIMALIS DI BAWAH)
+    // =========================================================================
+    private fun buildSpotifyMiniPlayer(): LinearLayout {
+        val wrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(0xFF231E18.toInt(), 0xFF191612.toInt())
+            ).apply {
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), 0x66B8975A)
+            }
+            clipToOutline = true
+        }
+
+        // Garis progres tipis di bagian atas Mini Player
+        miniProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            progressTintList = ColorStateList.valueOf(brassLight)
+            progressBackgroundTintList = ColorStateList.valueOf(0x22FFFFFF)
+        }
+        wrapper.addView(miniProgressBar, LinearLayout.LayoutParams(-1, dp(3)))
+
+        val contentRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+
+        // Area kiri-tengah: Ketuk untuk memperbesar ke Layar Penuh
+        val expandArea = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { openFullPlayer() }
+        }
+
+        val artBox = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0xFF2B261F.toInt())
+                setStroke(dp(1), 0x55B8975A)
+            }
+            clipToOutline = true
+        }
+        miniArtView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        artBox.addView(miniArtView, FrameLayout.LayoutParams(-1, -1))
+        expandArea.addView(artBox, LinearLayout.LayoutParams(dp(44), dp(44)))
+
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), 0, dp(6), 0)
+        }
+        miniTitle = tv("Belum ada lagu", 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        miniSubtitle = tv("Ketuk untuk layar penuh & lirik ▲", 11f, brassLight).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        textCol.addView(miniTitle)
+        textCol.addView(miniSubtitle)
+        expandArea.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+
+        contentRow.addView(expandArea, LinearLayout.LayoutParams(0, -2, 1f))
+
+        // Tombol kontrol cepat di sisi kanan Mini Player
+        val btnMiniPrev = miniIconBtn("⏮") { MusicEngine.playPrev(this) }
+        miniBtnPlayPause = miniIconBtn("▶", primary = true) { MusicEngine.togglePause() }
+        val btnMiniNext = miniIconBtn("⏭") { MusicEngine.playNext(this) }
+
+        contentRow.addView(btnMiniPrev)
+        contentRow.addView(miniBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(6), 0, dp(6), 0) })
+        contentRow.addView(btnMiniNext)
+
+        wrapper.addView(contentRow)
+        return wrapper
+    }
+
+    private fun miniIconBtn(symbol: String, primary: Boolean = false, onClick: () -> Unit): TextView {
+        return tv(symbol, 14f, if (primary) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(9).toFloat()
+                setColor(if (primary) brassLight else 0x22FFFFFF)
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    // =========================================================================
+    // HALAMAN PEMUTAR LAYAR PENUH ALA SPOTIFY (FULL-SCREEN + LIRIK BESAR)
+    // =========================================================================
+    private fun buildSpotifyFullScreenPlayer(isPhone: Boolean): LinearLayout {
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(if (isPhone) 18 else 36), dp(14), dp(if (isPhone) 18 else 36), dp(18))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xFF241E17.toInt(), 0xFF12100D.toInt(), 0xFF0A0908.toInt())
+            )
+            isClickable = true
+        }
+
+        // Baris Atas Full Player: Perkecil (Minimize) | Status | Lirik ON/OFF | + Playlist
+        val topHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(10))
+        }
+
+        val btnMinimize = actionPillBtn("⌄ Perkecil") {
+            closeFullPlayer()
+        }
+        topHeader.addView(btnMinimize)
+
+        val nowHeaderLabel = tv("PEMUTAR PENUH", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.14f
+        }
+        topHeader.addView(nowHeaderLabel, LinearLayout.LayoutParams(0, -2, 1f))
+
+        fullBtnToggleLyrics = actionPillBtn(if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF") {
+            MusicEngine.lyricsEnabled = !MusicEngine.lyricsEnabled
+            prefs.edit().putBoolean("music_lyrics_enabled", MusicEngine.lyricsEnabled).apply()
+            if (MusicEngine.lyricsEnabled) {
+                MusicEngine.refreshLyricsIfNeeded()
+            }
+            syncAllPlayerViews()
+        }
+        topHeader.addView(fullBtnToggleLyrics)
+
+        val btnSaveFull = actionPillBtn("+ Playlist") {
+            val cur = MusicEngine.currentTrack
+            if (cur != null) showAddToPlaylistDialog(cur)
+        }
+        topHeader.addView(btnSaveFull, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
+
+        page.addView(topHeader)
+
+        // ---------------------------------------------------------------------
+        // MODE A: TAMPILAN SAMPUL ALBUM BESAR (SAAT LIRIK NONAKTIF)
+        // ---------------------------------------------------------------------
+        fullCoverSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
+
+        val artSize = dp(if (isPhone) 220 else 230)
+        val bigArtFrame = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0xFF26211A.toInt())
+                setStroke(dp(2), 0x88B8975A)
+            }
+            clipToOutline = true
+        }
+        fullArtView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        bigArtFrame.addView(fullArtView, FrameLayout.LayoutParams(-1, -1))
+        fullCoverSection.addView(bigArtFrame, LinearLayout.LayoutParams(artSize, artSize).apply {
+            bottomMargin = dp(18)
+        })
+
+        fullNowTitle = tv("Belum ada lagu diputar", if (isPhone) 20f else 22f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+            gravity = Gravity.CENTER
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        fullNowArtist = tv("Pilih lagu atau album", 14.5f, brassLight).apply {
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(4), 0, dp(10))
+        }
+        fullCoverSection.addView(fullNowTitle, LinearLayout.LayoutParams(-1, -2))
+        fullCoverSection.addView(fullNowArtist, LinearLayout.LayoutParams(-1, -2))
+
+        // Pill Status & Spinner & Equalizer
+        fullStatusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0x22FFFFFF)
+            }
+        }
+        fullSpinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            visibility = View.GONE
+        }
+        fullStatusRow.addView(fullSpinner, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(6) })
+
+        fullStatusText = tv("Siap memutar", 12f, mute, Typeface.DEFAULT_BOLD).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        fullStatusRow.addView(fullStatusText)
+
+        // Equalizer 4 batang di samping status
+        val eqBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            setPadding(dp(8), 0, 0, 0)
+        }
+        eqBars.clear()
+        for (i in 0 until 4) {
+            val bar = View(this).apply {
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(2).toFloat()
+                    setColor(brassLight)
+                }
+            }
+            eqBox.addView(bar, LinearLayout.LayoutParams(dp(3), dp(6)).apply {
+                leftMargin = dp(2)
+                rightMargin = dp(2)
+            })
+            eqBars.add(bar)
+        }
+        fullStatusRow.addView(eqBox, LinearLayout.LayoutParams(-2, dp(18)))
+        fullCoverSection.addView(fullStatusRow, LinearLayout.LayoutParams(-2, -2))
+
+        page.addView(fullCoverSection, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        // ---------------------------------------------------------------------
+        // MODE B: TAMPILAN LIRIK KARAOKE LAYAR PENUH (SAAT LIRIK AKTIF)
+        // ---------------------------------------------------------------------
+        fullLyricsSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+
+        // Bar Info Lagu Ringkas di Atas Lirik
+        val lyricSongBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x22FFFFFF)
+            }
+        }
+        val smallArtFrame = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0xFF26211A.toInt())
+            }
+            clipToOutline = true
+        }
+        lyricMiniArt = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        smallArtFrame.addView(lyricMiniArt, FrameLayout.LayoutParams(-1, -1))
+        lyricSongBar.addView(smallArtFrame, LinearLayout.LayoutParams(dp(44), dp(44)))
+
+        val lyricMetaCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), 0, 0, 0)
+        }
+        lyricMiniTitle = tv("Judul Lagu", 14.5f, ivory, Typeface.DEFAULT_BOLD).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        lyricMiniSub = tv("Penyanyi · Status", 12f, brassLight).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        lyricMetaCol.addView(lyricMiniTitle)
+        lyricMetaCol.addView(lyricMiniSub)
+        lyricSongBar.addView(lyricMetaCol, LinearLayout.LayoutParams(0, -2, 1f))
+        fullLyricsSection.addView(lyricSongBar, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+        // Kotak Lirik Karaoke Raksasa
+        lyricScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xFF0E0D0B.toInt())
+                setStroke(dp(1), 0x33B8975A)
+            }
+            setPadding(dp(16), dp(18), dp(16), dp(18))
+        }
+        lyricBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        lyricScroll.addView(lyricBox, FrameLayout.LayoutParams(-1, -2))
+        fullLyricsSection.addView(lyricScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        page.addView(fullLyricsSection, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        // ---------------------------------------------------------------------
+        // BAGIAN BAWAH FULL PLAYER: SEEKBAR & TOMBOL KONTROL BESAR
+        // ---------------------------------------------------------------------
+        val bottomControls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), 0, dp(4), dp(2))
+        }
+        fullQualityLabel = tv("BAYU HI-FI AUDIO", 10.5f, mute, Typeface.DEFAULT_BOLD).apply {
+            letterSpacing = 0.1f
+        }
+        fullTimeLabel = tv("00:00 / 00:00", 12f, brassLight, Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.END
+        }
+        timeRow.addView(fullQualityLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        timeRow.addView(fullTimeLabel)
+        bottomControls.addView(timeRow)
+
+        fullSeekBar = SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(brassLight)
+            thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            progressBackgroundTintList = ColorStateList.valueOf(0x33FFFFFF)
+            setPadding(0, dp(4), 0, dp(10))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        val dur = MusicEngine.player?.duration ?: 0
+                        if (dur > 0) {
+                            val target = (dur * progress) / 1000L
+                            fullTimeLabel.text = "${fmtTime(target)} / ${fmtTime(dur)}"
+                        }
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) { isSeeking = true }
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    isSeeking = false
+                    val exo = MusicEngine.player ?: return
+                    val dur = exo.duration
+                    if (dur > 0 && sb != null) {
+                        exo.seekTo((dur * sb.progress) / 1000L)
+                    }
+                }
+            })
+        }
+        bottomControls.addView(fullSeekBar, LinearLayout.LayoutParams(-1, -2))
+
+        val transportRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        fullBtnShuffle = controlBtn("🔀", small = true) {
+            MusicEngine.shuffleEnabled = !MusicEngine.shuffleEnabled
+            syncAllPlayerViews()
+            notice.show("Mode Acak", if (MusicEngine.shuffleEnabled) "Acak lagu aktif" else "Acak lagu nonaktif", 2000L)
+        }
+        val btnPrev = controlBtn("⏮") { MusicEngine.playPrev(this) }
+        fullBtnPlayPause = controlBtn("▶", primary = true) { MusicEngine.togglePause() }
+        val btnNext = controlBtn("⏭") { MusicEngine.playNext(this) }
+        fullBtnRepeat = controlBtn("🔁", small = true) {
+            MusicEngine.repeatMode = (MusicEngine.repeatMode + 1) % 3
+            syncAllPlayerViews()
+            val msg = when (MusicEngine.repeatMode) {
+                1 -> "Ulang semua daftar aktif"
+                2 -> "Ulang 1 lagu aktif"
+                else -> "Mode ulang nonaktif"
+            }
+            notice.show("Mode Ulang", msg, 2000L)
+        }
+
+        transportRow.addView(fullBtnShuffle)
+        transportRow.addView(btnPrev, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) })
+        transportRow.addView(fullBtnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(14), 0, dp(14), 0) })
+        transportRow.addView(btnNext, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        transportRow.addView(fullBtnRepeat)
+        bottomControls.addView(transportRow)
+
+        page.addView(bottomControls)
+        return page
+    }
+
+    private fun openFullPlayer() {
+        isFullPlayerOpen = true
+        fullPlayerOverlay.visibility = View.VISIBLE
+        syncAllPlayerViews()
+    }
+
+    private fun closeFullPlayer() {
+        isFullPlayerOpen = false
+        fullPlayerOverlay.visibility = View.GONE
+        syncAllPlayerViews()
+    }
+
+    private fun controlBtn(symbol: String, primary: Boolean = false, small: Boolean = false, onClick: () -> Unit): TextView {
+        return tv(symbol, if (primary) 20f else if (small) 14f else 17f, if (primary) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            setPadding(
+                dp(if (primary) 26 else if (small) 12 else 17),
+                dp(if (primary) 12 else if (small) 9 else 11),
+                dp(if (primary) 26 else if (small) 12 else 17),
+                dp(if (primary) 12 else if (small) 9 else 11)
+            )
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(if (primary) 16 else 12).toFloat()
+                setColor(if (primary) brassLight else 0x26FFFFFF)
+            }
+            setOnFocusChangeListener { _, f ->
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(if (primary) 16 else 12).toFloat()
+                    setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
+                }
+                setTextColor(if (f || primary) bgDark else ivory)
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun actionPillBtn(label: String, primary: Boolean = false, onClick: () -> Unit): TextView {
+        return tv(label, 11.5f, if (primary) bgDark else ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setPadding(dp(11), dp(6), dp(11), dp(6))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(if (primary) brassLight else 0x26FFFFFF)
+            }
+            setOnFocusChangeListener { _, f ->
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(8).toFloat()
+                    setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
+                }
+                setTextColor(if (f || primary) bgDark else ivory)
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun styleTab(v: TextView, idx: Int, focused: Boolean) {
+        val active = idx == activeTab
+        v.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
+        v.background = GradientDrawable().apply {
+            cornerRadius = dp(18).toFloat()
+            when {
+                focused -> {
+                    setColor(brassLight)
+                    setStroke(dp(2), Color.WHITE)
+                }
+                active -> {
+                    setColor(0x33B8975A)
+                    setStroke(dp(1), brass)
+                }
+                else -> setColor(0x18FFFFFF)
+            }
+        }
+    }
+
+    private fun styleCategoryChip(v: TextView, idx: Int, focused: Boolean) {
+        val active = idx == activeCategoryIdx
+        v.setTextColor(if (focused || active) bgDark else ivory)
+        v.background = GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            when {
+                focused -> {
+                    setColor(Color.WHITE)
+                    setStroke(dp(1), brassLight)
+                }
+                active -> setColor(brassLight)
+                else -> {
+                    setColor(0x1CFFFFFF)
+                    setStroke(dp(1), 0x22FFFFFF)
+                }
+            }
+        }
+    }
+
+    private fun selectCategory(idx: Int, triggerSearch: Boolean = true) {
+        activeCategoryIdx = idx
+        for (i in categoryViews.indices) {
+            styleCategoryChip(categoryViews[i], i, categoryViews[i].hasFocus())
+        }
+        val (catName, catQuery) = searchCategories[idx]
+        searchInput.hint = when (idx) {
+            1 -> "Ketik nama artis atau judul album..."
+            2 -> "Cari lagu Pop Indonesia..."
+            3 -> "Cari lagu Barat / Western..."
+            4 -> "Cari lagu K-Pop / Jepang..."
+            5 -> "Cari lagu Rock / Jazz..."
+            else -> "Cari lagu, artis, atau album (Indo & Barat)..."
+        }
+
+        if (!triggerSearch) return
+
+        val typed = searchInput.text.toString().trim()
+        if (idx == 1) {
+            val q = typed.ifEmpty { "Tulus Album" }
+            searchYtAlbums(q)
+        } else if (catQuery.isNotEmpty()) {
+            // Jika user sudah mengetik kata kunci, cari kata kunci itu; jika kosong, tampilkan chart klasifikasi terpilih
+            val q = typed.ifEmpty { catQuery }
+            searchYtMusicSongs(q, headerLabel = if (typed.isEmpty()) "Klasifikasi: $catName" else "")
+        } else {
+            val q = typed.ifEmpty { "Lagu Pop Indonesia & Barat Terbaru" }
+            searchYtMusicSongs(q)
+        }
+    }
+
+    private fun executeSearchWithCategory() {
+        val typed = searchInput.text.toString().trim()
+        if (activeCategoryIdx == 1) {
+            searchYtAlbums(typed.ifEmpty { "Album Pop Indonesia" })
+        } else {
+            val defaultQ = searchCategories[activeCategoryIdx].second.ifEmpty { "Lagu Pop Indonesia & Barat Terbaru" }
+            searchYtMusicSongs(typed.ifEmpty { defaultQ })
+        }
+    }
+
+    private fun selectTab(idx: Int) {
+        activeTab = idx
+        for (i in tabViews.indices) styleTab(tabViews[i], i, tabViews[i].hasFocus())
+        searchSectionBox.visibility = if (idx == 0) View.VISIBLE else View.GONE
+        playlistBarBox.visibility = if (idx == 1) View.VISIBLE else View.GONE
+        radioBarBox.visibility = if (idx == 2) View.VISIBLE else View.GONE
+        currentRenderedTracks = emptyList()
+        listBox.removeAllViews()
+
+        when (idx) {
+            0 -> executeSearchWithCategory()
+            1 -> loadUserPlaylists()
+            2 -> loadIndonesianRadios()
+            3 -> loadMurottalAndLofi()
+            4 -> loadLocalMusic()
+        }
+    }
+
+    // --- GOOGLE ACCOUNT LOGIN ---
     private fun refreshGoogleAccountButton() {
         val logged = GoogleMusicAuth.isLoggedIn()
         btnGoogleAccount.text = if (logged) "● Google Aktif" else "Login Google"
@@ -1169,12 +1829,8 @@ class RadioMusicActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("Akun Google Terhubung")
                 .setMessage("Sesi YouTube Music Anda aktif. Playlist dari akun Google bisa langsung dibuka di tab Playlist Saya.")
-                .setPositiveButton("Sinkronkan Playlist") { _, _ ->
-                    selectTab(1)
-                }
-                .setNeutralButton("Login Ulang") { _, _ ->
-                    openGoogleLoginDialog()
-                }
+                .setPositiveButton("Sinkronkan Playlist") { _, _ -> selectTab(1) }
+                .setNeutralButton("Login Ulang") { _, _ -> openGoogleLoginDialog() }
                 .setNegativeButton("Keluar Akun") { _, _ ->
                     GoogleMusicAuth.logout()
                     refreshGoogleAccountButton()
@@ -1249,322 +1905,375 @@ class RadioMusicActivity : AppCompatActivity() {
         wv.loadUrl("https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=id")
     }
 
-    private fun actionPillBtn(label: String, primary: Boolean = false, onClick: () -> Unit): TextView {
-        return tv(label, 12f, if (primary) bgDark else ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            isFocusable = true
-            isClickable = true
-            background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
-                setColor(if (primary) brassLight else 0x26FFFFFF)
-            }
-            setOnFocusChangeListener { _, f ->
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(8).toFloat()
-                    setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
+    // --- TAB 0: PENCARIAN LAGU & ALBUM YOUTUBE MUSIC ---
+    private fun searchYtMusicSongs(query: String, headerLabel: String = "") {
+        listBox.removeAllViews()
+        listBox.addView(tv("Mencari \"$query\" di YouTube Music...", 13f, mute))
+        Thread {
+            val results = ArrayList<Track>()
+            try {
+                val conn = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 8000
+                conn.readTimeout = 10000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Origin", "https://music.youtube.com")
+                conn.setRequestProperty("User-Agent", GoogleMusicAuth.CHROME_UA)
+                val auth = GoogleMusicAuth.buildSapisidHashAuth()
+                if (auth != null) {
+                    conn.setRequestProperty("Authorization", auth)
+                    conn.setRequestProperty("Cookie", GoogleMusicAuth.getCookie())
                 }
-                setTextColor(if (f || primary) bgDark else ivory)
+
+                val safeQ = query.replace("\"", "")
+                val payload = """{"context":{"client":{"clientName":"WEB_REMIX","clientVersion":"1.20241106.01.00","hl":"id","gl":"ID"}},"query":"$safeQ","params":"EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D"}"""
+                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+
+                if (conn.responseCode == 200) {
+                    val rootJson = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    extractMusicItems(rootJson, results)
+                }
+            } catch (_: Exception) {
             }
-            setOnClickListener { onClick() }
-        }
+
+            ui.post {
+                if (isFinishing || activeTab != 0) return@post
+                listBox.removeAllViews()
+                if (results.isEmpty()) {
+                    listBox.addView(tv("Tidak ditemukan hasil. Coba kata kunci lain.", 13f, mute))
+                } else {
+                    if (headerLabel.isNotEmpty()) {
+                        listBox.addView(
+                            tv(headerLabel.uppercase(Locale.US), 11f, brassLight, Typeface.DEFAULT_BOLD).apply {
+                                letterSpacing = 0.1f
+                                setPadding(dp(4), 0, 0, dp(8))
+                            }
+                        )
+                    }
+                    renderTrackList(results, clearFirst = false, openFullOnPlay = true)
+                }
+            }
+        }.start()
     }
 
-    private fun buildPlayerAndLyricsPanel(isPhone: Boolean): LinearLayout {
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0xFF1E1B16.toInt(), 0xFF12100E.toInt())
-            ).apply {
-                cornerRadius = dp(18).toFloat()
-                setStroke(dp(1), 0x55B8975A)
-            }
-        }
+    private fun searchYtAlbums(query: String) {
+        lastAlbumSearchQuery = query
+        listBox.removeAllViews()
+        listBox.addView(tv("Mencari album \"$query\"...", 13f, mute))
+        Thread {
+            val albums = ArrayList<AlbumItem>()
+            try {
+                val conn = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 8000
+                conn.readTimeout = 10000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Origin", "https://music.youtube.com")
+                conn.setRequestProperty("User-Agent", GoogleMusicAuth.CHROME_UA)
 
-        val quickBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(12))
-        }
+                val safeQ = query.replace("\"", "")
+                val payload = """{"context":{"client":{"clientName":"WEB_REMIX","clientVersion":"1.20241106.01.00","hl":"id","gl":"ID"}},"query":"$safeQ","params":"EgWKAQIYAWoKEAMQBBAJEAoQBQ%3D%3D"}"""
+                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
 
-        btnToggleLyrics = actionPillBtn(if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF") {
-            MusicEngine.lyricsEnabled = !MusicEngine.lyricsEnabled
-            prefs.edit().putBoolean("music_lyrics_enabled", MusicEngine.lyricsEnabled).apply()
-            if (MusicEngine.lyricsEnabled) {
-                MusicEngine.refreshLyricsIfNeeded()
-            }
-            syncPlayerUi()
-        }
-        quickBar.addView(btnToggleLyrics)
-
-        btnSaveCurrentPl = actionPillBtn("+ Simpan Playlist") {
-            val cur = MusicEngine.currentTrack
-            if (cur == null) {
-                notice.show("Info", "Putar lagu atau radio terlebih dahulu.", 3000L)
-            } else {
-                showAddToPlaylistDialog(cur)
-            }
-        }
-        quickBar.addView(btnSaveCurrentPl, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
-
-        quickBar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-
-        val eqBox = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            setPadding(dp(4), 0, dp(2), 0)
-        }
-        eqBars.clear()
-        for (i in 0 until 4) {
-            val bar = View(this).apply {
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(2).toFloat()
-                    setColor(brassLight)
+                if (conn.responseCode == 200) {
+                    val rootJson = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    extractAlbumItems(rootJson, albums)
                 }
+            } catch (_: Exception) {
             }
-            val blp = LinearLayout.LayoutParams(dp(3), dp(6)).apply {
-                leftMargin = dp(2)
-                rightMargin = dp(2)
+
+            ui.post {
+                if (isFinishing || activeTab != 0) return@post
+                lastFoundAlbums = albums
+                renderAlbumList(albums)
             }
-            eqBox.addView(bar, blp)
-            eqBars.add(bar)
-        }
-        quickBar.addView(eqBox, LinearLayout.LayoutParams(-2, dp(22)))
-        panel.addView(quickBar)
+        }.start()
+    }
 
-        val heroRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+    private fun extractAlbumItems(node: Any?, out: MutableList<AlbumItem>) {
+        if (out.size >= 20 || node == null) return
+        when (node) {
+            is JSONObject -> {
+                val renderer = node.optJSONObject("musicResponsiveListItemRenderer")
+                if (renderer != null) {
+                    val browseId = renderer.optJSONObject("navigationEndpoint")
+                        ?.optJSONObject("browseEndpoint")
+                        ?.optString("browseId", "") ?: ""
+                    val cols = renderer.optJSONArray("flexColumns")
+                    var title = ""
+                    var sub = ""
+                    if (cols != null && cols.length() > 0) {
+                        title = readRunsText(cols.getJSONObject(0))
+                        if (cols.length() > 1) sub = readRunsText(cols.getJSONObject(1))
+                    }
+                    val thumbs = renderer.optJSONObject("thumbnail")
+                        ?.optJSONObject("musicThumbnailRenderer")
+                        ?.optJSONObject("thumbnail")
+                        ?.optJSONArray("thumbnails")
+                    val thumbUrl = if (thumbs != null && thumbs.length() > 0) {
+                        thumbs.getJSONObject(thumbs.length() - 1).optString("url", "").ifBlank { null }
+                    } else null
 
-        artFrame = FrameLayout(this).apply {
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(0xFF26221C.toInt())
-                setStroke(dp(2), 0x77B8975A)
-            }
-            clipToOutline = true
-        }
-        artView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-        }
-        val initialArtSize = dp(if (isPhone) 72 else 104)
-        artFrame.addView(artView, FrameLayout.LayoutParams(-1, -1))
-        heroRow.addView(artFrame, LinearLayout.LayoutParams(initialArtSize, initialArtSize))
-
-        val infoCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, 0, 0)
-        }
-        nowTitle = tv("Belum ada audio diputar", if (isPhone) 16f else 19f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        nowArtist = tv("Pilih lagu, playlist, radio, atau murottal", 13f, brassLight).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(0, dp(4), 0, dp(8))
-        }
-
-        statusRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(5), dp(12), dp(5))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
-                setColor(0x22FFFFFF)
-            }
-        }
-        loadingSpinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
-            visibility = View.GONE
-        }
-        statusRow.addView(loadingSpinner, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(6) })
-
-        statusTextView = tv("Siap memutar", 11.5f, mute, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        statusRow.addView(statusTextView, LinearLayout.LayoutParams(0, -2, 1f))
-
-        infoCol.addView(nowTitle)
-        infoCol.addView(nowArtist)
-        infoCol.addView(statusRow)
-        heroRow.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
-        panel.addView(heroRow)
-
-        val progressHeader = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(14), 0, dp(2))
-        }
-        val modeHint = tv("BAYU HI-FI AUDIO", 10f, 0xFF8E8577.toInt(), Typeface.DEFAULT_BOLD).apply {
-            letterSpacing = 0.12f
-        }
-        timeLabel = tv("00:00 / 00:00", 11.5f, brassLight, Typeface.DEFAULT_BOLD).apply {
-            gravity = Gravity.END
-        }
-        progressHeader.addView(modeHint, LinearLayout.LayoutParams(0, -2, 1f))
-        progressHeader.addView(timeLabel)
-        panel.addView(progressHeader)
-
-        seekBar = SeekBar(this).apply {
-            max = 1000
-            progressTintList = ColorStateList.valueOf(brassLight)
-            thumbTintList = ColorStateList.valueOf(Color.WHITE)
-            progressBackgroundTintList = ColorStateList.valueOf(0x33FFFFFF)
-            setPadding(0, dp(4), 0, dp(8))
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        val dur = MusicEngine.player?.duration ?: 0
-                        if (dur > 0) {
-                            val target = (dur * progress) / 1000L
-                            timeLabel.text = "${fmtTime(target)} / ${fmtTime(dur)}"
-                        }
+                    if (browseId.isNotEmpty() && title.isNotEmpty() && out.none { it.browseId == browseId }) {
+                        out.add(AlbumItem(browseId, title, sub.ifBlank { "Album YouTube Music" }, thumbUrl))
                     }
                 }
-                override fun onStartTrackingTouch(sb: SeekBar?) { isSeeking = true }
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    isSeeking = false
-                    val exo = MusicEngine.player ?: return
-                    val dur = exo.duration
-                    if (dur > 0 && sb != null) {
-                        exo.seekTo((dur * sb.progress) / 1000L)
-                    }
-                }
-            })
-        }
-        panel.addView(seekBar, LinearLayout.LayoutParams(-1, -2))
-
-        val ctrlRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(8))
-        }
-        btnShuffle = controlBtn("🔀", small = true) {
-            MusicEngine.shuffleEnabled = !MusicEngine.shuffleEnabled
-            syncPlayerUi()
-            notice.show("Mode Acak", if (MusicEngine.shuffleEnabled) "Acak lagu aktif" else "Acak lagu nonaktif", 2200L)
-        }
-        val btnPrev = controlBtn("⏮") { MusicEngine.playPrev(this) }
-        btnPlayPause = controlBtn("▶", primary = true) { MusicEngine.togglePause() }
-        val btnNext = controlBtn("⏭") { MusicEngine.playNext(this) }
-        btnRepeat = controlBtn("🔁", small = true) {
-            MusicEngine.repeatMode = (MusicEngine.repeatMode + 1) % 3
-            syncPlayerUi()
-            val msg = when (MusicEngine.repeatMode) {
-                1 -> "Ulang semua daftar aktif"
-                2 -> "Ulang 1 lagu aktif"
-                else -> "Mode ulang nonaktif"
+                val keys = node.keys()
+                while (keys.hasNext()) extractAlbumItems(node.opt(keys.next()), out)
             }
-            notice.show("Mode Ulang", msg, 2200L)
-        }
-
-        ctrlRow.addView(btnShuffle)
-        ctrlRow.addView(btnPrev, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
-        ctrlRow.addView(btnPlayPause, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(12), 0, dp(12), 0) })
-        ctrlRow.addView(btnNext, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
-        ctrlRow.addView(btnRepeat)
-        panel.addView(ctrlRow)
-
-        lyricSectionBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (MusicEngine.lyricsEnabled) View.VISIBLE else View.GONE
-        }
-        val lyricHeader = tv("LIRIK KARAOKE SINKRON", 10.5f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            letterSpacing = 0.12f
-            setPadding(0, dp(6), 0, dp(6))
-        }
-        lyricSectionBox.addView(lyricHeader)
-
-        lyricScroll = ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(0xFF0E0D0B.toInt())
-                setStroke(dp(1), 0x1FFFFFFF)
-            }
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-        }
-        lyricBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        lyricScroll.addView(lyricBox, FrameLayout.LayoutParams(-1, -2))
-        lyricSectionBox.addView(lyricScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        panel.addView(lyricSectionBox, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        return panel
-    }
-
-    private fun controlBtn(symbol: String, primary: Boolean = false, small: Boolean = false, onClick: () -> Unit): TextView {
-        return tv(symbol, if (primary) 18f else if (small) 13f else 15f, if (primary) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
-            gravity = Gravity.CENTER
-            setPadding(
-                dp(if (primary) 22 else if (small) 11 else 15),
-                dp(if (primary) 10 else if (small) 8 else 9),
-                dp(if (primary) 22 else if (small) 11 else 15),
-                dp(if (primary) 10 else if (small) 8 else 9)
-            )
-            isFocusable = true
-            isClickable = true
-            background = GradientDrawable().apply {
-                cornerRadius = dp(if (primary) 14 else 10).toFloat()
-                setColor(if (primary) brassLight else 0x26FFFFFF)
-            }
-            setOnFocusChangeListener { _, f ->
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(if (primary) 14 else 10).toFloat()
-                    setColor(if (f) Color.WHITE else if (primary) brassLight else 0x26FFFFFF)
-                }
-                setTextColor(if (f || primary) bgDark else ivory)
-            }
-            setOnClickListener { onClick() }
-        }
-    }
-
-    private fun styleTab(v: TextView, idx: Int, focused: Boolean) {
-        val active = idx == activeTab
-        v.setTextColor(if (focused) bgDark else if (active) brassLight else mute)
-        v.background = GradientDrawable().apply {
-            cornerRadius = dp(18).toFloat()
-            when {
-                focused -> {
-                    setColor(brassLight)
-                    setStroke(dp(2), Color.WHITE)
-                }
-                active -> {
-                    setColor(0x33B8975A)
-                    setStroke(dp(1), brass)
-                }
-                else -> setColor(0x18FFFFFF)
+            is JSONArray -> {
+                for (i in 0 until node.length()) extractAlbumItems(node.opt(i), out)
             }
         }
     }
 
-    private fun selectTab(idx: Int) {
-        activeTab = idx
-        for (i in tabViews.indices) styleTab(tabViews[i], i, tabViews[i].hasFocus())
-        searchBarBox.visibility = if (idx == 0) View.VISIBLE else View.GONE
-        playlistBarBox.visibility = if (idx == 1) View.VISIBLE else View.GONE
-        radioBarBox.visibility = if (idx == 2) View.VISIBLE else View.GONE
+    private fun renderAlbumList(albums: List<AlbumItem>) {
         currentRenderedTracks = emptyList()
         listBox.removeAllViews()
+        if (albums.isEmpty()) {
+            listBox.addView(tv("Album tidak ditemukan. Coba ketik nama penyanyi atau judul album lain.", 13f, mute))
+            return
+        }
 
-        when (idx) {
-            0 -> {
-                val q = searchInput.text.toString().trim()
-                searchYtMusic(if (q.isNotEmpty()) q else "Lagu Pop Indonesia Terbaru")
+        listBox.addView(
+            tv("HASIL ALBUM · KETUK UNTUK BUKA DAFTAR LAGU", 11f, brassLight, Typeface.DEFAULT_BOLD).apply {
+                letterSpacing = 0.08f
+                setPadding(dp(4), 0, 0, dp(8))
             }
-            1 -> loadUserPlaylists()
-            2 -> loadIndonesianRadios()
-            3 -> loadMurottalAndLofi()
-            4 -> loadLocalMusic()
+        )
+
+        for (album in albums) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(10), dp(12), dp(10))
+                isFocusable = true
+                isClickable = true
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(0xFF171512.toInt())
+                    setStroke(dp(1), 0x33B8975A)
+                }
+                setOnFocusChangeListener { _, f ->
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat()
+                        setColor(if (f) 0x3AB8975A else 0xFF171512.toInt())
+                        setStroke(dp(if (f) 2 else 1), if (f) brassLight else 0x33B8975A)
+                    }
+                }
+                setOnClickListener { openAlbumDetail(album) }
+            }
+
+            val coverFrame = FrameLayout(this).apply {
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(8).toFloat()
+                    setColor(0xFF26211A.toInt())
+                    setStroke(dp(1), 0x55B8975A)
+                }
+                clipToOutline = true
+            }
+            val coverImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+            Images.load(album.thumbUrl, coverImg)
+            coverFrame.addView(coverImg, FrameLayout.LayoutParams(-1, -1))
+            row.addView(coverFrame, LinearLayout.LayoutParams(dp(54), dp(54)))
+
+            val col = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+            }
+            col.addView(tv(album.title, 14f, ivory, Typeface.DEFAULT_BOLD).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+            col.addView(tv(album.subtitle, 12f, mute).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            })
+            row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+
+            val openPill = tv("ALBUM ›", 10.5f, brassLight, Typeface.DEFAULT_BOLD).apply {
+                setPadding(dp(9), dp(5), dp(9), dp(5))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(8).toFloat()
+                    setColor(0x28B8975A)
+                }
+            }
+            row.addView(openPill)
+
+            listBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
     }
 
-    // --- TAB 1: PLAYLIST SAYA (LOKAL + AKUN GOOGLE) ---
+    private fun openAlbumDetail(album: AlbumItem) {
+        listBox.removeAllViews()
+        listBox.addView(tv("Memuat lagu dalam album \"${album.title}\"...", 13f, mute))
+
+        Thread {
+            val artistHint = album.subtitle.split("•", "·").firstOrNull {
+                !it.trim().equals("Album", true) && !it.trim().equals("EP", true) && !it.trim().equals("Single", true)
+            }?.trim() ?: album.title
+            val tracks = PlaylistStore.fetchBrowseTracks(
+                browseId = album.browseId,
+                fallbackArtist = artistHint,
+                fallbackThumb = album.thumbUrl
+            )
+
+            ui.post {
+                if (isFinishing || activeTab != 0) return@post
+                listBox.removeAllViews()
+
+                // Tombol Kembali ke Daftar Album
+                val backRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, 0, 0, dp(10))
+                }
+                val btnBackAlbums = actionPillBtn("← Kembali ke Daftar Album") {
+                    if (lastFoundAlbums.isNotEmpty()) {
+                        renderAlbumList(lastFoundAlbums)
+                    } else {
+                        searchYtAlbums(lastAlbumSearchQuery.ifEmpty { "Album Pop Indonesia" })
+                    }
+                }
+                backRow.addView(btnBackAlbums)
+                listBox.addView(backRow)
+
+                // Kartu Header Album
+                val headerCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(14).toFloat()
+                        setColor(0xFF1D1914.toInt())
+                        setStroke(dp(1), 0x55B8975A)
+                    }
+                }
+                val artBox = FrameLayout(this).apply {
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(10).toFloat()
+                        setColor(0xFF26211A.toInt())
+                    }
+                    clipToOutline = true
+                }
+                val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+                Images.load(album.thumbUrl, img)
+                artBox.addView(img, FrameLayout.LayoutParams(-1, -1))
+                headerCard.addView(artBox, LinearLayout.LayoutParams(dp(72), dp(72)))
+
+                val infoCol = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), 0, 0, 0)
+                }
+                infoCol.addView(tv(album.title, 15.5f, ivory, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+                infoCol.addView(tv("${album.subtitle} · ${tracks.size} Lagu", 12f, brassLight).apply {
+                    setPadding(0, dp(3), 0, dp(8))
+                })
+
+                val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                if (tracks.isNotEmpty()) {
+                    val btnPlayAlbum = actionPillBtn("▶ Putar Semua", primary = true) {
+                        MusicEngine.playTrack(this, tracks[0], tracks, 0)
+                        openFullPlayer()
+                    }
+                    val btnSaveAlbum = actionPillBtn("+ Simpan Album") {
+                        showSaveAlbumToPlaylistDialog(album.title, tracks)
+                    }
+                    btnRow.addView(btnPlayAlbum)
+                    btnRow.addView(btnSaveAlbum, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
+                }
+                infoCol.addView(btnRow)
+                headerCard.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
+                listBox.addView(headerCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+                if (tracks.isEmpty()) {
+                    listBox.addView(tv("Daftar lagu album ini tidak tersedia.", 13f, mute))
+                } else {
+                    renderTrackList(tracks, clearFirst = false, openFullOnPlay = true)
+                }
+            }
+        }.start()
+    }
+
+    private fun showSaveAlbumToPlaylistDialog(albumTitle: String, tracks: List<Track>) {
+        val all = PlaylistStore.getLocalPlaylists(this)
+        val names = all.map { "${it.name} (${it.tracks.size})" }.toMutableList()
+        names.add("+ Buat Playlist Baru \"$albumTitle\"")
+
+        AlertDialog.Builder(this)
+            .setTitle("Simpan ${tracks.size} lagu album ke:")
+            .setItems(names.toTypedArray()) { _, which ->
+                if (which == all.size) {
+                    val newIdx = PlaylistStore.createPlaylist(this, albumTitle)
+                    val added = PlaylistStore.addManyTracksToPlaylist(this, newIdx, tracks)
+                    notice.show("Album Tersimpan", "$added lagu disimpan ke playlist \"$albumTitle\".", 3500L)
+                } else {
+                    val added = PlaylistStore.addManyTracksToPlaylist(this, which, tracks)
+                    notice.show("Album Tersimpan", "$added lagu baru ditambahkan ke \"${all[which].name}\".", 3500L)
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
+    private fun extractMusicItems(node: Any?, out: MutableList<Track>) {
+        if (out.size >= 25 || node == null) return
+        when (node) {
+            is JSONObject -> {
+                val renderer = node.optJSONObject("musicResponsiveListItemRenderer")
+                if (renderer != null) {
+                    val vid = renderer.optJSONObject("playlistItemData")?.optString("videoId", "") ?: ""
+                    val cols = renderer.optJSONArray("flexColumns")
+                    var title = ""
+                    var artist = ""
+                    if (cols != null && cols.length() > 0) {
+                        title = readRunsText(cols.getJSONObject(0))
+                        if (cols.length() > 1) artist = readRunsText(cols.getJSONObject(1))
+                    }
+                    if (vid.isNotEmpty() && title.isNotEmpty() && out.none { it.id == vid }) {
+                        out.add(
+                            Track(
+                                id = vid,
+                                title = title,
+                                artist = artist.ifBlank { "YouTube Music" },
+                                thumbUrl = "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
+                                isLive = false,
+                                isYtMusic = true
+                            )
+                        )
+                    }
+                }
+                val keys = node.keys()
+                while (keys.hasNext()) {
+                    extractMusicItems(node.opt(keys.next()), out)
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until node.length()) {
+                    extractMusicItems(node.opt(i), out)
+                }
+            }
+        }
+    }
+
+    private fun readRunsText(obj: JSONObject?): String {
+        val runs = obj?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+            ?.optJSONObject("text")
+            ?.optJSONArray("runs") ?: return ""
+        val sb = StringBuilder()
+        for (i in 0 until runs.length()) {
+            sb.append(runs.getJSONObject(i).optString("text", ""))
+        }
+        return sb.toString().trim()
+    }
+
+    // --- TAB 1: PLAYLIST SAYA ---
     private fun loadUserPlaylists() {
         listBox.removeAllViews()
         listBox.addView(tv("Memuat playlist lokal & akun Google...", 13f, mute))
@@ -1623,7 +2332,7 @@ class RadioMusicActivity : AppCompatActivity() {
         if (currentPl.isGoogleSynced && currentPl.tracks.isEmpty() && currentPl.browseId.isNotEmpty()) {
             listBox.addView(tv("Mengambil daftar lagu dari ${currentPl.name}...", 13f, mute))
             Thread {
-                val fetched = PlaylistStore.fetchGooglePlaylistTracks(currentPl.browseId)
+                val fetched = PlaylistStore.fetchBrowseTracks(currentPl.browseId)
                 currentPl.tracks.clear()
                 currentPl.tracks.addAll(fetched)
                 ui.post {
@@ -1639,7 +2348,7 @@ class RadioMusicActivity : AppCompatActivity() {
             val hintMsg = if (currentPl.isGoogleSynced) {
                 "Tidak ada lagu ditemukan di \"${currentPl.name}\"."
             } else {
-                "Playlist \"${currentPl.name}\" masih kosong.\n\nTekan tombol \"+ Playlist\" pada lagu di tab Cari Lagu, Radio ID, Murottal, atau Musik Lokal untuk menambahkannya ke sini."
+                "Playlist \"${currentPl.name}\" masih kosong.\n\nTekan tombol \"+ Playlist\" pada lagu atau album untuk menyimpannya ke sini."
             }
             listBox.addView(
                 tv(hintMsg, 13f, mute).apply {
@@ -1670,6 +2379,7 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 MusicEngine.playTrack(this@RadioMusicActivity, currentPl.tracks[0], currentPl.tracks, 0)
+                openFullPlayer()
             }
         }
         playAllRow.addView(
@@ -1677,7 +2387,7 @@ class RadioMusicActivity : AppCompatActivity() {
         )
         listBox.addView(playAllRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
-        renderTrackList(currentPl.tracks, isLocalPlaylistTab = !currentPl.isGoogleSynced)
+        renderTrackList(currentPl.tracks, clearFirst = false, isLocalPlaylistTab = !currentPl.isGoogleSynced, openFullOnPlay = true)
     }
 
     private fun promptCreatePlaylist() {
@@ -1762,101 +2472,6 @@ class RadioMusicActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- TAB 0: CARI LAGU YOUTUBE MUSIC ---
-    private fun searchYtMusic(query: String) {
-        listBox.removeAllViews()
-        listBox.addView(tv("Mencari \"$query\" di YouTube Music...", 13f, mute))
-        Thread {
-            val results = ArrayList<Track>()
-            try {
-                val conn = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 8000
-                conn.readTimeout = 10000
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("Origin", "https://music.youtube.com")
-                conn.setRequestProperty("User-Agent", GoogleMusicAuth.CHROME_UA)
-                val auth = GoogleMusicAuth.buildSapisidHashAuth()
-                if (auth != null) {
-                    conn.setRequestProperty("Authorization", auth)
-                    conn.setRequestProperty("Cookie", GoogleMusicAuth.getCookie())
-                }
-
-                val safeQ = query.replace("\"", "")
-                val payload = """{"context":{"client":{"clientName":"WEB_REMIX","clientVersion":"1.20241106.01.00","hl":"id","gl":"ID"}},"query":"$safeQ","params":"EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D"}"""
-                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-
-                if (conn.responseCode == 200) {
-                    val rootJson = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    extractMusicItems(rootJson, results)
-                }
-            } catch (_: Exception) {
-            }
-
-            ui.post {
-                if (isFinishing || activeTab != 0) return@post
-                listBox.removeAllViews()
-                if (results.isEmpty()) {
-                    listBox.addView(tv("Tidak ditemukan hasil. Coba kata kunci lain.", 13f, mute))
-                } else {
-                    renderTrackList(results)
-                }
-            }
-        }.start()
-    }
-
-    private fun extractMusicItems(node: Any?, out: MutableList<Track>) {
-        if (out.size >= 25 || node == null) return
-        when (node) {
-            is JSONObject -> {
-                val renderer = node.optJSONObject("musicResponsiveListItemRenderer")
-                if (renderer != null) {
-                    val vid = renderer.optJSONObject("playlistItemData")?.optString("videoId", "") ?: ""
-                    val cols = renderer.optJSONArray("flexColumns")
-                    var title = ""
-                    var artist = ""
-                    if (cols != null && cols.length() > 0) {
-                        title = readRunsText(cols.getJSONObject(0))
-                        if (cols.length() > 1) artist = readRunsText(cols.getJSONObject(1))
-                    }
-                    if (vid.isNotEmpty() && title.isNotEmpty() && out.none { it.id == vid }) {
-                        out.add(
-                            Track(
-                                id = vid,
-                                title = title,
-                                artist = artist.ifBlank { "YouTube Music" },
-                                thumbUrl = "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
-                                isLive = false,
-                                isYtMusic = true
-                            )
-                        )
-                    }
-                }
-                val keys = node.keys()
-                while (keys.hasNext()) {
-                    extractMusicItems(node.opt(keys.next()), out)
-                }
-            }
-            is JSONArray -> {
-                for (i in 0 until node.length()) {
-                    extractMusicItems(node.opt(i), out)
-                }
-            }
-        }
-    }
-
-    private fun readRunsText(obj: JSONObject?): String {
-        val runs = obj?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
-            ?.optJSONObject("text")
-            ?.optJSONArray("runs") ?: return ""
-        val sb = StringBuilder()
-        for (i in 0 until runs.length()) {
-            sb.append(runs.getJSONObject(i).optString("text", ""))
-        }
-        return sb.toString().trim()
-    }
-
     // --- TAB 2: RADIO INDONESIA ---
     private fun loadIndonesianRadios() {
         val curated = listOf(
@@ -1869,7 +2484,7 @@ class RadioMusicActivity : AppCompatActivity() {
             Track("iradio", "I-Radio Jakarta", "100% Musik Indonesia", "https://n02.radiojar.com/4ywdgup3bnzuv", isLive = true),
             Track("delta", "Delta FM", "Lagu Enak Terus", "https://s1.cloudmu.id/listen/delta_fm/radio.mp3", isLive = true)
         )
-        renderTrackList(curated)
+        renderTrackList(curated, openFullOnPlay = true)
 
         Thread {
             val fetched = ArrayList<Track>(curated)
@@ -1894,7 +2509,7 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             ui.post {
                 if (!isFinishing && activeTab == 2 && fetched.size > curated.size) {
-                    renderTrackList(sortRadiosByScan(fetched))
+                    renderTrackList(sortRadiosByScan(fetched), openFullOnPlay = true)
                 }
             }
         }.start()
@@ -1910,7 +2525,7 @@ class RadioMusicActivity : AppCompatActivity() {
         for (t in targets) {
             radioScanMap[t.id] = RadioScanResult(1, "CEK...", "Menguji koneksi")
         }
-        renderTrackList(targets)
+        renderTrackList(targets, openFullOnPlay = true)
 
         val doneCount = AtomicInteger(0)
         val activeCount = AtomicInteger(0)
@@ -1932,10 +2547,10 @@ class RadioMusicActivity : AppCompatActivity() {
                         btnScanRadio.text = "Scan Ulang"
                         radioScanSummary.text = "Selesai: ${activeCount.get()} Aktif · ${deadCount.get()} Mati"
                         if (activeTab == 2) {
-                            renderTrackList(sortRadiosByScan(targets))
+                            renderTrackList(sortRadiosByScan(targets), openFullOnPlay = true)
                         }
                     } else if (activeTab == 2 && done % 3 == 0) {
-                        renderTrackList(targets)
+                        renderTrackList(targets, openFullOnPlay = true)
                     }
                 }
             }
@@ -2012,7 +2627,7 @@ class RadioMusicActivity : AppCompatActivity() {
             Track("lofi1", "Lofi Hip Hop & Belajar", "Musik Santai Tanpa Vokal", "https://streams.ilovemusic.de/iloveradio17.mp3", isLive = true),
             Track("piano1", "Instrumental Piano & Hujan", "Relaksasi & Pengantar Tidur", "https://strm112.1.fm/spa_mobile_mp3", isLive = true)
         )
-        renderTrackList(list)
+        renderTrackList(list, openFullOnPlay = true)
     }
 
     // --- TAB 4: MUSIK LOKAL ---
@@ -2045,15 +2660,20 @@ class RadioMusicActivity : AppCompatActivity() {
                 if (locals.isEmpty()) {
                     listBox.addView(tv("Tidak ada file MP3 ditemukan di penyimpanan perangkat.", 13f, mute))
                 } else {
-                    renderTrackList(locals)
+                    renderTrackList(locals, openFullOnPlay = true)
                 }
             }
         }.start()
     }
 
-    private fun renderTrackList(items: List<Track>, isLocalPlaylistTab: Boolean = false) {
+    private fun renderTrackList(
+        items: List<Track>,
+        clearFirst: Boolean = true,
+        isLocalPlaylistTab: Boolean = false,
+        openFullOnPlay: Boolean = true
+    ) {
         currentRenderedTracks = items
-        listBox.removeAllViews()
+        if (clearFirst) listBox.removeAllViews()
         val curId = MusicEngine.currentTrack?.id
 
         for ((index, item) in items.withIndex()) {
@@ -2085,6 +2705,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
                 setOnClickListener {
                     MusicEngine.playTrack(this@RadioMusicActivity, item, items, index)
+                    if (openFullOnPlay) openFullPlayer()
                 }
             }
 
@@ -2156,49 +2777,61 @@ class RadioMusicActivity : AppCompatActivity() {
                 outerRow.addView(btnAdd)
             }
 
-            val lp = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
-            listBox.addView(outerRow, lp)
+            listBox.addView(outerRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
     }
 
-    private fun syncPlayerUi() {
+    // =========================================================================
+    // SINKRONISASI UI MINI PLAYER & FULL-SCREEN PLAYER
+    // =========================================================================
+    private fun syncAllPlayerViews() {
         val t = MusicEngine.currentTrack
         val st = MusicEngine.state
 
         if (t == null) {
-            nowTitle.text = "Belum ada audio diputar"
-            nowArtist.text = "Pilih lagu, playlist, radio, atau murottal"
-            btnPlayPause.text = "▶"
+            miniPlayerBar.visibility = View.GONE
+            fullNowTitle.text = "Belum ada lagu diputar"
+            fullNowArtist.text = "Pilih lagu atau album"
+            fullBtnPlayPause.text = "▶"
+            miniBtnPlayPause.text = "▶"
         } else {
-            nowTitle.text = t.title
-            nowArtist.text = t.artist
-            Images.load(t.thumbUrl, artView)
-            btnPlayPause.text = if (st == PlayState.PLAYING) "⏸" else "▶"
+            miniPlayerBar.visibility = View.VISIBLE
+            miniTitle.text = t.title
+            miniSubtitle.text = "${t.artist} · ${MusicEngine.statusDetail}"
+            Images.load(t.thumbUrl, miniArtView)
+            miniBtnPlayPause.text = if (st == PlayState.PLAYING) "⏸" else "▶"
+
+            fullNowTitle.text = t.title
+            fullNowArtist.text = t.artist
+            Images.load(t.thumbUrl, fullArtView)
+            fullBtnPlayPause.text = if (st == PlayState.PLAYING) "⏸" else "▶"
+
+            lyricMiniTitle.text = t.title
+            lyricMiniSub.text = "${t.artist} · ${MusicEngine.statusDetail}"
+            Images.load(t.thumbUrl, lyricMiniArt)
         }
 
-        btnToggleLyrics.text = if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF"
-        btnToggleLyrics.setTextColor(if (MusicEngine.lyricsEnabled) brassLight else mute)
-        lyricSectionBox.visibility = if (MusicEngine.lyricsEnabled) View.VISIBLE else View.GONE
+        // Sakelar Lirik: Saat aktif, tampilan penuh berubah menjadi Layar Lirik Karaoke
+        fullBtnToggleLyrics.text = if (MusicEngine.lyricsEnabled) "Lirik: AKTIF" else "Lirik: NONAKTIF"
+        fullBtnToggleLyrics.setTextColor(if (MusicEngine.lyricsEnabled) brassLight else mute)
 
-        val targetArtSize = dp(
-            when {
-                isPhonePortrait && MusicEngine.lyricsEnabled -> 62
-                isPhonePortrait && !MusicEngine.lyricsEnabled -> 88
-                !isPhonePortrait && MusicEngine.lyricsEnabled -> 88
-                else -> 132
-            }
-        )
-        if (artFrame.layoutParams.width != targetArtSize) {
-            artFrame.layoutParams = LinearLayout.LayoutParams(targetArtSize, targetArtSize)
+        if (MusicEngine.lyricsEnabled) {
+            fullCoverSection.visibility = View.GONE
+            fullLyricsSection.visibility = View.VISIBLE
+            rebuildLyricViews()
+        } else {
+            fullLyricsSection.visibility = View.GONE
+            fullCoverSection.visibility = View.VISIBLE
         }
 
-        btnShuffle.setTextColor(if (MusicEngine.shuffleEnabled) brassLight else mute)
-        btnRepeat.text = if (MusicEngine.repeatMode == 2) "🔂" else "🔁"
-        btnRepeat.setTextColor(if (MusicEngine.repeatMode > 0) brassLight else mute)
+        fullBtnShuffle.setTextColor(if (MusicEngine.shuffleEnabled) brassLight else mute)
+        fullBtnRepeat.text = if (MusicEngine.repeatMode == 2) "🔂" else "🔁"
+        fullBtnRepeat.setTextColor(if (MusicEngine.repeatMode > 0) brassLight else mute)
 
         val isBusy = (st == PlayState.RESOLVING || st == PlayState.BUFFERING)
-        loadingSpinner.visibility = if (isBusy) View.VISIBLE else View.GONE
-        statusTextView.text = MusicEngine.statusDetail
+        fullSpinner.visibility = if (isBusy) View.VISIBLE else View.GONE
+        fullStatusText.text = MusicEngine.statusDetail
+        fullQualityLabel.text = MusicEngine.statusDetail.uppercase(Locale.US)
 
         val pillBgColor = when (st) {
             PlayState.PLAYING -> 0x2852C47A
@@ -2212,14 +2845,10 @@ class RadioMusicActivity : AppCompatActivity() {
             PlayState.RESOLVING, PlayState.BUFFERING -> brassLight
             else -> mute
         }
-        statusTextView.setTextColor(pillTextColor)
-        statusRow.background = GradientDrawable().apply {
-            cornerRadius = dp(8).toFloat()
+        fullStatusText.setTextColor(pillTextColor)
+        fullStatusRow.background = GradientDrawable().apply {
+            cornerRadius = dp(20).toFloat()
             setColor(pillBgColor)
-        }
-
-        if (MusicEngine.lyricsEnabled) {
-            rebuildLyricViews()
         }
     }
 
@@ -2229,8 +2858,8 @@ class RadioMusicActivity : AppCompatActivity() {
         if (!active) {
             for (bar in eqBars) {
                 val lp = bar.layoutParams
-                if (lp.height != dp(5)) {
-                    lp.height = dp(5)
+                if (lp.height != dp(4)) {
+                    lp.height = dp(4)
                     bar.layoutParams = lp
                 }
             }
@@ -2239,7 +2868,7 @@ class RadioMusicActivity : AppCompatActivity() {
         eqPhase += 0.85
         for (i in eqBars.indices) {
             val wave = (sin(eqPhase + i * 1.4) + 1.0) * 0.5
-            val h = dp(5 + (wave * 15).toInt())
+            val h = dp(4 + (wave * 12).toInt())
             val lp = eqBars[i].layoutParams
             lp.height = h
             eqBars[i].layoutParams = lp
@@ -2253,17 +2882,23 @@ class RadioMusicActivity : AppCompatActivity() {
 
         val lines = MusicEngine.lyrics
         if (lines.isEmpty()) {
-            lyricBox.addView(tv(MusicEngine.lyricStatus, 13f, mute).apply {
+            lyricBox.addView(tv(MusicEngine.lyricStatus, 15f, mute).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(8), dp(24), dp(8), dp(24))
+                setPadding(dp(12), dp(36), dp(12), dp(36))
             })
             return
         }
 
         for (line in lines) {
-            val ltv = tv(line.text, 14f, 0xFF7D766B.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            val ltv = tv(line.text, 16f, 0xFF8C8478.toInt(), Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(6), dp(7), dp(6), dp(7))
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+                setLineSpacing(0f, 1.2f)
+                isClickable = true
+                // Ketuk baris lirik untuk melompat ke detik tersebut
+                setOnClickListener {
+                    MusicEngine.player?.seekTo(line.timeMs)
+                }
             }
             lyricBox.addView(ltv, LinearLayout.LayoutParams(-1, -2))
             lyricViews.add(ltv)
@@ -2275,20 +2910,23 @@ class RadioMusicActivity : AppCompatActivity() {
         val track = MusicEngine.currentTrack ?: return
         try {
             if (track.isLive) {
-                timeLabel.text = "LIVE · HEMAT KUOTA"
-                seekBar.isEnabled = false
-                seekBar.progress = 1000
+                fullTimeLabel.text = "LIVE · HEMAT KUOTA"
+                fullSeekBar.isEnabled = false
+                fullSeekBar.progress = 1000
+                miniProgressBar.progress = 1000
                 return
             }
-            seekBar.isEnabled = true
+            fullSeekBar.isEnabled = true
             val pos = exo.currentPosition
             val dur = exo.duration
             if (dur > 0 && !isSeeking) {
-                seekBar.progress = ((pos * 1000L) / dur).toInt().coerceIn(0, 1000)
-                timeLabel.text = "${fmtTime(pos)} / ${fmtTime(dur)}"
+                val permille = ((pos * 1000L) / dur).toInt().coerceIn(0, 1000)
+                fullSeekBar.progress = permille
+                miniProgressBar.progress = permille
+                fullTimeLabel.text = "${fmtTime(pos)} / ${fmtTime(dur)}"
             }
 
-            if (!MusicEngine.lyricsEnabled) return
+            if (!MusicEngine.lyricsEnabled || !isFullPlayerOpen) return
 
             val lines = MusicEngine.lyrics
             if (lines.isNotEmpty() && lyricViews.size == lines.size) {
@@ -2298,12 +2936,12 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
                 if (activeIdx != lastHighlightedIdx && activeIdx >= 0) {
                     if (lastHighlightedIdx in lyricViews.indices) {
-                        lyricViews[lastHighlightedIdx].setTextColor(0xFF7D766B.toInt())
-                        lyricViews[lastHighlightedIdx].setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 14f))
+                        lyricViews[lastHighlightedIdx].setTextColor(0xFF8C8478.toInt())
+                        lyricViews[lastHighlightedIdx].setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 16f))
                     }
                     val activeView = lyricViews[activeIdx]
                     activeView.setTextColor(brassLight)
-                    activeView.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 17f))
+                    activeView.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, 20f))
                     lastHighlightedIdx = activeIdx
 
                     val targetY = (activeView.top - lyricScroll.height / 3).coerceAtLeast(0)
