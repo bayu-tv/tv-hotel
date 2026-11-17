@@ -4,7 +4,6 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -26,7 +25,15 @@ import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 import org.libtorrent4j.swig.settings_pack
+import java.io.BufferedOutputStream
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
+import java.io.RandomAccessFile
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 class TorrentBufferActivity : AppCompatActivity() {
@@ -39,6 +46,8 @@ class TorrentBufferActivity : AppCompatActivity() {
 
     private val ui = Handler(Looper.getMainLooper())
     @Volatile private var sessionManager: SessionManager? = null
+    @Volatile private var serverSocket: ServerSocket? = null
+    @Volatile private var serverRunning = false
     @Volatile private var metadataReady = false
     @Volatile private var playerLaunched = false
     @Volatile private var cancelled = false
@@ -100,7 +109,7 @@ class TorrentBufferActivity : AppCompatActivity() {
         }
 
         val badge = TextView(this).apply {
-            text = "B-BOX P2P STREAMING - FAST BUFFER"
+            text = "B-BOX P2P STREAMING - HTTP BRIDGE"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 11f))
             setTextColor(brassLight)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -220,7 +229,8 @@ class TorrentBufferActivity : AppCompatActivity() {
                 val ti = TorrentInfo(metadataBytes)
                 val selectedIdx = pickVideoFileIndex(ti, intent.getIntExtra("file_idx", -1))
                 val files = ti.files()
-                val fileNameLower = files.filePath(selectedIdx).lowercase(Locale.US)
+                val relPath = files.filePath(selectedIdx)
+                val fileNameLower = relPath.lowercase(Locale.US)
                 val isMp4Like = fileNameLower.endsWith(".mp4") || fileNameLower.endsWith(".mov")
 
                 ui.post {
@@ -252,7 +262,6 @@ class TorrentBufferActivity : AppCompatActivity() {
                 val lastPiece = ti.mapFile(selectedIdx, (fileSize - 1L).coerceAtLeast(0L), 1).piece()
                 val pieceLen = ti.pieceLength().coerceAtLeast(16384)
 
-                // Target buffer awal ~6 MB agar film cepat terbuka
                 val headPieces = ((6L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 16)
                 val headEnd = (firstPiece + headPieces).coerceAtMost(lastPiece)
 
@@ -260,7 +269,6 @@ class TorrentBufferActivity : AppCompatActivity() {
                 for (p in firstPiece..headEnd) {
                     criticalPieces.add(p)
                 }
-                // Hanya MP4/MOV yang butuh 1 blok paling akhir untuk membaca moov atom
                 if (isMp4Like && lastPiece > headEnd) {
                     criticalPieces.add(lastPiece)
                 }
@@ -306,15 +314,24 @@ class TorrentBufferActivity : AppCompatActivity() {
                     }
 
                     if (readyCount >= criticalPieces.size) {
-                        val videoFile = File(saveDir, files.filePath(selectedIdx))
-                        if (videoFile.exists() && videoFile.length() > 0L) {
+                        val videoFile = File(saveDir, relPath)
+                        val streamUrl = startLocalHttpBridge(
+                            videoFile = videoFile,
+                            fileSize = fileSize,
+                            ti = ti,
+                            th = th,
+                            selectedIdx = selectedIdx,
+                            lastPiece = lastPiece,
+                            pieceLen = pieceLen,
+                            fileNameLower = fileNameLower
+                        )
+                        if (streamUrl != null) {
                             playerLaunched = true
                             ui.post {
                                 if (!cancelled && !isFinishing) {
-                                    val fileUri = Uri.fromFile(videoFile).toString()
                                     val playIntent = Intent(this, VodPlayerActivity::class.java).apply {
                                         putExtras(intent)
-                                        putExtra("url", fileUri)
+                                        putExtra("url", streamUrl)
                                     }
                                     ContinueWatch.saveFromIntent(this, playIntent, 0L)
                                     playerLauncher.launch(playIntent)
@@ -335,6 +352,199 @@ class TorrentBufferActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun startLocalHttpBridge(
+        videoFile: File,
+        fileSize: Long,
+        ti: TorrentInfo,
+        th: TorrentHandle,
+        selectedIdx: Int,
+        lastPiece: Int,
+        pieceLen: Int,
+        fileNameLower: String
+    ): String? {
+        return try {
+            val ss = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+            serverSocket = ss
+            serverRunning = true
+            val port = ss.localPort
+            val ext = fileNameLower.substringAfterLast('.', "mkv")
+            val mime = when (ext) {
+                "mp4", "m4v" -> "video/mp4"
+                "webm" -> "video/webm"
+                "avi" -> "video/x-msvideo"
+                "mov" -> "video/quicktime"
+                else -> "video/x-matroska"
+            }
+
+            Thread {
+                while (serverRunning && !cancelled && !isFinishing) {
+                    val client = try {
+                        ss.accept()
+                    } catch (_: Throwable) {
+                        break
+                    }
+                    Thread {
+                        handleHttpClient(
+                            socket = client,
+                            videoFile = videoFile,
+                            fileSize = fileSize,
+                            mime = mime,
+                            ti = ti,
+                            th = th,
+                            selectedIdx = selectedIdx,
+                            lastPiece = lastPiece,
+                            pieceLen = pieceLen
+                        )
+                    }.start()
+                }
+            }.start()
+
+            "http://127.0.0.1:$port/stream.$ext"
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun handleHttpClient(
+        socket: Socket,
+        videoFile: File,
+        fileSize: Long,
+        mime: String,
+        ti: TorrentInfo,
+        th: TorrentHandle,
+        selectedIdx: Int,
+        lastPiece: Int,
+        pieceLen: Int
+    ) {
+        try {
+            socket.soTimeout = 30000
+            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
+            val requestLine = reader.readLine() ?: return
+            val isHead = requestLine.startsWith("HEAD ", ignoreCase = true)
+
+            var rangeHeader: String? = null
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) break
+                if (line.startsWith("Range:", ignoreCase = true)) {
+                    rangeHeader = line.substringAfter(':').trim()
+                }
+            }
+
+            var rangeStart = 0L
+            var rangeEnd = fileSize - 1L
+            var hasRange = false
+
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=", ignoreCase = true)) {
+                hasRange = true
+                val spec = rangeHeader.substring(6).substringBefore(',').trim()
+                val parts = spec.split('-', limit = 2)
+                val startStr = parts.getOrNull(0)?.trim() ?: ""
+                val endStr = parts.getOrNull(1)?.trim() ?: ""
+                if (startStr.isNotEmpty()) {
+                    rangeStart = startStr.toLongOrNull()?.coerceIn(0L, fileSize - 1L) ?: 0L
+                    if (endStr.isNotEmpty()) {
+                        rangeEnd = endStr.toLongOrNull()?.coerceIn(rangeStart, fileSize - 1L) ?: (fileSize - 1L)
+                    }
+                } else if (endStr.isNotEmpty()) {
+                    val suffixLen = endStr.toLongOrNull() ?: 0L
+                    rangeStart = (fileSize - suffixLen).coerceAtLeast(0L)
+                }
+            }
+
+            val contentLength = (rangeEnd - rangeStart + 1L).coerceAtLeast(0L)
+            val out = BufferedOutputStream(socket.getOutputStream(), 65536)
+
+            val headers = StringBuilder()
+            if (hasRange) {
+                headers.append("HTTP/1.1 206 Partial Content\r\n")
+                headers.append("Content-Range: bytes $rangeStart-$rangeEnd/$fileSize\r\n")
+            } else {
+                headers.append("HTTP/1.1 200 OK\r\n")
+            }
+            headers.append("Content-Type: $mime\r\n")
+            headers.append("Accept-Ranges: bytes\r\n")
+            headers.append("Content-Length: $contentLength\r\n")
+            headers.append("Connection: close\r\n\r\n")
+
+            out.write(headers.toString().toByteArray(StandardCharsets.US_ASCII))
+            out.flush()
+
+            if (isHead || contentLength <= 0L) return
+
+            var waitFile = 0
+            while (!videoFile.exists() && waitFile < 50 && serverRunning && !cancelled) {
+                Thread.sleep(100L)
+                waitFile++
+            }
+            if (!videoFile.exists()) return
+
+            RandomAccessFile(videoFile, "r").use { raf ->
+                val buf = ByteArray(65536)
+                var pos = rangeStart
+                var remaining = contentLength
+                var lastPrioritizedPiece = -1
+
+                while (remaining > 0L && serverRunning && !cancelled && !isFinishing && !socket.isClosed) {
+                    val piece = ti.mapFile(selectedIdx, pos, 1).piece()
+                    val nextPiece = (piece + 1).coerceAtMost(lastPiece)
+
+                    if (piece != lastPrioritizedPiece) {
+                        lastPrioritizedPiece = piece
+                        val lookAheadEnd = (piece + 8).coerceAtMost(lastPiece)
+                        for (p in piece..lookAheadEnd) {
+                            try {
+                                th.piecePriority(p, Priority.TOP_PRIORITY)
+                                th.setPieceDeadline(p, 150 + (p - piece) * 150)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+
+                    var stallLoops = 0
+                    while ((!th.havePiece(piece) || !th.havePiece(nextPiece)) &&
+                        serverRunning && !cancelled && !isFinishing && !socket.isClosed
+                    ) {
+                        if (stallLoops % 12 == 0) {
+                            try {
+                                th.piecePriority(piece, Priority.TOP_PRIORITY)
+                                th.setPieceDeadline(piece, 100)
+                                if (nextPiece != piece) {
+                                    th.piecePriority(nextPiece, Priority.TOP_PRIORITY)
+                                    th.setPieceDeadline(nextPiece, 200)
+                                }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        Thread.sleep(80L)
+                        stallLoops++
+                    }
+
+                    if (!serverRunning || cancelled || isFinishing || socket.isClosed) break
+
+                    val maxChunk = minOf(remaining, buf.size.toLong(), pieceLen.toLong()).toInt()
+                    raf.seek(pos)
+                    val read = raf.read(buf, 0, maxChunk)
+                    if (read <= 0) {
+                        Thread.sleep(60L)
+                        continue
+                    }
+
+                    out.write(buf, 0, read)
+                    pos += read.toLong()
+                    remaining -= read.toLong()
+                }
+                out.flush()
+            }
+        } catch (_: Throwable) {
+        } finally {
+            try {
+                socket.close()
+            } catch (_: Throwable) {
+            }
+        }
     }
 
     private fun pickVideoFileIndex(ti: TorrentInfo, requestedIdx: Int): Int {
@@ -365,6 +575,13 @@ class TorrentBufferActivity : AppCompatActivity() {
 
     private fun cleanupAndFinish() {
         ui.removeCallbacks(waitTicker)
+        serverRunning = false
+        try {
+            serverSocket?.close()
+        } catch (_: Throwable) {
+        }
+        serverSocket = null
+
         val sm = sessionManager
         sessionManager = null
         Thread {
@@ -398,6 +615,13 @@ class TorrentBufferActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        serverRunning = false
+        try {
+            serverSocket?.close()
+        } catch (_: Throwable) {
+        }
+        serverSocket = null
+
         val sm = sessionManager
         sessionManager = null
         Thread {
