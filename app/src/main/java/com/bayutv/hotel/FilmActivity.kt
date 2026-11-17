@@ -6,8 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -16,8 +20,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
 import android.util.LruCache
 import android.util.TypedValue
 import android.view.Gravity
@@ -99,6 +106,67 @@ class FilmActivity : AppCompatActivity() {
         return v
     }
 
+    private fun buildBBoxBrand(): LinearLayout {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, dp(22), 0)
+            isFocusable = false
+        }
+
+        val iconView = object : View(this) {
+            private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFF1A1713.toInt()
+                style = Paint.Style.FILL
+            }
+            private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = brassLight
+                style = Paint.Style.STROKE
+                strokeWidth = dp(2).toFloat()
+            }
+            private val playPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = brassLight
+                style = Paint.Style.FILL
+            }
+            private val rect = RectF()
+            private val playPath = Path()
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                val pad = dp(2).toFloat()
+                rect.set(pad, pad, width - pad, height - pad)
+                val r = dp(7).toFloat()
+                canvas.drawRoundRect(rect, r, r, bgPaint)
+                canvas.drawRoundRect(rect, r, r, strokePaint)
+
+                val cx = width * 0.52f
+                val cy = height * 0.50f
+                val tri = width * 0.22f
+                playPath.reset()
+                playPath.moveTo(cx - tri * 0.65f, cy - tri)
+                playPath.lineTo(cx + tri * 0.95f, cy)
+                playPath.lineTo(cx - tri * 0.65f, cy + tri)
+                playPath.close()
+                canvas.drawPath(playPath, playPaint)
+            }
+        }
+        val ilp = LinearLayout.LayoutParams(dp(28), dp(28))
+        ilp.rightMargin = dp(9)
+        box.addView(iconView, ilp)
+
+        val spannable = SpannableString("B-BOX").apply {
+            setSpan(ForegroundColorSpan(brassLight), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(ForegroundColorSpan(ivory), 1, 5, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val wordmark = tv("B-BOX", 20f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            text = spannable
+            letterSpacing = 0.16f
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        }
+        box.addView(wordmark)
+        return box
+    }
+
     private fun upgradeImageUrl(url: String?, isBackdrop: Boolean): String? {
         if (url.isNullOrBlank()) return null
         val targetSize = if (isBackdrop) "/w1280/" else "/w780/"
@@ -127,7 +195,7 @@ class FilmActivity : AppCompatActivity() {
                 val conn = URL(hdUrl).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
                 conn.readTimeout = 10000
-                conn.setRequestProperty("User-Agent", "BayuTV")
+                conn.setRequestProperty("User-Agent", "B-BOX-TV/1.0")
                 val bytes = conn.inputStream.use { it.readBytes() }
 
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -204,18 +272,13 @@ class FilmActivity : AppCompatActivity() {
             clipChildren = false
         }
 
-        // Top Navigation Bar Elegan
+        // Top Navigation Bar B-BOX
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(44), dp(18), dp(44), dp(8))
         }
-        val brand = tv("BAYU CINEMA", 19f, brassLight, Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
-            letterSpacing = 0.14f
-            setShadowLayer(6f, 0f, 2f, Color.BLACK)
-            setPadding(0, 0, dp(22), 0)
-        }
-        topBar.addView(brand)
+        topBar.addView(buildBBoxBrand())
 
         val tabScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -257,7 +320,7 @@ class FilmActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(8), dp(44), dp(10))
         }
-        heroBadge = tv("STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        heroBadge = tv("B-BOX STREAMING  ·  SUB INDO", 11f, brassLight, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             letterSpacing = 0.14f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
@@ -505,7 +568,7 @@ class FilmActivity : AppCompatActivity() {
         val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
         heroBadge.text = typeTag + cwTag + (if (hasLocal) "  ·  TERSEDIA DI KOLEKSI SAYA" else "  ·  SUB INDO")
         heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   ·   " else "") + "\u2605 " + r + "   ·   Tekan OK untuk Tonton"
-        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pilihan server streaming, dan Subtitle Indonesia."
+        heroOverview.text = if (m.overview.isNotBlank()) m.overview else "Tekan OK untuk melihat detail lengkap, pemutar bebas iklan, dan Subtitle Indonesia."
 
         val key = watchKey(m)
         val bdUrl = resolvedBackdrops[key] ?: m.backdrop
@@ -1173,7 +1236,7 @@ class FilmActivity : AppCompatActivity() {
         val menit = if (cw.posMs > 60000L) "Menit ke-${cw.posMs / 60000L}" else "Terakhir ditonton"
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  ·  " else "") + menit + "  ·  Subtitle Indonesia"
         detailOverview.text = m.overview.ifBlank { "Lanjutkan menonton dari posisi terakhir Anda." }
-        detailProviders.text = "Riwayat tersimpan otomatis di perangkat TV."
+        detailProviders.text = "Riwayat tersimpan otomatis di B-BOX."
         Images.load(m.poster, detailPoster)
         val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
         if (!bdUrl.isNullOrBlank()) {
@@ -1191,7 +1254,7 @@ class FilmActivity : AppCompatActivity() {
                 startDirectStream(m, cw.season, cw.episode)
             }
         }
-        addDetailButton("Cari di YouTube TV", false) {
+        addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
         addDetailButton("Hapus Riwayat", false) {
@@ -1230,7 +1293,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("▶  Tonton (Server Web)", true) { startDirectStream(m) }
+        addDetailButton("▶  Tonton (Bebas Iklan)", true) { startDirectStream(m) }
         addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
@@ -1303,14 +1366,14 @@ class FilmActivity : AppCompatActivity() {
                 detailProviders.text = if (provNames.isNotEmpty()) {
                     "Layanan Resmi ID: " + provNames.distinct().joinToString(", ")
                 } else {
-                    "Gunakan Server Web, YouTube TV, atau Koleksi Saya (Jellyfin)."
+                    "Pemutar Native B-BOX (Bebas Iklan & Sub Indo Otomatis)."
                 }
 
                 detailActions.removeAllViews()
                 if (m.kind == "tv" && seasons > 0) {
-                    addDetailButton("▶  Pilih Episode (Server Web)", true) { pickEpisodeAndStream(m, seasons) }
+                    addDetailButton("▶  Pilih Episode", true) { pickEpisodeAndStream(m, seasons) }
                 } else {
-                    addDetailButton("▶  Tonton (Server Web)", true) { startDirectStream(m) }
+                    addDetailButton("▶  Tonton (Bebas Iklan)", true) { startDirectStream(m) }
                 }
                 addDetailButton("YouTube TV", false) {
                     openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
