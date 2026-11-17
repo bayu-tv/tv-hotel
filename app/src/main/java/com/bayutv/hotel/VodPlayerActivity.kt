@@ -212,7 +212,7 @@ class VodPlayerActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = Ui.dp(this, v)
 
-    private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
+    private fun tv(t: String, sp: Float, color: Int, face: Typeface = Typeface.SANS_SERIF): TextView {
         val v = TextView(this)
         v.text = t
         v.setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this, sp))
@@ -930,7 +930,6 @@ class VodPlayerActivity : AppCompatActivity() {
             return true
         }
 
-        // Jika video sedang dijeda dan pengguna menekan tombol remote, reset hitung mundur Mode Gelap
         if (player?.isPlaying == false && event.action == KeyEvent.ACTION_UP) {
             schedulePauseNightMode()
         }
