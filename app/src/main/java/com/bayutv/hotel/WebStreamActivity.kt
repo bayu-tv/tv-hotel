@@ -46,7 +46,6 @@ class WebStreamActivity : AppCompatActivity() {
     private val brass = 0xFFB8975A.toInt()
     private val brassLight = 0xFFE6C88F.toInt()
     private val ivory = 0xFFF5F0E6.toInt()
-    private val mute = 0xFFB5AEA0.toInt()
 
     private val adHosts = listOf(
         "doubleclick", "googlesyndication", "googleadservices", "googletagmanager",
@@ -75,19 +74,19 @@ class WebStreamActivity : AppCompatActivity() {
         val e = intent.getIntExtra("episode", 1)
         return if (kind == "tv") {
             listOf(
-                Pair("Server 1 · VidSrc CC", "https://vidsrc.cc/v2/embed/tv/$id/$s/$e?sub_lang=id&ds_lang=id"),
-                Pair("Server 2 · VidSrc ICU", "https://vidsrc.icu/embed/tv/$id/$s/$e?sub_lang=id"),
-                Pair("Server 3 · EmbedSU", "https://embed.su/embed/tv/$id/$s/$e"),
-                Pair("Server 4 · AutoEmbed", "https://autoembed.co/tv/tmdb/$id-$s-$e"),
-                Pair("Server 5 · MultiEmbed", "https://multiembed.mov/?video_id=$id&tmdb=1&s=$s&e=$e")
+                Pair("Server 1 (VidSrc CC)", "https://vidsrc.cc/v2/embed/tv/$id/$s/$e?sub_lang=id&ds_lang=id"),
+                Pair("Server 2 (VidSrc ICU)", "https://vidsrc.icu/embed/tv/$id/$s/$e?sub_lang=id"),
+                Pair("Server 3 (EmbedSU)", "https://embed.su/embed/tv/$id/$s/$e"),
+                Pair("Server 4 (AutoEmbed)", "https://autoembed.co/tv/tmdb/$id-$s-$e"),
+                Pair("Server 5 (MultiEmbed)", "https://multiembed.mov/?video_id=$id&tmdb=1&s=$s&e=$e")
             )
         } else {
             listOf(
-                Pair("Server 1 · VidSrc CC", "https://vidsrc.cc/v2/embed/movie/$id?sub_lang=id&ds_lang=id"),
-                Pair("Server 2 · VidSrc ICU", "https://vidsrc.icu/embed/movie/$id?sub_lang=id"),
-                Pair("Server 3 · EmbedSU", "https://embed.su/embed/movie/$id"),
-                Pair("Server 4 · AutoEmbed", "https://autoembed.co/movie/tmdb/$id"),
-                Pair("Server 5 · MultiEmbed", "https://multiembed.mov/?video_id=$id&tmdb=1")
+                Pair("Server 1 (VidSrc CC)", "https://vidsrc.cc/v2/embed/movie/$id?sub_lang=id&ds_lang=id"),
+                Pair("Server 2 (VidSrc ICU)", "https://vidsrc.icu/embed/movie/$id?sub_lang=id"),
+                Pair("Server 3 (EmbedSU)", "https://embed.su/embed/movie/$id"),
+                Pair("Server 4 (AutoEmbed)", "https://autoembed.co/movie/tmdb/$id"),
+                Pair("Server 5 (MultiEmbed)", "https://multiembed.mov/?video_id=$id&tmdb=1")
             )
         }
     }
@@ -134,7 +133,7 @@ class WebStreamActivity : AppCompatActivity() {
 
         webView = WebView(this).apply {
             setBackgroundColor(Color.BLACK)
-            alpha = 0f // Tersembunyi saat ekstraksi agar iklan web tidak pernah terlihat
+            alpha = 0f
         }
         webView.settings.apply {
             javaScriptEnabled = true
@@ -207,7 +206,6 @@ class WebStreamActivity : AppCompatActivity() {
 
         root.addView(webView, FrameLayout.LayoutParams(-1, -1))
 
-        // Layar Ekstraksi B-BOX
         loadingBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -227,7 +225,7 @@ class WebStreamActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         statusTitle = TextView(this).apply {
-            text = "MODE BEBAS IKLAN · EKSTRAKSI STREAM"
+            text = "MODE BEBAS IKLAN - EKSTRAKSI STREAM"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@WebStreamActivity, 11f))
             setTextColor(brass)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -254,7 +252,6 @@ class WebStreamActivity : AppCompatActivity() {
         loadingBox.addView(actionRow)
         root.addView(loadingBox, FrameLayout.LayoutParams(-1, -1))
 
-        // Top Bar saat mode web darurat aktif
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -263,7 +260,7 @@ class WebStreamActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         val barTitle = TextView(this).apply {
-            text = "B-BOX  ·  " + (intent.getStringExtra("title") ?: "") + "  ·  Tekan MENU untuk ganti server"
+            text = "B-BOX  |  " + (intent.getStringExtra("title") ?: "") + "  |  Tekan MENU untuk ganti server"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@WebStreamActivity, 14f))
             setTextColor(ivory)
         }
@@ -438,7 +435,7 @@ class WebStreamActivity : AppCompatActivity() {
     private fun isValidVideoStream(low: String): Boolean {
         if (ignoreVideoKeywords.any { low.contains(it) }) return false
         if (low.endsWith(".js") || low.endsWith(".css") || low.endsWith(".vtt") || low.endsWith(".srt")) return false
-        val hasHls = low.contains(".m3u8") || low.contains("format=m3u8") || low.contains("/hls/") && low.contains("master")
+        val hasHls = low.contains(".m3u8") || low.contains("format=m3u8") || (low.contains("/hls/") && low.contains("master"))
         val hasMp4 = low.contains(".mp4") && !low.contains(".mp4.js")
         return hasHls || hasMp4
     }
@@ -459,7 +456,7 @@ class WebStreamActivity : AppCompatActivity() {
         val srv = list[serverIdx]
 
         loadingBox.visibility = View.VISIBLE
-        statusTitle.text = "B-BOX STREAM EXTRACTOR · ${serverIdx + 1}/${list.size}"
+        statusTitle.text = "B-BOX STREAM EXTRACTOR - ${serverIdx + 1}/${list.size}"
         loadingText.text = "Menghubungkan ke ${srv.first} & menyiapkan Subtitle Indonesia..."
 
         ui.removeCallbacks(serverTimeout)
