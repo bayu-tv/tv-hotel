@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Latar belakang hitam arang pekat -->
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z" />
+
+    <!-- Monogram huruf B emas kuningan -->
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M25,26 L48,26 C57.5,26 62.5,31.5 62.5,39.5 C62.5,45.5 59,50 53.5,52 C60,54 64.5,59 64.5,67 C64.5,76 58,82 47.5,82 L25,82 Z" />
+
+    <!-- Rongga dalam huruf B -->
+    <path
+        android:fillColor="#0B0A09"
+        android:pathData="M33,33.5 L46.5,33.5 C51.5,33.5 54.5,36.2 54.5,40.5 C54.5,44.5 51.5,47.2 46.5,47.5 L43,47.5 L43,56.5 L47,56.5 C52.8,56.5 56.2,59.8 56.2,65.5 C56.2,71.2 52.5,74.5 46.5,74.5 L33,74.5 Z" />
+
+    <!-- Simbol Play terintegrasi di tengah huruf B -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M37.5,43.5 L51.5,54 L37.5,64.5 Z" />
+
+    <!-- 3 garis gelombang audio di sisi kanan -->
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M71.4,46 C72.2,46 72.8,46.6 72.8,47.4 L72.8,60.6 C72.8,61.4 72.2,62 71.4,62 C70.6,62 70,61.4 70,60.6 L70,47.4 C70,46.6 70.6,46 71.4,46 Z" />
+    <path
+        android:fillColor="#B8975A"
+        android:pathData="M76.6,39 C77.4,39 78,39.6 78,40.4 L78,67.6 C78,68.4 77.4,69 76.6,69 C75.8,69 75.2,68.4 75.2,67.6 L75.2,40.4 C75.2,39.6 75.8,39 76.6,39 Z" />
+    <path
+        android:fillColor="#E6C88F"
+        android:pathData="M81.8,44 C82.6,44 83.2,44.6 83.2,45.4 L83.2,62.6 C83.2,63.4 82.6,64 81.8,64 C81,64 80.4,63.4 80.4,62.6 L80.4,45.4 C80.4,44.6 81,44 81.8,44 Z" />
+</vector>
