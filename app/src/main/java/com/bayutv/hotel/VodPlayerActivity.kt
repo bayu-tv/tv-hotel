@@ -149,7 +149,7 @@ object ContinueWatch {
     }
 }
 
-// Pemutar film/episode (Streaming & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
+// Pemutar film/episode B-BOX (Streaming Bebas Iklan & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
 class VodPlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
@@ -234,16 +234,22 @@ class VodPlayerActivity : AppCompatActivity() {
             .build()
 
         val ref = intent.getStringExtra("referer") ?: ""
+        val origin = intent.getStringExtra("origin") ?: ""
+        val cookie = intent.getStringExtra("cookie") ?: ""
         val ua = intent.getStringExtra("user_agent") ?: Playlist.DEFAULT_UA
+
         val dsf = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(12000)
-            .setReadTimeoutMs(15000)
+            .setConnectTimeoutMs(14000)
+            .setReadTimeoutMs(18000)
             .setUserAgent(ua)
-        if (ref.isNotEmpty()) {
-            val extra = HashMap<String, String>()
-            extra["Referer"] = ref
-            dsf.setDefaultRequestProperties(extra)
+
+        val extraHeaders = HashMap<String, String>()
+        if (ref.isNotEmpty()) extraHeaders["Referer"] = ref
+        if (origin.isNotEmpty()) extraHeaders["Origin"] = origin
+        if (cookie.isNotEmpty()) extraHeaders["Cookie"] = cookie
+        if (extraHeaders.isNotEmpty()) {
+            dsf.setDefaultRequestProperties(extraHeaders)
         }
 
         val p = ExoPlayer.Builder(this)
@@ -268,7 +274,7 @@ class VodPlayerActivity : AppCompatActivity() {
                     p.playWhenReady = true
                     return
                 }
-                notice.show("Tidak bisa diputar", error.errorCodeName)
+                notice.show("Stream tidak tersedia (${error.errorCodeName})", "Tekan Back lalu pilih Ganti Server jika video gagal dimuat.", 6000L)
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -301,7 +307,8 @@ class VodPlayerActivity : AppCompatActivity() {
             val season = intent.getIntExtra("season", 0)
             val episode = intent.getIntExtra("episode", 0)
             Thread {
-                val tracks = Subtitles.fetch(tmdbId, kind, season, episode)
+                val imdb = Tmdb.imdbId(this, tmdbId, kind)
+                val tracks = Subtitles.fetch(tmdbId, kind, season, episode, imdb)
                 if (tracks.isNotEmpty()) {
                     ui.post {
                         val activePlayer = player ?: return@post
