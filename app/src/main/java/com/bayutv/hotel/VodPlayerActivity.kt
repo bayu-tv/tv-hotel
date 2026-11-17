@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -33,7 +34,10 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 object ContinueWatch {
     data class Entry(
@@ -143,13 +147,17 @@ object ContinueWatch {
                 )
                 out.add(Entry(key, m, o.optInt("season", 1), o.optInt("episode", 1), o.optLong("pos", 0L)))
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         return out
     }
 }
 
 class VodPlayerActivity : AppCompatActivity() {
+
+    companion object {
+        private const val PAUSE_NIGHT_DELAY_MS = 25_000L
+    }
 
     private var player: ExoPlayer? = null
     private lateinit var root: FrameLayout
@@ -165,6 +173,28 @@ class VodPlayerActivity : AppCompatActivity() {
     private val brassLight = 0xFFE6C88F.toInt()
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
+
+    // Mode Gelap otomatis saat video dijeda lama
+    private var isNightModeOpen = false
+    private lateinit var nightModeOverlay: FrameLayout
+    private lateinit var nightContentHolder: LinearLayout
+    private lateinit var nightClockText: TextView
+    private lateinit var nightTitleText: TextView
+    private lateinit var nightPosText: TextView
+    private val nightClockFormat = SimpleDateFormat("HH:mm", Locale.US)
+    private var nightBurnInStep = 0
+
+    private val pauseNightRunnable = Runnable {
+        enterNightMode()
+    }
+
+    private val nightClockTickRunnable = object : Runnable {
+        override fun run() {
+            if (!isNightModeOpen) return
+            updateNightModeInfo()
+            ui.postDelayed(this, 10_000L)
+        }
+    }
 
     private lateinit var countdownBanner: TextView
     private lateinit var adzanOverlay: FrameLayout
@@ -216,6 +246,7 @@ class VodPlayerActivity : AppCompatActivity() {
             setApplyEmbeddedStyles(false)
         }
         root.addView(view, FrameLayout.LayoutParams(-1, -1))
+        buildPauseNightModeOverlay()
         buildAdzanAndRamadanOverlays()
         notice = Notice(this, root)
         setContentView(root)
@@ -271,6 +302,7 @@ class VodPlayerActivity : AppCompatActivity() {
 
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                cancelPauseNightMode()
                 val fb = intent.getStringExtra("fallback") ?: ""
                 if (!usedFallback && fb.isNotEmpty()) {
                     usedFallback = true
@@ -284,10 +316,33 @@ class VodPlayerActivity : AppCompatActivity() {
                 notice.show("Stream tidak dapat diputar", "Silakan kembali dan pilih server lain (${error.errorCodeName}).")
             }
 
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) {
+                    cancelPauseNightMode()
+                    if (isNightModeOpen) {
+                        exitNightMode(resumePlayback = false)
+                    }
+                } else if (
+                    p.playbackState == Player.STATE_READY &&
+                    !pausedForAdzan &&
+                    adzanOverlay.visibility != View.VISIBLE
+                ) {
+                    schedulePauseNightMode()
+                }
+            }
+
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {
+                    cancelPauseNightMode()
                     ContinueWatch.remove(this@VodPlayerActivity, rawKey)
                     finish()
+                } else if (
+                    state == Player.STATE_READY &&
+                    !p.playWhenReady &&
+                    !pausedForAdzan &&
+                    adzanOverlay.visibility != View.VISIBLE
+                ) {
+                    schedulePauseNightMode()
                 }
             }
         })
@@ -339,6 +394,137 @@ class VodPlayerActivity : AppCompatActivity() {
                     }
                 }
             }.start()
+        }
+    }
+
+    private fun buildPauseNightModeOverlay() {
+        nightModeOverlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { exitNightMode(resumePlayback = true) }
+        }
+
+        nightContentHolder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(28), dp(28), dp(28))
+        }
+
+        nightClockText = tv("00:00", 54f, 0xFF5C5448.toInt(), Typeface.create(Typeface.SERIF, Typeface.BOLD)).apply {
+            gravity = Gravity.CENTER
+        }
+        nightContentHolder.addView(nightClockText)
+
+        nightTitleText = tv("Video Dijeda", 15f, 0xFF4D463C.toInt(), Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(10), 0, dp(4))
+        }
+        nightContentHolder.addView(nightTitleText)
+
+        nightPosText = tv("", 13f, 0xFF6B5A3E.toInt()).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, dp(16))
+        }
+        nightContentHolder.addView(nightPosText)
+
+        nightContentHolder.addView(
+            tv("Mode Layar Gelap · Tekan OK di remote untuk melanjutkan menonton", 12f, 0xFF38332C.toInt()).apply {
+                gravity = Gravity.CENTER
+            }
+        )
+
+        nightModeOverlay.addView(nightContentHolder, FrameLayout.LayoutParams(-1, -1))
+        root.addView(nightModeOverlay, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun schedulePauseNightMode() {
+        ui.removeCallbacks(pauseNightRunnable)
+        if (isFinishing || isNightModeOpen || pausedForAdzan || adzanOverlay.visibility == View.VISIBLE) return
+        ui.postDelayed(pauseNightRunnable, PAUSE_NIGHT_DELAY_MS)
+    }
+
+    private fun cancelPauseNightMode() {
+        ui.removeCallbacks(pauseNightRunnable)
+    }
+
+    private fun enterNightMode() {
+        if (isFinishing || isNightModeOpen || pausedForAdzan || adzanOverlay.visibility == View.VISIBLE) return
+        val p = player ?: return
+        if (p.isPlaying) return
+
+        isNightModeOpen = true
+        view.hideController()
+        updateNightModeInfo()
+        nightModeOverlay.visibility = View.VISIBLE
+        nightModeOverlay.requestFocus()
+        ui.removeCallbacks(nightClockTickRunnable)
+        ui.postDelayed(nightClockTickRunnable, 10_000L)
+    }
+
+    private fun exitNightMode(resumePlayback: Boolean) {
+        if (!isNightModeOpen) return
+        isNightModeOpen = false
+        ui.removeCallbacks(nightClockTickRunnable)
+        cancelPauseNightMode()
+        nightModeOverlay.visibility = View.GONE
+
+        val p = player
+        if (resumePlayback && p != null && !pausedForAdzan) {
+            p.playWhenReady = true
+            p.play()
+            view.showController()
+        } else {
+            view.showController()
+            if (p != null && !p.isPlaying && !pausedForAdzan) {
+                schedulePauseNightMode()
+            }
+        }
+    }
+
+    private fun updateNightModeInfo() {
+        nightClockText.text = nightClockFormat.format(Date())
+        val rawTitle = intent.getStringExtra("title") ?: "Film"
+        val season = intent.getIntExtra("season", 0)
+        val episode = intent.getIntExtra("episode", 0)
+        nightTitleText.text = if (season > 0 && episode > 0) {
+            "$rawTitle · S${season}E${episode}"
+        } else {
+            rawTitle
+        }
+
+        val p = player
+        if (p != null) {
+            val pos = p.currentPosition.coerceAtLeast(0L)
+            val dur = p.duration
+            nightPosText.text = if (dur > 0L) {
+                "Dijeda pada ${formatDuration(pos)} / ${formatDuration(dur)}"
+            } else {
+                "Dijeda pada ${formatDuration(pos)}"
+            }
+        }
+
+        // Pergeseran posisi halus tiap 10 detik untuk mencegah burn-in layar TV
+        val shifts = intArrayOf(-16, -8, 0, 8, 16, 8, 0, -8)
+        val dx = dp(shifts[nightBurnInStep % shifts.size]).toFloat()
+        val dy = dp(shifts[(nightBurnInStep + 2) % shifts.size] / 2).toFloat()
+        nightContentHolder.translationX = dx
+        nightContentHolder.translationY = dy
+        nightBurnInStep++
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val totalSec = (ms / 1000L).coerceAtLeast(0L)
+        val h = totalSec / 3600L
+        val m = (totalSec % 3600L) / 60L
+        val s = totalSec % 60L
+        return if (h > 0L) {
+            String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
+        } else {
+            String.format(Locale.US, "%02d:%02d", m, s)
         }
     }
 
@@ -619,6 +805,12 @@ class VodPlayerActivity : AppCompatActivity() {
 
     private fun startAdzan(i: Int, minute: Int) {
         val p = player ?: return
+        cancelPauseNightMode()
+        if (isNightModeOpen) {
+            isNightModeOpen = false
+            ui.removeCallbacks(nightClockTickRunnable)
+            nightModeOverlay.visibility = View.GONE
+        }
         wasPlayingBeforeAdzan = p.isPlaying || p.playWhenReady
         pausedForAdzan = true
         p.pause()
@@ -672,6 +864,8 @@ class VodPlayerActivity : AppCompatActivity() {
         if (wasPlayingBeforeAdzan && !isFinishing) {
             player?.playWhenReady = true
             player?.play()
+        } else if (player?.isPlaying != true) {
+            schedulePauseNightMode()
         }
     }
 
@@ -723,6 +917,24 @@ class VodPlayerActivity : AppCompatActivity() {
             }
             return super.dispatchKeyEvent(event)
         }
+
+        if (isNightModeOpen) {
+            val isResumeKey = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == KeyEvent.KEYCODE_ENTER ||
+                event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+                event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+                event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY
+            if (event.action == KeyEvent.ACTION_UP) {
+                exitNightMode(resumePlayback = isResumeKey)
+            }
+            return true
+        }
+
+        // Jika video sedang dijeda dan pengguna menekan tombol remote, reset hitung mundur Mode Gelap
+        if (player?.isPlaying == false && event.action == KeyEvent.ACTION_UP) {
+            schedulePauseNightMode()
+        }
+
         if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
         return view.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
     }
@@ -736,6 +948,8 @@ class VodPlayerActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         ui.removeCallbacks(tick)
+        cancelPauseNightMode()
+        ui.removeCallbacks(nightClockTickRunnable)
         if (pausedForAdzan) {
             wasPlayingBeforeAdzan = false
             endAdzan()
