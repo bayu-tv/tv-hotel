@@ -149,7 +149,7 @@ object ContinueWatch {
     }
 }
 
-// Pemutar film/episode B-BOX (Streaming Bebas Iklan & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
+// Pemutar B-BOX Native (Streaming Bebas Iklan & Koleksi Saya) dengan Sub Indo otomatis & pengingat Adzan/Ramadan.
 class VodPlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
@@ -235,19 +235,26 @@ class VodPlayerActivity : AppCompatActivity() {
 
         val ref = intent.getStringExtra("referer") ?: ""
         val origin = intent.getStringExtra("origin") ?: ""
-        val cookie = intent.getStringExtra("cookie") ?: ""
         val ua = intent.getStringExtra("user_agent") ?: Playlist.DEFAULT_UA
-
         val dsf = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(14000)
-            .setReadTimeoutMs(18000)
+            .setConnectTimeoutMs(12000)
+            .setReadTimeoutMs(15000)
             .setUserAgent(ua)
 
         val extraHeaders = HashMap<String, String>()
         if (ref.isNotEmpty()) extraHeaders["Referer"] = ref
-        if (origin.isNotEmpty()) extraHeaders["Origin"] = origin
-        if (cookie.isNotEmpty()) extraHeaders["Cookie"] = cookie
+        if (origin.isNotEmpty()) {
+            extraHeaders["Origin"] = origin
+        } else if (ref.startsWith("http")) {
+            try {
+                val u = Uri.parse(ref)
+                if (!u.scheme.isNullOrEmpty() && !u.host.isNullOrEmpty()) {
+                    extraHeaders["Origin"] = "${u.scheme}://${u.host}"
+                }
+            } catch (_: Exception) {
+            }
+        }
         if (extraHeaders.isNotEmpty()) {
             dsf.setDefaultRequestProperties(extraHeaders)
         }
@@ -258,6 +265,7 @@ class VodPlayerActivity : AppCompatActivity() {
             .build()
 
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             .setPreferredTextLanguages("id", "in", "ind", "ms", "en")
             .setPreferredAudioLanguages("id", "ja", "en")
             .build()
@@ -274,7 +282,7 @@ class VodPlayerActivity : AppCompatActivity() {
                     p.playWhenReady = true
                     return
                 }
-                notice.show("Stream tidak tersedia (${error.errorCodeName})", "Tekan Back lalu pilih Ganti Server jika video gagal dimuat.", 6000L)
+                notice.show("Stream tidak dapat diputar", "Silakan kembali dan pilih server lain (${error.errorCodeName}).")
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -297,7 +305,7 @@ class VodPlayerActivity : AppCompatActivity() {
         p.playWhenReady = true
 
         val title = intent.getStringExtra("title") ?: ""
-        if (resume > 60000L) notice.show(title, "Melanjutkan dari menit " + (resume / 60000L), 3000L)
+        if (resume > 60000L) notice.show("B-BOX · $title", "Melanjutkan dari menit " + (resume / 60000L), 3000L)
         else if (title.isNotEmpty()) notice.show(null, title, 2500L)
 
         val tmdbId = intent.getIntExtra("tmdb_id", 0)
@@ -306,9 +314,10 @@ class VodPlayerActivity : AppCompatActivity() {
             val kind = intent.getStringExtra("tmdb_kind") ?: "movie"
             val season = intent.getIntExtra("season", 0)
             val episode = intent.getIntExtra("episode", 0)
+            val passedImdb = intent.getStringExtra("imdb_id") ?: ""
             Thread {
-                val imdb = Tmdb.imdbId(this, tmdbId, kind)
-                val tracks = Subtitles.fetch(tmdbId, kind, season, episode, imdb)
+                val imdbId = passedImdb.ifEmpty { Tmdb.imdbId(this, tmdbId, kind) }
+                val tracks = Subtitles.fetch(tmdbId, kind, season, episode, imdbId)
                 if (tracks.isNotEmpty()) {
                     ui.post {
                         val activePlayer = player ?: return@post
@@ -316,6 +325,10 @@ class VodPlayerActivity : AppCompatActivity() {
                         val curPos = activePlayer.currentPosition
                         val wasPlaying = activePlayer.playWhenReady
                         activePlayer.setMediaItem(item(url, tracks), curPos)
+                        activePlayer.trackSelectionParameters = activePlayer.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .setPreferredTextLanguages("id", "in", "ind", "ms", "en")
+                            .build()
                         activePlayer.prepare()
                         activePlayer.playWhenReady = wasPlaying
                         val hasId = tracks.any { it.lang == "id" }
