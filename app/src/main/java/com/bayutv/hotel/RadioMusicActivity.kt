@@ -10,7 +10,6 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -20,13 +19,9 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -51,19 +46,20 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
+import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.downloader.Downloader
+import org.schabi.newpipe.extractor.downloader.Request
+import org.schabi.newpipe.extractor.downloader.Response
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -108,7 +104,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // Autentikasi Sesi Akun Google untuk YouTube Music (SAPISIDHASH)
     object GoogleMusicAuth {
         private const val YTM_ORIGIN = "https://music.youtube.com"
-        const val CHROME_UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        const val CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
         fun getCookie(): String {
             return try {
@@ -157,6 +153,53 @@ class RadioMusicActivity : AppCompatActivity() {
                 cm.flush()
             } catch (_: Exception) {
             }
+        }
+    }
+
+    // Implementasi Downloader HTTP bawaan untuk NewPipeExtractor
+    class NativeHttpDownloader : Downloader() {
+        override fun execute(request: Request): Response {
+            val targetUrl = URL(request.url())
+            val conn = (targetUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = request.httpMethod()
+                connectTimeout = 10000
+                readTimeout = 15000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", GoogleMusicAuth.CHROME_UA)
+            }
+
+            for ((key, values) in request.headers()) {
+                for (value in values) {
+                    conn.addRequestProperty(key, value)
+                }
+            }
+
+            val cookie = GoogleMusicAuth.getCookie()
+            if (cookie.isNotBlank() && request.url().contains("youtube.com", ignoreCase = true)) {
+                conn.setRequestProperty("Cookie", cookie)
+            }
+
+            val payload = request.dataToSend()
+            if (payload != null && payload.isNotEmpty()) {
+                conn.doOutput = true
+                conn.outputStream.use { it.write(payload) }
+            }
+
+            val code = conn.responseCode
+            val message = conn.responseMessage ?: ""
+            val inStream = if (code in 200..399) conn.inputStream else conn.errorStream
+            val body = inStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+
+            val respHeaders = HashMap<String, List<String>>()
+            for ((k, v) in conn.headerFields) {
+                if (k != null && v != null) {
+                    respHeaders[k] = v
+                }
+            }
+
+            val latestUrl = conn.url?.toString() ?: request.url()
+            conn.disconnect()
+            return Response(code, message, respHeaders, body, latestUrl)
         }
     }
 
@@ -265,7 +308,6 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
-        // Mengambil daftar Playlist milik Akun Google dari YouTube Music
         fun fetchGoogleAccountPlaylists(): List<UserPlaylist> {
             val auth = GoogleMusicAuth.buildSapisidHashAuth() ?: return emptyList()
             val cookie = GoogleMusicAuth.getCookie()
@@ -396,9 +438,9 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // Mesin pemutar global berbasis Media3 ExoPlayer + Chromium WebView Stream Extractor
+    // Mesin pemutar global berbasis Media3 ExoPlayer + NewPipeExtractor
     object MusicEngine {
-        private const val WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        private const val WEB_UA = GoogleMusicAuth.CHROME_UA
         private val mainHandler = Handler(Looper.getMainLooper())
         var player: ExoPlayer? = null
         var currentTrack: Track? = null
@@ -414,7 +456,15 @@ class RadioMusicActivity : AppCompatActivity() {
         var onStateChanged: (() -> Unit)? = null
 
         private var playSeq = 0
-        private var hiddenExtractorWebView: WebView? = null
+        private var newPipeInitialized = false
+
+        @Synchronized
+        private fun ensureNewPipeInit() {
+            if (!newPipeInitialized) {
+                NewPipe.init(NativeHttpDownloader())
+                newPipeInitialized = true
+            }
+        }
 
         private fun notifyUi() {
             mainHandler.post { onStateChanged?.invoke() }
@@ -428,7 +478,7 @@ class RadioMusicActivity : AppCompatActivity() {
             queueIndex = index
             state = PlayState.RESOLVING
             statusDetail = when {
-                track.isYtMusic -> "Menyiapkan stream audio YouTube..."
+                track.isYtMusic -> "Mendekripsi aliran audio YouTube..."
                 track.isLive -> "Menghubungkan ke server siaran..."
                 else -> "Membuka file audio..."
             }
@@ -450,7 +500,7 @@ class RadioMusicActivity : AppCompatActivity() {
             Thread {
                 try {
                     val resolved: ResolvedStream? = when {
-                        track.isYtMusic && track.streamUrl.isEmpty() -> resolveYtAudioMultiLayer(appCtx, track, seq)
+                        track.isYtMusic && track.streamUrl.isEmpty() -> resolveViaNewPipe(track)
                         track.isLive -> resolveRadioUrl(track.streamUrl)
                         else -> ResolvedStream(track.streamUrl, WEB_UA, "Lokal")
                     }
@@ -459,10 +509,8 @@ class RadioMusicActivity : AppCompatActivity() {
 
                     if (resolved == null || resolved.url.isBlank()) {
                         state = PlayState.ERROR
-                        statusDetail = if (track.isYtMusic) {
-                            "Gagal memuat audio. Coba ketuk Login Google atau pilih lagu lain."
-                        } else {
-                            "Server radio tidak merespons / alamat siaran mati."
+                        if (statusDetail.startsWith("Mendekripsi")) {
+                            statusDetail = "Gagal memuat audio lagu ini. Coba lagu lain."
                         }
                         lyricStatus = statusDetail
                         notifyUi()
@@ -486,15 +534,92 @@ class RadioMusicActivity : AppCompatActivity() {
                         if (seq != playSeq) return@post
                         startExoPlayer(appCtx, resolved, seq)
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     if (seq == playSeq) {
                         state = PlayState.ERROR
-                        statusDetail = "Koneksi internet terputus saat memuat audio."
+                        statusDetail = "Gagal memuat audio (${e.javaClass.simpleName})"
                         lyricStatus = statusDetail
                         notifyUi()
                     }
                 }
             }.start()
+        }
+
+        private fun resolveViaNewPipe(track: Track): ResolvedStream? {
+            ensureNewPipeInit()
+
+            // 1. Ekstraksi langsung ID utama lewat NewPipeExtractor
+            extractSingleVideoWithNewPipe(track.id)?.let { return it }
+
+            // 2. Fallback otomatis: cari video musik reguler di YouTube jika Art Track YT Music dikunci
+            statusDetail = "Mencari versi video musik alternatif..."
+            notifyUi()
+            val cleanArtist = track.artist.split("•", "·", ",").firstOrNull()?.trim() ?: ""
+            val altId = searchFallbackVideoId("${track.title} $cleanArtist", track.id)
+            if (altId != null) {
+                extractSingleVideoWithNewPipe(altId)?.let { alt ->
+                    return ResolvedStream(alt.url, alt.userAgent, "${alt.sourceLabel} (Alt)", alt.cookie)
+                }
+            }
+            return null
+        }
+
+        private fun extractSingleVideoWithNewPipe(videoId: String): ResolvedStream? {
+            return try {
+                val extractor = ServiceList.YouTube.getStreamExtractor("https://www.youtube.com/watch?v=$videoId")
+                extractor.fetchPage()
+
+                val audioStreams = extractor.audioStreams
+                val bestM4a = audioStreams
+                    .filter { it.format == MediaFormat.M4A && it.content.startsWith("http") }
+                    .maxByOrNull { it.averageBitrate }
+                val anyAudio = audioStreams
+                    .filter { it.content.startsWith("http") }
+                    .maxByOrNull { it.averageBitrate }
+
+                val chosenAudio = bestM4a ?: anyAudio
+                if (chosenAudio != null) {
+                    val kbps = if (chosenAudio.averageBitrate > 0) "${chosenAudio.averageBitrate}kbps" else "HQ"
+                    return ResolvedStream(
+                        url = chosenAudio.content,
+                        userAgent = WEB_UA,
+                        sourceLabel = "YT Audio $kbps",
+                        cookie = GoogleMusicAuth.getCookie()
+                    )
+                }
+
+                // Cadangan aliran video muxed (ExoPlayer memutar audionya saja)
+                val muxed = extractor.videoStreams.firstOrNull { it.content.startsWith("http") }
+                if (muxed != null) {
+                    return ResolvedStream(
+                        url = muxed.content,
+                        userAgent = WEB_UA,
+                        sourceLabel = "YT Stream",
+                        cookie = GoogleMusicAuth.getCookie()
+                    )
+                }
+                null
+            } catch (e: Exception) {
+                val msg = e.message ?: e.javaClass.simpleName
+                statusDetail = "YT: ${msg.take(48)}"
+                null
+            }
+        }
+
+        private fun searchFallbackVideoId(query: String, excludeId: String): String? {
+            return try {
+                val searchExtractor = ServiceList.YouTube.getSearchExtractor(query)
+                searchExtractor.fetchPage()
+                val items = searchExtractor.initialPage.items
+                for (item in items) {
+                    val u = item.url ?: continue
+                    val vid = Regex("""[?&]v=([a-zA-Z0-9_-]{11})""").find(u)?.groupValues?.getOrNull(1)
+                    if (vid != null && vid != excludeId) return vid
+                }
+                null
+            } catch (_: Exception) {
+                null
+            }
         }
 
         fun refreshLyricsIfNeeded() {
@@ -653,225 +778,6 @@ class RadioMusicActivity : AppCompatActivity() {
             playTrack(ctx, queue[prev], queue, prev)
         }
 
-        // 3-Lapis Resolver YouTube Audio:
-        // Lapis 1: InnerTube Direct (ANDROID_VR / IOS tanpa tabrakan visitorData)
-        // Lapis 2: Sesi Terautentikasi Akun Google (jika sudah login)
-        // Lapis 3: Ekstraktor Chromium WebView (memecahkan signatureCipher & poToken langsung lewat V8 bawaan Android)
-        private fun resolveYtAudioMultiLayer(appCtx: Context, track: Track, seq: Int): ResolvedStream? {
-            // Lapis 1: Direct InnerTube ANDROID_VR (tanpa visitorData Web yang menyebabkan penolakan)
-            tryDirectInnerTube(track.id)?.let { return it }
-            if (seq != playSeq) return null
-
-            // Lapis 2: Chromium WebView Stream Extractor (menjalankan base.js asli YouTube & bebas iklan)
-            statusDetail = "Membuka jalur Chromium WebView..."
-            notifyUi()
-            extractViaChromiumWebView(appCtx, track.id, seq)?.let { return it }
-
-            return null
-        }
-
-        private fun tryDirectInnerTube(videoId: String): ResolvedStream? {
-            // Client A: ANDROID_VR bersih
-            try {
-                val vrUa = "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
-                val conn = URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5500
-                conn.readTimeout = 7000
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("User-Agent", vrUa)
-                val body = """{"context":{"client":{"clientName":"ANDROID_VR","clientVersion":"1.60.19","deviceMake":"Oculus","deviceModel":"Quest 3","androidSdkVersion":32,"osName":"Android","osVersion":"12L","hl":"id","gl":"ID"}},"videoId":"$videoId"}"""
-                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    pickAudioFromJson(json, vrUa, "YT VR Direct")?.let { return it }
-                }
-            } catch (_: Exception) {
-            }
-
-            // Client B: IOS bersih (termasuk HLS manifest)
-            try {
-                val iosUa = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)"
-                val conn = URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5500
-                conn.readTimeout = 7000
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("User-Agent", iosUa)
-                val body = """{"context":{"client":{"clientName":"IOS","clientVersion":"19.45.4","deviceModel":"iPhone16,2","osVersion":"18.1.0.22B83","hl":"id","gl":"ID"}},"videoId":"$videoId"}"""
-                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    pickAudioFromJson(json, iosUa, "YT iOS Direct")?.let { return it }
-                    val hls = json.optJSONObject("streamingData")?.optString("hlsManifestUrl", "") ?: ""
-                    if (hls.startsWith("http")) return ResolvedStream(hls, iosUa, "YT HLS")
-                }
-            } catch (_: Exception) {
-            }
-            return null
-        }
-
-        private fun pickAudioFromJson(json: JSONObject, ua: String, label: String): ResolvedStream? {
-            val sd = json.optJSONObject("streamingData") ?: return null
-            val adaptive = sd.optJSONArray("adaptiveFormats")
-            if (adaptive != null) {
-                var mp4Url: String? = null
-                var anyAudio: String? = null
-                for (i in 0 until adaptive.length()) {
-                    val f = adaptive.getJSONObject(i)
-                    val mime = f.optString("mimeType", "")
-                    val u = f.optString("url", "")
-                    if (!u.startsWith("http")) continue
-                    if (mime.startsWith("audio/mp4")) {
-                        mp4Url = u
-                        break
-                    }
-                    if (mime.startsWith("audio/") && anyAudio == null) anyAudio = u
-                }
-                val chosen = mp4Url ?: anyAudio
-                if (chosen != null) return ResolvedStream(chosen, ua, label)
-            }
-            val muxed = sd.optJSONArray("formats")
-            if (muxed != null) {
-                for (i in 0 until muxed.length()) {
-                    val u = muxed.getJSONObject(i).optString("url", "")
-                    if (u.startsWith("http")) return ResolvedStream(u, ua, "$label Std")
-                }
-            }
-            return null
-        }
-
-        @SuppressLint("SetJavaScriptEnabled")
-        private fun extractViaChromiumWebView(appCtx: Context, videoId: String, seq: Int): ResolvedStream? {
-            val latch = CountDownLatch(1)
-            val resultRef = AtomicReference<ResolvedStream?>(null)
-            val captured = AtomicBoolean(false)
-            val ua = GoogleMusicAuth.CHROME_UA
-            val cookie = GoogleMusicAuth.getCookie()
-
-            mainHandler.post {
-                if (seq != playSeq) {
-                    latch.countDown()
-                    return@post
-                }
-                try {
-                    hiddenExtractorWebView?.stopLoading()
-                    hiddenExtractorWebView?.destroy()
-                } catch (_: Exception) {
-                }
-
-                try {
-                    val wv = WebView(appCtx)
-                    hiddenExtractorWebView = wv
-                    val cm = CookieManager.getInstance()
-                    cm.setAcceptCookie(true)
-                    cm.setAcceptThirdPartyCookies(wv, true)
-
-                    wv.settings.apply {
-                        javaScriptEnabled = true
-                        domStorageEnabled = true
-                        mediaPlaybackRequiresUserGesture = false
-                        cacheMode = WebSettings.LOAD_DEFAULT
-                        userAgentString = ua
-                    }
-
-                    wv.webViewClient = object : WebViewClient() {
-                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                            val reqUrl = request?.url?.toString() ?: return null
-                            val low = reqUrl.lowercase(Locale.US)
-
-                            // Blokir pelacak & iklan agar stream lagu utama langsung diminta
-                            if (low.contains("doubleclick.net") ||
-                                low.contains("googlesyndication.com") ||
-                                low.contains("googleads") ||
-                                low.contains("/pagead/") ||
-                                low.contains("/api/stats/ads")
-                            ) {
-                                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                            }
-
-                            if (!captured.get() && low.contains("googlevideo.com/videoplayback")) {
-                                val isAudioStream = low.contains("mime=audio") ||
-                                    low.contains("itag=140") ||
-                                    low.contains("itag=251") ||
-                                    low.contains("itag=250") ||
-                                    low.contains("itag=249") ||
-                                    low.contains("itag=139")
-
-                                if (isAudioStream && captured.compareAndSet(false, true)) {
-                                    val fullUrl = cleanGoogleVideoUrl(reqUrl)
-                                    val activeCookie = try {
-                                        CookieManager.getInstance().getCookie(fullUrl) ?: cookie
-                                    } catch (_: Exception) {
-                                        cookie
-                                    }
-                                    val label = if (GoogleMusicAuth.isLoggedIn()) "YT Akun Google" else "YT Chromium Audio"
-                                    resultRef.set(ResolvedStream(fullUrl, ua, label, activeCookie))
-                                    mainHandler.post {
-                                        try {
-                                            wv.stopLoading()
-                                            wv.loadUrl("about:blank")
-                                        } catch (_: Exception) {
-                                        }
-                                    }
-                                    latch.countDown()
-                                }
-                            }
-                            return super.shouldInterceptRequest(view, request)
-                        }
-
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            super.onPageFinished(view, url)
-                            // Pastikan pemutar HTML5 otomatis mulai memutar jika tertahan gesture
-                            view?.evaluateJavascript(
-                                "(function(){var v=document.querySelector('video');if(v){v.muted=true;v.play();}})();",
-                                null
-                            )
-                        }
-                    }
-
-                    wv.loadUrl("https://m.youtube.com/watch?v=$videoId")
-                } catch (_: Exception) {
-                    latch.countDown()
-                }
-            }
-
-            try {
-                latch.await(11, TimeUnit.SECONDS)
-            } catch (_: Exception) {
-            }
-
-            mainHandler.post {
-                try {
-                    hiddenExtractorWebView?.stopLoading()
-                    hiddenExtractorWebView?.loadUrl("about:blank")
-                } catch (_: Exception) {
-                }
-            }
-
-            return resultRef.get()
-        }
-
-        private fun cleanGoogleVideoUrl(rawUrl: String): String {
-            return try {
-                val uri = Uri.parse(rawUrl)
-                val builder = uri.buildUpon().clearQuery()
-                for (key in uri.queryParameterNames) {
-                    if (key != "range" && key != "rn" && key != "rbuf") {
-                        for (v in uri.getQueryParameters(key)) {
-                            builder.appendQueryParameter(key, v)
-                        }
-                    }
-                }
-                builder.build().toString()
-            } catch (_: Exception) {
-                rawUrl.replace(Regex("""[&?](range|rn|rbuf)=[^&]*"""), "")
-            }
-        }
-
-        // Mengurai pengalihan (redirect) serta file playlist .pls / .m3u pada stasiun radio
         private fun resolveRadioUrl(rawUrl: String): ResolvedStream? {
             var cur = rawUrl.trim()
             if (!cur.startsWith("http", ignoreCase = true)) return null
@@ -1093,7 +999,6 @@ class RadioMusicActivity : AppCompatActivity() {
             setPadding(dp(if (isPhonePortrait) 14 else 32), dp(12), dp(if (isPhonePortrait) 14 else 32), dp(12))
         }
 
-        // Header, Tab Navigasi, & Tombol Login Google
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1209,7 +1114,6 @@ class RadioMusicActivity : AppCompatActivity() {
         radioBarBox.addView(btnScanRadio)
         outer.addView(radioBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
-        // Kontainer Utama: 2 Kolom di TV, Vertikal di HP
         val bodyContainer = LinearLayout(this).apply {
             orientation = if (isPhonePortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
         }
@@ -1290,7 +1194,7 @@ class RadioMusicActivity : AppCompatActivity() {
             setBackgroundColor(Color.WHITE)
         }
         val infoBar = tv(
-            "Masuk ke akun Google Anda untuk menyinkronkan Playlist YouTube Music & membuka batas server.",
+            "Masuk ke akun Google Anda untuk menyinkronkan Playlist YouTube Music.",
             12f,
             Color.BLACK,
             Typeface.DEFAULT_BOLD
@@ -1378,7 +1282,6 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
-        // Baris Opsi Cepat: Lirik ON/OFF + Simpan ke Playlist + Equalizer
         val quickBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1407,7 +1310,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
         quickBar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
 
-        // Equalizer Mini 4 Batang
         val eqBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
@@ -1431,7 +1333,6 @@ class RadioMusicActivity : AppCompatActivity() {
         quickBar.addView(eqBox, LinearLayout.LayoutParams(-2, dp(22)))
         panel.addView(quickBar)
 
-        // Kartu Sampul & Info Lagu
         val heroRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1466,7 +1367,6 @@ class RadioMusicActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, dp(8))
         }
 
-        // Pill Status & Indikator Loading
         statusRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1493,7 +1393,6 @@ class RadioMusicActivity : AppCompatActivity() {
         heroRow.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(heroRow)
 
-        // Seekbar & Waktu
         val progressHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(14), 0, dp(2))
@@ -1537,7 +1436,6 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         panel.addView(seekBar, LinearLayout.LayoutParams(-1, -2))
 
-        // Baris Tombol Pemutar Utama (Shuffle, Prev, Play/Pause, Next, Repeat)
         val ctrlRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -1569,7 +1467,6 @@ class RadioMusicActivity : AppCompatActivity() {
         ctrlRow.addView(btnRepeat)
         panel.addView(ctrlRow)
 
-        // Area Lirik Karaoke (Dapat diaktifkan / dinonaktifkan)
         lyricSectionBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = if (MusicEngine.lyricsEnabled) View.VISIBLE else View.GONE
@@ -1723,7 +1620,6 @@ class RadioMusicActivity : AppCompatActivity() {
         val currentPl = combinedPlaylists.getOrNull(selectedPlaylistIdx) ?: return
         listBox.removeAllViews()
 
-        // Jika playlist akun Google belum diambil isi lagunya, ambil dari server YouTube Music
         if (currentPl.isGoogleSynced && currentPl.tracks.isEmpty() && currentPl.browseId.isNotEmpty()) {
             listBox.addView(tv("Mengambil daftar lagu dari ${currentPl.name}...", 13f, mute))
             Thread {
@@ -2062,7 +1958,7 @@ class RadioMusicActivity : AppCompatActivity() {
         if (!cur.startsWith("http", ignoreCase = true)) {
             return RadioScanResult(3, "MATI", "Alamat URL tidak valid")
         }
-        val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        val ua = GoogleMusicAuth.CHROME_UA
         for (hop in 0..3) {
             try {
                 val conn = URL(cur).openConnection() as HttpURLConnection
