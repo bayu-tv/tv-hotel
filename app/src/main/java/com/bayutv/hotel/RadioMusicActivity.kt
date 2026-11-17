@@ -1933,7 +1933,7 @@ class RadioMusicActivity : AppCompatActivity() {
             background = GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
                 setColor(0xFF26211A.toInt())
-                setStroke(dp(2), 0x88B8975A)
+                setStroke(dp(2), 0x88B8975A.toInt())
             }
             clipToOutline = true
         }
