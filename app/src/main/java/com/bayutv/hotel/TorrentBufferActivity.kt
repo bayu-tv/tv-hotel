@@ -36,8 +36,10 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
 
     private val ui = Handler(Looper.getMainLooper())
     private var torrentStream: TorrentStream? = null
+    private var streamPrepared = false
     private var playerLaunched = false
     private var cancelled = false
+    private var waitSeconds = 0
 
     private lateinit var titleText: TextView
     private lateinit var statusText: TextView
@@ -48,6 +50,25 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         ActivityResultContracts.StartActivityForResult()
     ) {
         cleanupAndFinish()
+    }
+
+    private val waitTicker = object : Runnable {
+        override fun run() {
+            if (cancelled || isFinishing || streamPrepared || playerLaunched) return
+            waitSeconds++
+            val dhtNodes = try {
+                torrentStream?.totalDhtNodes ?: 0
+            } catch (_: Throwable) {
+                0
+            }
+            statusText.text = "Menghubungkan ke jaringan seeder... (${waitSeconds}d)"
+            detailText.text = if (waitSeconds >= 35 && dhtNodes == 0) {
+                "Node DHT: 0 — Jaringan operator memblokir P2P. Aktifkan aplikasi 1.1.1.1 (WARP) di TV lalu coba lagi."
+            } else {
+                "Node DHT aktif: $dhtNodes  |  Mencari peer terenkripsi..."
+            }
+            ui.postDelayed(this, 1000L)
+        }
     }
 
     private fun dp(v: Int): Int = Ui.dp(this, v)
@@ -80,7 +101,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         }
 
         val badge = TextView(this).apply {
-            text = "B-BOX P2P STREAMING - BEBAS IKLAN"
+            text = "B-BOX P2P STREAMING - ENKRIPSI AKTIF"
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 11f))
             setTextColor(brassLight)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -117,7 +138,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         card.addView(statusText)
 
         detailText = TextView(this).apply {
-            text = "Proses awal biasanya 5–20 detik tergantung jumlah seeder"
+            text = "Menyiapkan jalur P2P terenkripsi..."
             setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.sp(this@TorrentBufferActivity, 12f))
             setTextColor(mute)
             gravity = Gravity.CENTER
@@ -161,17 +182,20 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
             val options = TorrentOptions.Builder()
                 .saveLocation(saveDir)
                 .removeFilesAfterStop(true)
-                .prepareSize(15L * 1024L * 1024L)
+                .prepareSize(12L * 1024L * 1024L)
+                .maxConnections(120)
                 .build()
 
             ui.post {
                 if (cancelled || isFinishing) return@post
                 try {
                     val ts = TorrentStream.init(options)
+                    configureAntiBlockSession(ts)
                     torrentStream = ts
                     ts.addListener(this)
                     ts.startStream(magnetUrl)
-                } catch (e: Exception) {
+                    ui.postDelayed(waitTicker, 1000L)
+                } catch (e: Throwable) {
                     statusText.text = "Gagal memulai engine P2P"
                     detailText.text = e.message ?: "Error tidak diketahui"
                 }
@@ -179,8 +203,50 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
         }.start()
     }
 
+    private fun configureAntiBlockSession(ts: TorrentStream) {
+        try {
+            val smField = TorrentStream::class.java.getDeclaredField("sessionManager")
+            smField.isAccessible = true
+            val sm = smField.get(ts) ?: return
+
+            val spClass = Class.forName("com.frostwire.jlibtorrent.SettingsPack")
+            val sp = spClass.getDeclaredConstructor().newInstance()
+            val setStr = spClass.getMethod("setString", Int::class.javaPrimitiveType, String::class.java)
+            val setInt = spClass.getMethod("setInteger", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            val setBool = spClass.getMethod("setBoolean", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+
+            val strTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$string_types")
+            val dhtNodesKey = strTypesClass.getField("dht_bootstrap_nodes").get(null)
+            val swigValueMethod = dhtNodesKey.javaClass.getMethod("swigValue")
+            val dhtNodesId = swigValueMethod.invoke(dhtNodesKey) as Int
+            setStr.invoke(
+                sp,
+                dhtNodesId,
+                "router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401,router.silotis.us:6881"
+            )
+
+            val intTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$int_types")
+            val outEncKey = intTypesClass.getField("out_enc_policy").get(null)
+            val inEncKey = intTypesClass.getField("in_enc_policy").get(null)
+            val outEncId = swigValueMethod.invoke(outEncKey) as Int
+            val inEncId = swigValueMethod.invoke(inEncKey) as Int
+            setInt.invoke(sp, outEncId, 0)
+            setInt.invoke(sp, inEncId, 0)
+
+            val boolTypesClass = Class.forName("com.frostwire.jlibtorrent.swig.settings_pack\$bool_types")
+            val enableDhtKey = boolTypesClass.getField("enable_dht").get(null)
+            val enableDhtId = swigValueMethod.invoke(enableDhtKey) as Int
+            setBool.invoke(sp, enableDhtId, true)
+
+            val applyMethod = sm.javaClass.getMethod("applySettings", spClass)
+            applyMethod.invoke(sm, sp)
+        } catch (_: Throwable) {
+        }
+    }
+
     override fun onStreamPrepared(torrent: Torrent?) {
         if (torrent == null) return
+        streamPrepared = true
         val fileIdx = intent.getIntExtra("file_idx", -1)
         if (fileIdx >= 0) {
             try {
@@ -196,6 +262,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
     }
 
     override fun onStreamStarted(torrent: Torrent?) {
+        streamPrepared = true
         ui.post {
             if (!cancelled && !isFinishing) {
                 progressBar.isIndeterminate = false
@@ -206,6 +273,7 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
 
     override fun onStreamProgress(torrent: Torrent?, status: StreamStatus?) {
         if (status == null || cancelled || isFinishing) return
+        streamPrepared = true
         val buf = status.bufferProgress.coerceIn(0, 100)
         val seeds = status.seeds
         val speedKb = status.downloadSpeed / 1024f
@@ -241,20 +309,21 @@ class TorrentBufferActivity : AppCompatActivity(), TorrentListener {
     }
 
     override fun onStreamError(torrent: Torrent?, e: Exception?) {
+        streamPrepared = true
         ui.post {
             if (!cancelled && !isFinishing) {
                 progressBar.isIndeterminate = false
-                statusText.text = "Stream Torrent Gagal"
-                detailText.text = e?.message ?: "Tidak ada seeder aktif. Coba pilih sumber lain di daftar."
+                statusText.text = "Sumber Tidak Merespons"
+                detailText.text = "Coba pilih sumber urutan lain atau aktifkan 1.1.1.1 (WARP) di TV."
             }
         }
     }
 
     override fun onStreamStopped() {
-        // Ditangani oleh cleanupAndFinish
     }
 
     private fun cleanupAndFinish() {
+        ui.removeCallbacks(waitTicker)
         try {
             torrentStream?.removeListener(this)
             if (torrentStream?.isStreaming == true) {
