@@ -92,6 +92,12 @@ class FilmActivity : AppCompatActivity() {
     private lateinit var notice: Notice
     private var focusedMovie: Movie? = null
 
+    private data class RankedStream(
+        val source: StremioAddons.StreamSource,
+        val score: Int,
+        val isWebDl: Boolean
+    )
+
     private fun dp(v: Int): Int = Ui.dp(this, v)
 
     private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
@@ -331,7 +337,7 @@ class FilmActivity : AppCompatActivity() {
             setPadding(dp(44), dp(8), dp(44), dp(14))
         }
         heroBadge = tv(
-            "B-BOX STREAMING - TORRENTIO P2P & STREMIO - SUB INDO", 11f, brassLight,
+            "B-BOX STREAMING - TORRENTIO WEB-DL & STREMIO - SUB INDO", 11f, brassLight,
             Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         ).apply {
             letterSpacing = 0.14f
@@ -614,7 +620,7 @@ class FilmActivity : AppCompatActivity() {
             else -> ""
         }
         val hasLocal = !m.isJellyfin && jfTitles.contains(norm(m.title))
-        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  |  TERSEDIA DI KOLEKSI SAYA" else "  |  TORRENTIO P2P - SUB INDO")
+        heroBadge.text = typeTag + cwTag + (if (hasLocal) "  |  TERSEDIA DI KOLEKSI SAYA" else "  |  TORRENTIO WEB-DL - SUB INDO")
         heroMeta.text = (if (m.year.isNotEmpty()) m.year + "   |   " else "") + "\u2605 " + r + "   |   Tekan OK untuk Tonton"
         heroOverview.text = m.overview.ifBlank {
             "Tekan OK untuk melihat detail lengkap, pilihan episode, dan Subtitle Indonesia otomatis."
@@ -1110,7 +1116,7 @@ class FilmActivity : AppCompatActivity() {
         }
         val ed = prefs.edit()
         for (k in prefs.all.keys) {
-            if (k.startsWith("pos_")) ed.remove(k)
+            if (k.startsWith("pos_") || k.startsWith("srv_")) ed.remove(k)
         }
         ed.apply()
     }
@@ -1303,6 +1309,36 @@ class FilmActivity : AppCompatActivity() {
         root.addView(detailOverlay, FrameLayout.LayoutParams(-1, -1))
     }
 
+    private fun buildResumeKey(m: Movie, season: Int, episode: Int): String {
+        return if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
+    }
+
+    private fun saveLastServer(rKey: String, source: StremioAddons.StreamSource) {
+        try {
+            val o = JSONObject().apply {
+                put("is_torrent", source.isTorrent)
+                put("url", source.url)
+                put("file_idx", source.fileIdx)
+                put("label", source.displayLabel())
+                put("referer", source.referer)
+                put("origin", source.origin)
+                put("user_agent", source.userAgent)
+            }
+            prefs.edit().putString("srv_$rKey", o.toString()).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadLastServer(rKey: String): JSONObject? {
+        val raw = prefs.getString("srv_$rKey", null) ?: return null
+        return try {
+            val o = JSONObject(raw)
+            if (o.optString("url", "").isNotEmpty()) o else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun openContinueDetail(cw: ContinueWatch.Entry) {
         val m = cw.movie
         resolvedImdbId = ""
@@ -1310,7 +1346,15 @@ class FilmActivity : AppCompatActivity() {
         val menit = if (cw.posMs > 60000L) "Menit ke-${cw.posMs / 60000L}" else "Terakhir ditonton"
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  |  " else "") + menit + "  |  Subtitle Indonesia"
         detailOverview.text = m.overview.ifBlank { "Lanjutkan menonton dari posisi terakhir Anda." }
-        detailProviders.text = "Riwayat B-BOX tersimpan otomatis di perangkat TV."
+
+        val rKey = buildResumeKey(m, cw.season, cw.episode)
+        val savedSrv = if (!m.isJellyfin) loadLastServer(rKey) else null
+        detailProviders.text = if (savedSrv != null) {
+            "Server Terakhir: " + savedSrv.optString("label", "Tersimpan otomatis")
+        } else {
+            "Riwayat B-BOX tersimpan otomatis di perangkat TV."
+        }
+
         Images.load(m.poster, detailPoster)
         val bdUrl = resolvedBackdrops[watchKey(m)] ?: m.backdrop
         if (!bdUrl.isNullOrBlank()) {
@@ -1320,19 +1364,28 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("Lanjutkan Menonton", true) {
-            if (m.isJellyfin) {
+        if (m.isJellyfin) {
+            addDetailButton("Lanjutkan Menonton", true) {
                 closeDetail()
                 playJellyfin(m)
-            } else {
-                startStremioStream(m, cw.season, cw.episode)
+            }
+        } else if (savedSrv != null) {
+            addDetailButton("Lanjutkan Menonton", true) {
+                closeDetail()
+                launchSavedServer(m, cw.season, cw.episode, cw.posMs, savedSrv)
+            }
+            addDetailButton("Ganti Server", false) {
+                startStremioStream(m, cw.season, cw.episode, "", cw.posMs)
+            }
+        } else {
+            addDetailButton("Lanjutkan Menonton", true) {
+                startStremioStream(m, cw.season, cw.episode, "", cw.posMs)
             }
         }
-        addDetailButton("Cari di YouTube TV", false) {
-            openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
-        }
+
         addDetailButton("Hapus Riwayat", false) {
             ContinueWatch.remove(this, cw.key)
+            prefs.edit().remove("srv_$rKey").remove("pos_$rKey").apply()
             closeDetail()
             if (tabIdx == 0) {
                 tabIdx = -1
@@ -1350,6 +1403,54 @@ class FilmActivity : AppCompatActivity() {
         }
     }
 
+    private fun launchSavedServer(
+        m: Movie,
+        season: Int,
+        episode: Int,
+        resumeMs: Long,
+        savedSrv: JSONObject
+    ) {
+        val isTorrent = savedSrv.optBoolean("is_torrent", true)
+        val url = savedSrv.optString("url", "")
+        if (url.isEmpty()) {
+            startStremioStream(m, season, episode, "", resumeMs)
+            return
+        }
+        val fileIdx = savedSrv.optInt("file_idx", -1)
+        val fullTitle = if (m.kind == "tv") "${m.title} - S${season}E${episode}".trim() else m.title
+        val rKey = buildResumeKey(m, season, episode)
+        val targetClass = if (isTorrent) TorrentBufferActivity::class.java else VodPlayerActivity::class.java
+
+        val i = Intent(this, targetClass).apply {
+            putExtra("title", fullTitle)
+            if (isTorrent) {
+                putExtra("magnet_url", url)
+                putExtra("file_idx", fileIdx)
+            } else {
+                putExtra("url", url)
+                putExtra("referer", savedSrv.optString("referer", ""))
+                putExtra("origin", savedSrv.optString("origin", ""))
+                putExtra("user_agent", savedSrv.optString("user_agent", "").ifEmpty { Playlist.DEFAULT_UA })
+            }
+            putExtra("resume_key", rKey)
+            putExtra("resume_ms", resumeMs)
+            putExtra("tmdb_id", m.id)
+            putExtra("imdb_id", resolvedImdbId)
+            putExtra("tmdb_kind", m.kind)
+            putExtra("season", season)
+            putExtra("episode", episode)
+            putExtra("year", m.year)
+            putExtra("poster", m.poster ?: "")
+            putExtra("backdrop", resolvedBackdrops[watchKey(m)] ?: m.backdrop ?: "")
+            putExtra("rating", m.rating)
+            putExtra("overview", m.overview)
+        }
+        if (!isTorrent) {
+            ContinueWatch.saveFromIntent(this, i, resumeMs)
+        }
+        startActivity(i)
+    }
+
     private fun openDetail(m: Movie) {
         if (m.isJellyfin) {
             openJellyfin(m)
@@ -1358,7 +1459,7 @@ class FilmActivity : AppCompatActivity() {
         resolvedImdbId = ""
         detailTitle.text = m.title
         detailMeta.text = (if (m.year.isNotEmpty()) m.year + "  |  " else "") +
-            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  |  Torrentio P2P"
+            (if (m.kind == "tv") "Serial / Anime" else "Film") + "  |  Torrentio WEB-DL"
         detailOverview.text = m.overview.ifBlank { "Memuat sinopsis lengkap..." }
         detailProviders.text = "Memuat info durasi & Subtitle Indonesia..."
         Images.load(m.poster, detailPoster)
@@ -1370,7 +1471,7 @@ class FilmActivity : AppCompatActivity() {
         }
         detailActions.removeAllViews()
 
-        addDetailButton("Tonton Gratis (Torrentio)", true) { startStremioStream(m) }
+        addDetailButton("Tonton Gratis (WEB-DL)", true) { startStremioStream(m) }
         addDetailButton("YouTube TV", false) {
             openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
         }
@@ -1448,14 +1549,14 @@ class FilmActivity : AppCompatActivity() {
                 detailProviders.text = if (provNames.isNotEmpty()) {
                     "Layanan Resmi ID: " + provNames.distinct().joinToString(", ")
                 } else {
-                    "Pemutar B-BOX Native (Torrentio P2P & Sub Indo Otomatis)"
+                    "Pemutar B-BOX Native (Prioritas WEB-DL Ringkas & Sub Indo Otomatis)"
                 }
 
                 detailActions.removeAllViews()
                 if (m.kind == "tv" && seasons > 0) {
                     addDetailButton("Pilih Episode", true) { pickEpisodeAndStream(m, seasons) }
                 } else {
-                    addDetailButton("Tonton Gratis (Torrentio)", true) { startStremioStream(m) }
+                    addDetailButton("Tonton Gratis (WEB-DL)", true) { startStremioStream(m) }
                 }
                 addDetailButton("YouTube TV", false) {
                     openYoutubeSearch(m.title + if (m.year.isNotEmpty()) " ${m.year}" else "")
@@ -1542,12 +1643,69 @@ class FilmActivity : AppCompatActivity() {
         detailOverlay.visibility = View.GONE
     }
 
-    private fun startStremioStream(m: Movie, season: Int = 1, episode: Int = 1, epTitle: String = "") {
-        notice.show("Mencari Sumber Torrentio...", "Mengambil ID IMDb & daftar stream bebas iklan...")
+    private fun rankStreamsForTv(streams: List<StremioAddons.StreamSource>): List<RankedStream> {
+        val webDlRegex = Regex("\\bweb[\\s._-]?(dl|rip)?\\b", RegexOption.IGNORE_CASE)
+        val goodRipRegex = Regex("\\b(blu[\\s._-]?ray|bdrip|brrip|hdrip|hdtv)\\b", RegexOption.IGNORE_CASE)
+        val camRegex = Regex("\\b(cam|hdcam|ts|hdts|telesync|telecine|scr|dvdscr)\\b", RegexOption.IGNORE_CASE)
+        val seedRegex = Regex("(?:\\uD83D\\uDC64|seeders?:?)\\s*(\\d+)", RegexOption.IGNORE_CASE)
+        val sizeRegex = Regex("(\\d+(?:\\.\\d+)?)\\s*(gb|mb)", RegexOption.IGNORE_CASE)
+
+        return streams.map { s ->
+            val lbl = s.displayLabel()
+            val low = lbl.lowercase(Locale.US)
+            var score = 0
+            val isCam = camRegex.containsMatchIn(low)
+            val isWebDl = !isCam && webDlRegex.containsMatchIn(low)
+
+            when {
+                isCam -> score -= 5000
+                isWebDl -> score += 2000
+                goodRipRegex.containsMatchIn(low) -> score += 900
+            }
+
+            when {
+                low.contains("1080p") -> score += 450
+                low.contains("720p") -> score += 380
+                low.contains("480p") -> score += 120
+                low.contains("2160p") || low.contains("4k") -> score -= 250
+            }
+
+            val seeds = seedRegex.find(lbl)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
+            if (s.isTorrent && seeds == 0) {
+                score -= 4000
+            } else if (seeds > 0) {
+                score += minOf(seeds, 300) * 3
+            }
+
+            val sizeMatch = sizeRegex.find(lbl)
+            if (sizeMatch != null) {
+                val num = sizeMatch.groupValues[1].toDoubleOrNull() ?: 0.0
+                val unit = sizeMatch.groupValues[2].lowercase(Locale.US)
+                val sizeMb = if (unit == "gb") num * 1024.0 else num
+                when {
+                    sizeMb in 300.0..2600.0 -> score += 400
+                    sizeMb in 2600.1..4500.0 -> score += 120
+                    sizeMb > 8000.0 -> score -= 1600
+                    sizeMb > 4500.0 -> score -= 650
+                }
+            }
+
+            RankedStream(s, score, isWebDl)
+        }.sortedByDescending { it.score }
+    }
+
+    private fun startStremioStream(
+        m: Movie,
+        season: Int = 1,
+        episode: Int = 1,
+        epTitle: String = "",
+        resumeMs: Long = 0L
+    ) {
+        notice.show("Mencari Sumber WEB-DL...", "Memilih kualitas terbaik & ukuran file ringkas...")
         Thread {
             val imdb = resolvedImdbId.ifEmpty { Tmdb.imdbId(this, m.id, m.kind) }
             if (imdb.isNotEmpty()) resolvedImdbId = imdb
-            val streams = if (imdb.startsWith("tt")) {
+            val rawStreams = if (imdb.startsWith("tt")) {
                 StremioAddons.fetchStreams(this, imdb, m.kind, season, episode)
             } else {
                 emptyList()
@@ -1556,7 +1714,7 @@ class FilmActivity : AppCompatActivity() {
             ui.post {
                 if (isFinishing) return@post
                 notice.hide()
-                if (streams.isEmpty()) {
+                if (rawStreams.isEmpty()) {
                     val info = if (imdb.isEmpty()) "IMDb ID tidak tersedia" else imdb
                     AlertDialog.Builder(this)
                         .setTitle("Sumber Torrentio Tidak Ditemukan")
@@ -1566,18 +1724,35 @@ class FilmActivity : AppCompatActivity() {
                         }
                         .setNegativeButton("Tutup", null)
                         .show()
-                } else if (streams.size == 1) {
-                    closeDetail()
-                    launchSelectedSource(m, season, episode, epTitle, imdb, streams[0])
                 } else {
-                    val labels = streams.map { it.displayLabel() }.toTypedArray()
-                    AlertDialog.Builder(this)
-                        .setTitle("Pilih Sumber (${streams.size} Tersedia - Pilih Seeder Terbanyak)")
-                        .setItems(labels) { _, which ->
-                            closeDetail()
-                            launchSelectedSource(m, season, episode, epTitle, imdb, streams[which])
+                    val ranked = rankStreamsForTv(rawStreams)
+                    if (ranked.size == 1) {
+                        closeDetail()
+                        launchSelectedSource(m, season, episode, epTitle, imdb, ranked[0].source, resumeMs)
+                    } else {
+                        val hasWebDl = ranked.any { it.isWebDl }
+                        val dialogTitle = if (hasWebDl) {
+                            "Pilih Sumber (Prioritas WEB-DL Ringkas di Atas)"
+                        } else {
+                            "Pilih Sumber (WEB-DL Kosong - Menampilkan Rilisan Terbaik)"
                         }
-                        .show()
+                        val labels = ranked.mapIndexed { idx, item ->
+                            val prefix = if (idx == 0) {
+                                if (item.isWebDl) "[WEB-DL Terbaik] " else "[Rekomendasi] "
+                            } else {
+                                ""
+                            }
+                            prefix + item.source.displayLabel()
+                        }.toTypedArray()
+
+                        AlertDialog.Builder(this)
+                            .setTitle(dialogTitle)
+                            .setItems(labels) { _, which ->
+                                closeDetail()
+                                launchSelectedSource(m, season, episode, epTitle, imdb, ranked[which].source, resumeMs)
+                            }
+                            .show()
+                    }
                 }
             }
         }.start()
@@ -1589,10 +1764,12 @@ class FilmActivity : AppCompatActivity() {
         episode: Int,
         epTitle: String,
         imdbId: String,
-        source: StremioAddons.StreamSource
+        source: StremioAddons.StreamSource,
+        resumeMs: Long = 0L
     ) {
         val fullTitle = if (m.kind == "tv") "${m.title} - S${season}E${episode} $epTitle".trim() else m.title
-        val rKey = if (m.kind == "tv") "tmdb_tv_${m.id}_${season}_${episode}" else "tmdb_mv_${m.id}"
+        val rKey = buildResumeKey(m, season, episode)
+        saveLastServer(rKey, source)
 
         val targetClass = if (source.isTorrent) {
             TorrentBufferActivity::class.java
@@ -1612,6 +1789,7 @@ class FilmActivity : AppCompatActivity() {
                 putExtra("user_agent", source.userAgent.ifEmpty { Playlist.DEFAULT_UA })
             }
             putExtra("resume_key", rKey)
+            putExtra("resume_ms", resumeMs)
             putExtra("tmdb_id", m.id)
             putExtra("imdb_id", imdbId)
             putExtra("tmdb_kind", m.kind)
@@ -1624,7 +1802,7 @@ class FilmActivity : AppCompatActivity() {
             putExtra("overview", m.overview)
         }
         if (!source.isTorrent) {
-            ContinueWatch.saveFromIntent(this, i, 0L)
+            ContinueWatch.saveFromIntent(this, i, resumeMs)
         }
         startActivity(i)
     }
