@@ -52,6 +52,7 @@ class SettingsActivity : AppCompatActivity() {
     private var isPhoneLayout = false
 
     private lateinit var status: TextView
+    private lateinit var tvHomeThemeSubtitle: TextView
     private lateinit var tvAntennaSubtitle: TextView
     private lateinit var notice: Notice
 
@@ -159,6 +160,37 @@ class SettingsActivity : AppCompatActivity() {
         return Pair(box, subView)
     }
 
+    private fun tvHomeThemeSummary(): String {
+        val mode = prefs.getString("tv_home_theme", "classic") ?: "classic"
+        return if (mode == "bento") {
+            "Aktif di TV: Cinematic Bento (Modern 2×2 + 1×3)"
+        } else {
+            "Aktif di TV: Model Klasik B-BOX (7 Tombol Sejajar)"
+        }
+    }
+
+    private fun chooseTvHomeTheme() {
+        val current = prefs.getString("tv_home_theme", "classic") ?: "classic"
+        val checked = if (current == "bento") 1 else 0
+        val options = arrayOf(
+            "Model Klasik B-BOX (Bawaan TV · 7 Tombol Sejajar)",
+            "Cinematic Bento (Modern · Senada Film & Musik)"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Pilih Model Beranda TV")
+            .setSingleChoiceItems(options, checked) { dialog, which ->
+                val chosen = if (which == 1) "bento" else "classic"
+                prefs.edit().putString("tv_home_theme", chosen).apply()
+                if (::tvHomeThemeSubtitle.isInitialized) {
+                    tvHomeThemeSubtitle.text = tvHomeThemeSummary()
+                }
+                notice.show("Tampilan TV Disimpan", "Model beranda TV otomatis diterapkan saat kembali.", 3500L)
+                dialog.dismiss()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -167,7 +199,7 @@ class SettingsActivity : AppCompatActivity() {
             resources.configuration.screenWidthDp < 600
 
         val root = FrameLayout(this).apply {
-            setBackgroundColor(0xFF121110.toInt())
+            setBackgroundColor(0xFF0D0D0F.toInt())
             clipChildren = false
             clipToPadding = false
         }
@@ -280,18 +312,28 @@ class SettingsActivity : AppCompatActivity() {
             firstFocusable = btnWeb
         }
 
-        val divider = View(this).apply { setBackgroundColor(0xFF34302A.toInt()) }
+        val divider = View(this).apply { setBackgroundColor(0xFF28282E.toInt()) }
         val dlp = LinearLayout.LayoutParams(-1, dp(1)).apply {
             topMargin = dp(4)
             bottomMargin = dp(14)
         }
         rightCol.addView(divider, dlp)
 
-        val secHead = tv("TV ANTENA & DIAGNOSTIK", 12.5f, brass, Typeface.SANS_SERIF).apply {
+        val secHead = tv("TAMPILAN & TV ANTENA", 12.5f, brass, Typeface.SANS_SERIF).apply {
             letterSpacing = 0.16f
             setPadding(dp(4), 0, 0, dp(10))
         }
         rightCol.addView(secHead)
+
+        val (btnTvTheme, subTvTheme) = actionButton(
+            "Model Beranda TV",
+            tvHomeThemeSummary()
+        ) {
+            chooseTvHomeTheme()
+        }
+        if (subTvTheme != null) tvHomeThemeSubtitle = subTvTheme
+        rightCol.addView(btnTvTheme)
+        if (firstFocusable == null) firstFocusable = btnTvTheme
 
         val (btnAntennaApp, subAntenna) = actionButton(
             "Aplikasi TV Antena",
@@ -301,7 +343,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         if (subAntenna != null) tvAntennaSubtitle = subAntenna
         rightCol.addView(btnAntennaApp)
-        if (firstFocusable == null) firstFocusable = btnAntennaApp
 
         val (btnCompass, _) = actionButton(
             "Kompas MUX & Arah Antena",
@@ -549,6 +590,9 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (::tvHomeThemeSubtitle.isInitialized) {
+            tvHomeThemeSubtitle.text = tvHomeThemeSummary()
+        }
         refreshAntennaLabel()
     }
 
