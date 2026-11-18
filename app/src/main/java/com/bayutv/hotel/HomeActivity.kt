@@ -148,7 +148,6 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Ikon Stik Gamepad Kustom (D-Pad kiri + Tombol A/B kanan + Pegangan Ergonomis)
     private fun gamepadIconDrawable(color: Int): Drawable {
         return object : Drawable() {
             private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -158,12 +157,10 @@ class HomeActivity : AppCompatActivity() {
                 if (w <= 0f || h <= 0f) return
 
                 p.color = color
-                // Badan kiri, kanan, dan tengah stik
                 canvas.drawCircle(w * 0.28f, h * 0.47f, w * 0.19f, p)
                 canvas.drawCircle(w * 0.72f, h * 0.47f, w * 0.19f, p)
                 canvas.drawRect(RectF(w * 0.28f, h * 0.30f, w * 0.72f, h * 0.61f), p)
 
-                // Pegangan kiri & kanan
                 canvas.save()
                 canvas.rotate(18f, w * 0.22f, h * 0.55f)
                 canvas.drawRoundRect(RectF(w * 0.11f, h * 0.43f, w * 0.31f, h * 0.78f), w * 0.09f, w * 0.09f, p)
@@ -174,8 +171,7 @@ class HomeActivity : AppCompatActivity() {
                 canvas.drawRoundRect(RectF(w * 0.69f, h * 0.43f, w * 0.89f, h * 0.78f), w * 0.09f, w * 0.09f, p)
                 canvas.restore()
 
-                // Detail D-Pad & Tombol Aksi
-                p.color = 0xFF131317.toInt()
+                p.color = 0xFF121216.toInt()
                 canvas.drawRoundRect(RectF(w * 0.20f, h * 0.44f, w * 0.36f, h * 0.49f), w * 0.015f, w * 0.015f, p)
                 canvas.drawRoundRect(RectF(w * 0.255f, h * 0.385f, w * 0.305f, h * 0.545f), w * 0.015f, w * 0.015f, p)
                 canvas.drawCircle(w * 0.745f, h * 0.415f, w * 0.036f, p)
@@ -188,71 +184,91 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    private fun box(focused: Boolean): GradientDrawable {
-        val g = GradientDrawable()
-        g.cornerRadius = dp(16).toFloat()
-        g.setColor(if (focused) ((brass and 0x00FFFFFF) or 0x30000000) else 0x14FFFFFF)
-        g.setStroke(dp(if (focused) 2 else 1), if (focused) brass else 0x22FFFFFF)
-        return g
+    // Kotak kartu TV Klasik (Obsidian pekat agar tidak tampak abu-abu pudar di layar TV)
+    private fun classicBox(focused: Boolean): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            if (focused) {
+                intArrayOf(0xFF2B2316.toInt(), 0xFF181510.toInt())
+            } else {
+                intArrayOf(0xE615151A.toInt(), 0xE6101014.toInt())
+            }
+        ).apply {
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(if (focused) 2 else 1), if (focused) brassLight else 0x26FFFFFF)
+        }
     }
 
-    // Kartu klasik TV (sejajar horizontal)
+    // Kartu TV Klasik (Grid 2x4 lebar & lega untuk remote TV)
     private fun classicTile(
         label: String,
         res: Int,
         customIcon: ((Int) -> Drawable)? = null,
         action: () -> Unit
     ): LinearLayout {
-        val t = LinearLayout(this)
-        t.orientation = LinearLayout.VERTICAL
-        t.gravity = Gravity.CENTER
+        val t = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(12), dp(18), dp(12))
+            isFocusable = true
+            isClickable = true
+            background = classicBox(false)
+        }
 
-        val ic = ImageView(this).apply {
-            val sz = dp(34)
-            layoutParams = LinearLayout.LayoutParams(sz, sz)
-            if (customIcon != null) {
-                setImageDrawable(customIcon(mute))
-            } else {
-                setImageResource(res)
-                setColorFilter(mute, PorterDuff.Mode.SRC_IN)
+        val iconWrap = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x18FFFFFF)
             }
         }
-        t.addView(ic)
+        val ic = ImageView(this).apply {
+            val sz = dp(28)
+            val lp = FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
+            layoutParams = lp
+            if (customIcon != null) {
+                setImageDrawable(customIcon(brassLight))
+            } else {
+                setImageResource(res)
+                setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+            }
+        }
+        iconWrap.addView(ic)
+        t.addView(iconWrap, LinearLayout.LayoutParams(dp(48), dp(48)))
 
-        val tx = tv(label, 14.5f, mute, Typeface.SERIF).apply {
-            setPadding(dp(3), dp(9), dp(3), 0)
-            gravity = Gravity.CENTER_HORIZONTAL
+        val tx = tv(label, 16f, ivory, Typeface.SERIF).apply {
+            setPadding(dp(16), 0, dp(6), 0)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
-        t.addView(tx)
+        t.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
 
-        t.isFocusable = true
-        t.isClickable = true
-        t.background = box(false)
+        val arrow = tv("›", 20f, 0x55FFFFFF, Typeface.SANS_SERIF)
+        t.addView(arrow)
+
         t.setOnClickListener { action() }
         t.setOnFocusChangeListener { _, f ->
-            t.background = box(f)
-            val c = if (f) brassLight else mute
+            t.background = classicBox(f)
+            val c = if (f) Color.WHITE else brassLight
             if (customIcon != null) {
                 ic.setImageDrawable(customIcon(c))
             } else {
                 ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
             }
-            tx.setTextColor(c)
-            val s = if (f) 1.04f else 1f
-            t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(4).toFloat() else 0f).setDuration(200).start()
-            if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(650).start()
+            tx.setTextColor(if (f) brassLight else ivory)
+            arrow.setTextColor(if (f) brassLight else 0x55FFFFFF)
+            val s = if (f) 1.03f else 1f
+            t.animate().scaleX(s).scaleY(s).setDuration(180).start()
+            if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(600).start()
         }
 
-        val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
-        lp.setMargins(dp(4), 0, dp(4), 0)
+        val lp = LinearLayout.LayoutParams(0, dp(88), 1f)
+        lp.setMargins(dp(6), 0, dp(6), 0)
         t.layoutParams = lp
         if (firstTile == null) firstTile = t
         return t
     }
 
-    // Kartu utama Bento 2x2 (Smartphone & TV Bento)
+    // Kartu utama Bento 2x2 (Smartphone tetap rapi + TV Cinematic kaya visual & anti-kopong)
     private fun bentoMainCard(
         title: String,
         subtitle: String,
@@ -263,41 +279,91 @@ class HomeActivity : AppCompatActivity() {
         customIcon: ((Int) -> Drawable)? = null,
         onLongClick: (() -> Unit)? = null,
         action: () -> Unit
-    ): LinearLayout {
+    ): FrameLayout {
         fun makeBg(focused: Boolean): GradientDrawable {
-            val topCol = if (focused) {
-                (tintColor and 0x00FFFFFF) or 0x55000000
+            return if (isPhoneLayout) {
+                val topCol = if (focused) {
+                    (tintColor and 0x00FFFFFF) or 0x55000000
+                } else {
+                    (tintColor and 0x00FFFFFF) or 0x2E000000
+                }
+                GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(topCol, 0xFF151519.toInt())
+                ).apply {
+                    cornerRadius = dp(16).toFloat()
+                    when {
+                        focused -> setStroke(dp(2), Color.WHITE)
+                        highlightedBorder -> setStroke(dp(1), brass)
+                        else -> setStroke(dp(1), 0x28FFFFFF)
+                    }
+                }
             } else {
-                (tintColor and 0x00FFFFFF) or 0x2E000000
-            }
-            return GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(topCol, 0xFF151519.toInt())
-            ).apply {
-                cornerRadius = dp(16).toFloat()
-                when {
-                    focused -> setStroke(dp(2), Color.WHITE)
-                    highlightedBorder -> setStroke(dp(1), brass)
-                    else -> setStroke(dp(1), 0x28FFFFFF)
+                // TV Cinematic: kontras pekat obsidian + aksen hangat saat disorot
+                val topCol = if (focused) {
+                    (tintColor and 0x00FFFFFF) or 0x48000000
+                } else {
+                    (tintColor and 0x00FFFFFF) or 0x20000000
+                }
+                GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(topCol, 0xFF111116.toInt())
+                ).apply {
+                    cornerRadius = dp(18).toFloat()
+                    when {
+                        focused -> setStroke(dp(2), brassLight)
+                        highlightedBorder -> setStroke(dp(1), (brass and 0x00FFFFFF) or 0x66000000)
+                        else -> setStroke(dp(1), 0x24FFFFFF)
+                    }
                 }
             }
         }
 
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(15), dp(13), dp(15), dp(13))
+        val frame = FrameLayout(this).apply {
             isFocusable = true
             isClickable = true
             background = makeBg(false)
+            clipChildren = true
+        }
+
+        // Watermark dekoratif besar khusus TV agar kartu Bento tidak kosong di bagian tengah
+        var watermark: ImageView? = null
+        if (!isPhoneLayout) {
+            watermark = ImageView(this).apply {
+                val wmSz = dp(104)
+                val wmLp = FrameLayout.LayoutParams(wmSz, wmSz, Gravity.BOTTOM or Gravity.END).apply {
+                    rightMargin = dp(12)
+                    bottomMargin = dp(10)
+                }
+                layoutParams = wmLp
+                alpha = 0.07f
+                if (customIcon != null) {
+                    setImageDrawable(customIcon(brassLight))
+                } else {
+                    setImageResource(res)
+                    setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+                }
+            }
+            frame.addView(watermark)
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(if (isPhoneLayout) 15 else 20), dp(if (isPhoneLayout) 13 else 18), dp(if (isPhoneLayout) 15 else 20), dp(if (isPhoneLayout) 13 else 18))
         }
 
         val topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+
         val ic = ImageView(this).apply {
-            val sz = dp(if (isPhoneLayout) 28 else 32)
-            layoutParams = LinearLayout.LayoutParams(sz, sz)
+            val sz = dp(if (isPhoneLayout) 28 else 30)
+            if (isPhoneLayout) {
+                layoutParams = LinearLayout.LayoutParams(sz, sz)
+            } else {
+                layoutParams = FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
+            }
             if (customIcon != null) {
                 setImageDrawable(customIcon(brassLight))
             } else {
@@ -305,16 +371,30 @@ class HomeActivity : AppCompatActivity() {
                 setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
             }
         }
-        topRow.addView(ic)
+
+        if (isPhoneLayout) {
+            topRow.addView(ic)
+        } else {
+            val iconHolder = FrameLayout(this).apply {
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat()
+                    setColor(0x1AFFFFFF)
+                    setStroke(dp(1), 0x26FFFFFF)
+                }
+                addView(ic)
+            }
+            topRow.addView(iconHolder, LinearLayout.LayoutParams(dp(52), dp(52)))
+        }
+
         topRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
 
         if (badgeText != null) {
-            val badge = tv(badgeText, 9.5f, Color.WHITE, Typeface.DEFAULT_BOLD).apply {
+            val badge = tv(badgeText, if (isPhoneLayout) 9.5f else 10.5f, Color.WHITE, Typeface.DEFAULT_BOLD).apply {
                 letterSpacing = 0.08f
-                setPadding(dp(8), dp(3), dp(8), dp(3))
+                setPadding(dp(9), dp(4), dp(9), dp(4))
                 background = GradientDrawable().apply {
-                    cornerRadius = dp(6).toFloat()
-                    setColor(0xFFD32F2F.toInt())
+                    cornerRadius = dp(7).toFloat()
+                    setColor(0xFFC62828.toInt())
                 }
             }
             topRow.addView(badge)
@@ -322,9 +402,17 @@ class HomeActivity : AppCompatActivity() {
         card.addView(topRow, LinearLayout.LayoutParams(-1, -2))
         card.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
 
+        val bottomRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+        }
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
         val titleTv = tv(
             title,
-            if (isPhoneLayout) 16.5f else 18f,
+            if (isPhoneLayout) 16.5f else 20.5f,
             Color.WHITE,
             Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         ).apply {
@@ -333,40 +421,55 @@ class HomeActivity : AppCompatActivity() {
         }
         val subTv = tv(
             subtitle,
-            if (isPhoneLayout) 11.5f else 12.5f,
+            if (isPhoneLayout) 11.5f else 13.5f,
             mute,
             Typeface.SANS_SERIF
         ).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setPadding(0, dp(2), 0, 0)
+            setPadding(0, dp(3), 0, 0)
         }
-        card.addView(titleTv)
-        card.addView(subTv)
+        textCol.addView(titleTv)
+        textCol.addView(subTv)
+        bottomRow.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
 
-        card.setOnClickListener { action() }
+        var chevronTv: TextView? = null
+        if (!isPhoneLayout) {
+            chevronTv = tv("›", 24f, 0x55FFFFFF, Typeface.SANS_SERIF).apply {
+                setPadding(dp(8), 0, 0, 0)
+            }
+            bottomRow.addView(chevronTv)
+        }
+
+        card.addView(bottomRow, LinearLayout.LayoutParams(-1, -2))
+        frame.addView(card, FrameLayout.LayoutParams(-1, -1))
+
+        frame.setOnClickListener { action() }
         if (onLongClick != null) {
-            card.setOnLongClickListener {
+            frame.setOnLongClickListener {
                 onLongClick()
                 true
             }
         }
-        card.setOnFocusChangeListener { _, f ->
-            card.background = makeBg(f)
+        frame.setOnFocusChangeListener { _, f ->
+            frame.background = makeBg(f)
             val iconCol = if (f) Color.WHITE else brassLight
             if (customIcon != null) {
                 ic.setImageDrawable(customIcon(iconCol))
             } else {
                 ic.setColorFilter(iconCol, PorterDuff.Mode.SRC_IN)
             }
+            titleTv.setTextColor(if (f) brassLight else Color.WHITE)
+            chevronTv?.setTextColor(if (f) brassLight else 0x55FFFFFF)
+            watermark?.alpha = if (f) 0.14f else 0.07f
             if (!isPhoneLayout) {
-                val s = if (f) 1.025f else 1f
-                card.animate().scaleX(s).scaleY(s).setDuration(180).start()
+                val s = if (f) 1.022f else 1f
+                frame.animate().scaleX(s).scaleY(s).setDuration(180).start()
             }
         }
 
-        if (firstTile == null) firstTile = card
-        return card
+        if (firstTile == null) firstTile = frame
+        return frame
     }
 
     // Kartu utilitas sejajar 1x4 (Game · Pindai · Panduan · Pengaturan)
@@ -379,8 +482,17 @@ class HomeActivity : AppCompatActivity() {
         fun makeBg(focused: Boolean): GradientDrawable {
             return GradientDrawable().apply {
                 cornerRadius = dp(14).toFloat()
-                setColor(if (focused) ((brass and 0x00FFFFFF) or 0x36000000) else 0xFF17171B.toInt())
-                setStroke(dp(if (focused) 2 else 1), if (focused) Color.WHITE else 0x26FFFFFF)
+                setColor(
+                    if (focused) {
+                        if (isPhoneLayout) ((brass and 0x00FFFFFF) or 0x36000000) else 0xFF282115.toInt()
+                    } else {
+                        if (isPhoneLayout) 0xFF17171B.toInt() else 0xFF121217.toInt()
+                    }
+                )
+                setStroke(
+                    dp(if (focused) 2 else 1),
+                    if (focused) (if (isPhoneLayout) Color.WHITE else brassLight) else 0x26FFFFFF
+                )
             }
         }
 
@@ -403,7 +515,7 @@ class HomeActivity : AppCompatActivity() {
                 setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
             }
         }
-        val tx = tv(label, if (isPhoneLayout) 11.5f else 12.5f, ivory, Typeface.SANS_SERIF).apply {
+        val tx = tv(label, if (isPhoneLayout) 11.5f else 13f, ivory, Typeface.SANS_SERIF).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -421,7 +533,7 @@ class HomeActivity : AppCompatActivity() {
             } else {
                 ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
             }
-            tx.setTextColor(if (f) Color.WHITE else ivory)
+            tx.setTextColor(if (f) brassLight else ivory)
         }
         return btn
     }
@@ -440,7 +552,11 @@ class HomeActivity : AppCompatActivity() {
         brassLight = skin.accentLight
 
         val root = FrameLayout(this)
-        val baseBgColor = if (useBentoLayout && skin.id == "default") 0xFF0D0D0F.toInt() else skin.bg
+        val baseBgColor = if (skin.id == "default") {
+            if (isPhoneLayout) 0xFF0D0D0F.toInt() else 0xFF09090B.toInt()
+        } else {
+            skin.bg
+        }
         root.setBackgroundColor(baseBgColor)
 
         bgView = ImageView(this)
@@ -450,9 +566,12 @@ class HomeActivity : AppCompatActivity() {
         val gd = GradientDrawable()
         gd.shape = GradientDrawable.OVAL
         gd.gradientType = GradientDrawable.RADIAL_GRADIENT
-        gd.gradientRadius = dp(520).toFloat()
+        gd.gradientRadius = dp(if (isPhoneLayout) 520 else 420).toFloat()
         gd.colors = intArrayOf(skin.glow, skin.glow and 0x00FFFFFF)
         glow.background = gd
+        if (!isPhoneLayout && skin.id == "default") {
+            glow.alpha = 0.42f
+        }
         root.addView(glow, FrameLayout.LayoutParams(dp(1040), dp(1040)))
         glow.translationX = -dp(300).toFloat()
         glow.translationY = -dp(520).toFloat()
@@ -497,7 +616,7 @@ class HomeActivity : AppCompatActivity() {
             letterSpacing = 0.22f
             setPadding(dp(8), 0, 0, 0)
         }
-        val greetSp = if (isPhoneLayout) 22f else if (useBentoLayout) 28f else 34f
+        val greetSp = if (isPhoneLayout) 22f else if (useBentoLayout) 27f else 33f
         tvGreet = tv("", greetSp, ivory, Typeface.SERIF)
         tvName = tv(
             prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda",
@@ -506,14 +625,14 @@ class HomeActivity : AppCompatActivity() {
             Typeface.create(Typeface.SERIF, Typeface.ITALIC)
         )
 
-        val clockSp = if (isPhoneLayout) 36f else if (useBentoLayout) 46f else 52f
+        val clockSp = if (isPhoneLayout) 36f else if (useBentoLayout) 48f else 52f
         val dateSp = if (isPhoneLayout) 12f else 14f
         tvClock = tv("", clockSp, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
         tvDate = tv("", dateSp, mute, Typeface.SANS_SERIF)
         tvHijri = tv("", dateSp, mute, Typeface.SANS_SERIF)
 
-        wxIcon = icon(R.drawable.ic_cloud_sun, if (isPhoneLayout) 34 else if (useBentoLayout) 42 else 54, brassLight)
-        tvWx1 = tv("Memuat cuaca...", if (isPhoneLayout) 14.5f else if (useBentoLayout) 16f else 18f, ivory, Typeface.SANS_SERIF)
+        wxIcon = icon(R.drawable.ic_cloud_sun, if (isPhoneLayout) 34 else if (useBentoLayout) 44 else 52, brassLight)
+        tvWx1 = tv("Memuat cuaca...", if (isPhoneLayout) 14.5f else if (useBentoLayout) 16.5f else 18f, ivory, Typeface.SANS_SERIF)
         tvWx2 = tv("", if (isPhoneLayout) 12.5f else if (useBentoLayout) 13.5f else 15f, mute, Typeface.SANS_SERIF)
         fc = LinearLayout(this)
 
@@ -559,20 +678,20 @@ class HomeActivity : AppCompatActivity() {
         val pray = LinearLayout(this).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(16).toFloat()
-                setColor(if (useBentoLayout) 0xFF151519.toInt() else 0x14FFFFFF)
+                setColor(if (isPhoneLayout) 0xFF151519.toInt() else 0xFF131318.toInt())
                 setStroke(dp(1), 0x26FFFFFF)
             }
-            setPadding(dp(6), dp(8), dp(6), dp(8))
+            setPadding(dp(6), dp(9), dp(6), dp(9))
         }
         for (i in 0..4) {
             val c = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
             }
-            val n = tv(prayNames[i], if (isPhoneLayout) 11.5f else if (useBentoLayout) 12f else 14f, mute, Typeface.SANS_SERIF).apply {
+            val n = tv(prayNames[i], if (isPhoneLayout) 11.5f else if (useBentoLayout) 12.5f else 14f, mute, Typeface.SANS_SERIF).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
-            val t = tv("--:--", if (isPhoneLayout) 16.5f else if (useBentoLayout) 17.5f else 22f, ivory, Typeface.SERIF).apply {
+            val t = tv("--:--", if (isPhoneLayout) 16.5f else if (useBentoLayout) 18.5f else 22f, ivory, Typeface.SERIF).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
             c.addView(n)
@@ -644,32 +763,33 @@ class HomeActivity : AppCompatActivity() {
 
         val cardH = if (isPhoneLayout) dp(112) else 0
         val rowWeight = if (isPhoneLayout) 0f else 1f
+        val gap = if (isPhoneLayout) dp(6) else dp(7)
 
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
         }
-        row1.addView(cardTv, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = dp(6) })
-        row1.addView(cardFilm, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = dp(6) })
-        menuCol.addView(row1, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(10) })
+        row1.addView(cardTv, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = gap })
+        row1.addView(cardFilm, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = gap })
+        menuCol.addView(row1, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 12) })
 
         val row2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
         }
-        row2.addView(cardMusic, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = dp(6) })
-        row2.addView(cardAntenna, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = dp(6) })
-        menuCol.addView(row2, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(10) })
+        row2.addView(cardMusic, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = gap })
+        row2.addView(cardAntenna, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = gap })
+        menuCol.addView(row2, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 12) })
 
-        val utilH = dp(if (isPhoneLayout) 66 else 74)
+        val utilH = dp(if (isPhoneLayout) 66 else 80)
         val row3 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
         }
-        row3.addView(btnGame, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(4) })
-        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4) })
+        row3.addView(btnGame, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(5) })
+        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
+        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
+        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5) })
         menuCol.addView(row3, LinearLayout.LayoutParams(-1, -2))
 
         tiles = menuCol
@@ -759,33 +879,44 @@ class HomeActivity : AppCompatActivity() {
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
 
-    // 2. TAMPILAN TV BENTO (LANDSCAPE · 2 KOLOM MODERN)
+    // 2. TAMPILAN TV BENTO / CINEMATIC (LANDSCAPE · SIDEBAR KACA OBSIDIAN + BENTO KAYA VISUAL)
     private fun buildTvBentoScreen(root: FrameLayout) {
         val mainRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
-            setPadding(dp(38), dp(26), dp(38), dp(24))
+            setPadding(dp(34), dp(24), dp(34), dp(24))
         }
 
+        // Panel Kiri terbingkai rapi agar informatif & kontras
         val infoCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, dp(26), 0)
+            setPadding(dp(22), dp(20), dp(22), dp(16))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0xDD101014.toInt())
+                setStroke(dp(1), 0x22FFFFFF)
+            }
         }
         infoCol.addView(buildBrandBadge())
         infoCol.addView(tvGreet)
         infoCol.addView(tvName)
 
+        val div1 = View(this).apply { setBackgroundColor(0xFF222228.toInt()) }
+        infoCol.addView(div1, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(10); bottomMargin = dp(6) })
+
         tvClock.gravity = Gravity.START
         tvDate.gravity = Gravity.START
         tvHijri.gravity = Gravity.START
-        infoCol.addView(tvClock, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        infoCol.addView(tvClock)
         infoCol.addView(tvDate)
         infoCol.addView(tvHijri)
+
+        val div2 = View(this).apply { setBackgroundColor(0xFF222228.toInt()) }
+        infoCol.addView(div2, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(10); bottomMargin = dp(10) })
 
         val wxRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
         }
         wxRow.addView(wxIcon)
         val wt = LinearLayout(this).apply {
@@ -798,7 +929,7 @@ class HomeActivity : AppCompatActivity() {
         infoCol.addView(wxRow)
 
         fc.orientation = LinearLayout.HORIZONTAL
-        infoCol.addView(fc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        infoCol.addView(fc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         infoCol.addView(noteBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         infoCol.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
 
@@ -807,10 +938,10 @@ class HomeActivity : AppCompatActivity() {
 
         tvCd = tv("", 13f, brassLight, Typeface.SANS_SERIF).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(7), 0, 0)
         }
         infoCol.addView(tvCd)
-        tvNote = tv("Cuaca: Open-Meteo · Kualitas udara: CAMS · Jadwal sholat Kemenag RI.", 10.5f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF).apply {
+        tvNote = tv("Cuaca: Open-Meteo · Kualitas udara: CAMS · Jadwal sholat Kemenag RI.", 10.5f, 0xFF7D7567.toInt(), Typeface.SANS_SERIF).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(0, dp(2), 0, 0)
         }
@@ -818,17 +949,17 @@ class HomeActivity : AppCompatActivity() {
 
         val menuCol = buildBentoMenuColumn()
 
-        mainRow.addView(infoCol, LinearLayout.LayoutParams(0, -1, 0.88f))
-        mainRow.addView(menuCol, LinearLayout.LayoutParams(0, -1, 1.12f))
+        mainRow.addView(infoCol, LinearLayout.LayoutParams(0, -1, 0.86f).apply { rightMargin = dp(18) })
+        mainRow.addView(menuCol, LinearLayout.LayoutParams(0, -1, 1.14f))
         root.addView(mainRow, FrameLayout.LayoutParams(-1, -1))
     }
 
-    // 3. TAMPILAN TV KLASIK B-BOX (TOMBOL SEJAJAR BAWAAN)
+    // 3. TAMPILAN TV KLASIK B-BOX (GRID 2x4 LEBAR, KONTRAS PEKAT, MUDAH DINAVIGASI REMOTE)
     private fun buildTvClassicScreen(root: FrameLayout) {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
-            setPadding(dp(44), dp(28), dp(44), dp(18))
+            setPadding(dp(42), dp(26), dp(42), dp(20))
         }
 
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -851,7 +982,7 @@ class HomeActivity : AppCompatActivity() {
         top.addView(right, LinearLayout.LayoutParams(-2, -2))
         col.addView(top, LinearLayout.LayoutParams(-1, -2))
 
-        val line = View(this).apply { setBackgroundColor(0xFF34302A.toInt()) }
+        val line = View(this).apply { setBackgroundColor(0xFF2B2823.toInt()) }
         col.addView(line, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(12) })
 
         val wxOuter = LinearLayout(this).apply {
@@ -876,9 +1007,13 @@ class HomeActivity : AppCompatActivity() {
         col.addView(wxOuter, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
 
         col.addView(noteBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.1f))
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
 
         val tTv = classicTile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) }
+        val tFilm = classicTile("Film", R.drawable.ic_film) {
+            if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
+            else startActivity(Intent(this, FilmActivity::class.java))
+        }
         val tMusic = classicTile("Musik & Radio", 0, customIcon = { c -> musicIconDrawable(c) }) {
             startActivity(Intent(this, RadioMusicActivity::class.java))
         }
@@ -889,34 +1024,43 @@ class HomeActivity : AppCompatActivity() {
             openAntennaMenu()
             true
         }
-        val tFilm = classicTile("Film", R.drawable.ic_film) {
-            if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
-            else startActivity(Intent(this, FilmActivity::class.java))
-        }
+
         val tGame = classicTile("Game", 0, customIcon = { c -> gamepadIconDrawable(c) }) {
             startActivity(Intent(this, GameActivity::class.java))
         }
-        val tPanduan = classicTile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
         val tScan = classicTile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) }
+        val tPanduan = classicTile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
         val tSettings = classicTile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) }
 
-        tiles = LinearLayout(this).apply {
+        val rowTop = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
             clipChildren = false
             clipToPadding = false
-            setPadding(0, dp(12), 0, dp(12))
             addView(tTv)
+            addView(tFilm)
             addView(tMusic)
             addView(tAntenna)
-            addView(tFilm)
+        }
+        val rowBot = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
             addView(tGame)
-            addView(tPanduan)
             addView(tScan)
+            addView(tPanduan)
             addView(tSettings)
         }
+
+        tiles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+            setPadding(0, dp(8), 0, dp(8))
+            addView(rowTop, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+            addView(rowBot, LinearLayout.LayoutParams(-1, -2))
+        }
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
-        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
 
         val pray = buildPrayerDock()
         col.addView(pray, LinearLayout.LayoutParams(-1, -2))
@@ -925,7 +1069,7 @@ class HomeActivity : AppCompatActivity() {
             setPadding(dp(6), dp(8), 0, 0)
         }
         col.addView(tvCd)
-        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF).apply {
+        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF7D7567.toInt(), Typeface.SANS_SERIF).apply {
             setPadding(dp(6), dp(4), 0, 0)
         }
         col.addView(tvNote)
@@ -1142,14 +1286,22 @@ class HomeActivity : AppCompatActivity() {
                 val item = LinearLayout(this)
                 item.orientation = if (useBentoLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
                 item.gravity = Gravity.CENTER
-                item.setPadding(dp(if (useBentoLayout) 6 else 10), dp(2), dp(if (useBentoLayout) 6 else 10), dp(2))
+                item.setPadding(dp(if (useBentoLayout) 6 else 10), dp(4), dp(if (useBentoLayout) 6 else 10), dp(4))
+                if (useBentoLayout && !isPhoneLayout) {
+                    item.background = GradientDrawable().apply {
+                        cornerRadius = dp(10).toFloat()
+                        setColor(0x14FFFFFF)
+                    }
+                }
                 item.addView(tv(SimpleDateFormat("EEE", Locale("id", "ID")).format(cal.time), 12.5f, mute, Typeface.SANS_SERIF))
                 val ic = icon(cond(codes.getInt(i)).second, if (useBentoLayout) 18 else 28, 0xFFCFC7B8.toInt())
-                if (useBentoLayout) ic.setPadding(dp(4), 0, dp(4), 0)
+                if (useBentoLayout) ic.setPadding(dp(5), 0, dp(5), 0)
                 item.addView(ic)
                 item.addView(tv(Math.round(maxs.getDouble(i)).toInt().toString() + "\u00B0", 13f, ivory, Typeface.SANS_SERIF))
                 if (useBentoLayout && !isPhoneLayout) {
-                    fc.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+                    val lp = LinearLayout.LayoutParams(0, -2, 1f)
+                    if (i < 3) lp.rightMargin = dp(6)
+                    fc.addView(item, lp)
                 } else {
                     fc.addView(item)
                 }
