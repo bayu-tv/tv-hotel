@@ -14,6 +14,7 @@ import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -63,6 +64,12 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         const val MODE_SNAKE = 3
         const val MODE_STICKMAN = 4
 
+        const val STATE_HUB = 0
+        const val STATE_READY = 1
+        const val STATE_PLAYING = 2
+        const val STATE_PAUSED = 3
+        const val STATE_GAMEOVER = 4
+
         const val COL_BG = 0xFF0D0D0F.toInt()
         const val COL_CARD = 0xFF17171C.toInt()
         const val COL_GOLD = 0xFFB8975A.toInt()
@@ -79,9 +86,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private var lastFrameNs = 0L
 
     private var mode = MODE_HUB
+    private var state = STATE_HUB
     private var hubIndex = 0
-    private var paused = false
-    private var gameOver = false
+    private var dialogIndex = 0
     private var victory = false
     private var score = 0
     private var stage = 1
@@ -93,9 +100,22 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private var inDown = false
     private var btnA = false
     private var btnB = false
-    private var btnAJustPressed = false
-    private var btnBJustPressed = false
     private var showTouchOverlay = false
+
+    // Multi-touch tracking for responsive smartphone virtual stick
+    private var dpadPointerId = -1
+    private var dpadBaseX = 0f
+    private var dpadBaseY = 0f
+    private var dpadActiveX = 0f
+    private var dpadActiveY = 0f
+    private var dpadThumbX = 0f
+    private var dpadThumbY = 0f
+    private var touchDpadRadius = 0f
+
+    // Board swipe tracking (for Snake & Brick)
+    private var boardPointerId = -1
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
 
     // Pre-allocated Paints & Rects (Zero GC during gameplay)
     private val pFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -103,12 +123,10 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private val pText = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.SANS_SERIF }
     private val rect = RectF()
     private val hubRects = Array(4) { RectF() }
-
-    // Touch virtual buttons
-    private val touchDpadCenter = FloatArray(2)
+    private val dialogBtnRects = Array(3) { RectF() }
+    private val hudPauseRect = RectF()
     private val touchBtnARect = RectF()
     private val touchBtnBRect = RectF()
-    private var touchDpadRadius = 0f
 
     private val gameTitles = arrayOf(
         "Bomber Arena",
@@ -118,9 +136,15 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     )
     private val gameDescs = arrayOf(
         "Ledakkan blok & kalahkan 3 bot penjaga",
-        "Hancurkan dinding neon & multi-bola",
+        "Hancurkan dinding neon & pantulkan bola",
         "Ular emas klasik + orb bonus berwaktu",
         "Duel dojo stickman combo & jurus emas"
+    )
+    private val gameGuides = arrayOf(
+        "Arahkan karakter, tekan BOM untuk meledakkan dinding & kalahkan semua bot merah.",
+        "Geser pemukul di bawah untuk memantulkan bola dan hancurkan semua balok neon.",
+        "Arahkan ular memakan orb merah & orb biru bonus. Jangan menabrak badan sendiri!",
+        "Dekati musuh merah lalu tekan PUKUL (combo 3x). Penuhi bar emas untuk JURUS!"
     )
     private val gameAccents = intArrayOf(COL_RED, COL_CYAN, COL_GOLD, COL_GREEN)
 
@@ -165,25 +189,62 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         }
     }
 
+    private fun clearInputs() {
+        inLeft = false
+        inRight = false
+        inUp = false
+        inDown = false
+        btnA = false
+        btnB = false
+        dpadPointerId = -1
+        boardPointerId = -1
+        dpadActiveX = dpadBaseX
+        dpadActiveY = dpadBaseY
+        dpadThumbX = dpadBaseX
+        dpadThumbY = dpadBaseY
+    }
+
     fun onBackAction(): Boolean {
-        if (mode != MODE_HUB) {
-            mode = MODE_HUB
-            paused = false
-            gameOver = false
-            return true
+        return when (state) {
+            STATE_PLAYING -> {
+                clearInputs()
+                state = STATE_PAUSED
+                dialogIndex = 0
+                true
+            }
+            STATE_PAUSED, STATE_READY, STATE_GAMEOVER -> {
+                clearInputs()
+                mode = MODE_HUB
+                state = STATE_HUB
+                true
+            }
+            else -> false
         }
-        return false
+    }
+
+    private fun openReadyScreen(targetMode: Int) {
+        clearInputs()
+        mode = targetMode
+        state = STATE_READY
+        dialogIndex = 0
+        score = 0
+        stage = 1
+        prepareBoardForMode(targetMode)
     }
 
     private fun startGame(targetMode: Int, keepProgress: Boolean = false) {
+        clearInputs()
         mode = targetMode
-        paused = false
-        gameOver = false
+        state = STATE_PLAYING
         victory = false
         if (!keepProgress) {
             score = 0
             stage = 1
         }
+        prepareBoardForMode(targetMode)
+    }
+
+    private fun prepareBoardForMode(targetMode: Int) {
         when (targetMode) {
             MODE_BOMBER -> initBomber()
             MODE_BRICK -> initBrick()
@@ -192,8 +253,51 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         }
     }
 
+    private fun getDialogButtonCount(): Int {
+        return when (state) {
+            STATE_READY -> 2
+            STATE_PAUSED -> 3
+            STATE_GAMEOVER -> 2
+            else -> 0
+        }
+    }
+
+    private fun executeDialogChoice(idx: Int) {
+        when (state) {
+            STATE_READY -> {
+                if (idx == 0) startGame(mode, keepProgress = false)
+                else {
+                    mode = MODE_HUB
+                    state = STATE_HUB
+                }
+            }
+            STATE_PAUSED -> {
+                when (idx) {
+                    0 -> {
+                        clearInputs()
+                        state = STATE_PLAYING
+                    }
+                    1 -> startGame(mode, keepProgress = false)
+                    else -> {
+                        clearInputs()
+                        mode = MODE_HUB
+                        state = STATE_HUB
+                    }
+                }
+            }
+            STATE_GAMEOVER -> {
+                if (idx == 0) startGame(mode, keepProgress = victory)
+                else {
+                    clearInputs()
+                    mode = MODE_HUB
+                    state = STATE_HUB
+                }
+            }
+        }
+    }
+
     // =========================================================================
-    // INPUT: JOYSTICK ANALOG, GAMEPAD BUTTONS, REMOTE D-PAD, TOUCHSCREEN
+    // INPUT: JOYSTICK ANALOG, GAMEPAD BUTTONS, REMOTE D-PAD
     // =========================================================================
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
@@ -214,12 +318,18 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             inUp = ay < -0.45f
             inDown = ay > 0.45f
 
-            if (mode == MODE_HUB) {
+            if (state == STATE_HUB) {
                 if (inLeft && !prevL) hubIndex = (hubIndex + 3) % 4
                 if (inRight && !prevR) hubIndex = (hubIndex + 1) % 4
                 if (inUp && !prevU) hubIndex = (hubIndex + 2) % 4
                 if (inDown && !prevD) hubIndex = (hubIndex + 2) % 4
-            } else if (mode == MODE_SNAKE) {
+            } else if (state == STATE_READY || state == STATE_PAUSED || state == STATE_GAMEOVER) {
+                val cnt = getDialogButtonCount()
+                if (cnt > 0) {
+                    if ((inLeft && !prevL) || (inUp && !prevU)) dialogIndex = (dialogIndex + cnt - 1) % cnt
+                    if ((inRight && !prevR) || (inDown && !prevD)) dialogIndex = (dialogIndex + 1) % cnt
+                }
+            } else if (state == STATE_PLAYING && mode == MODE_SNAKE) {
                 if (inLeft && !prevL) queueSnakeDir(-1, 0)
                 if (inRight && !prevR) queueSnakeDir(1, 0)
                 if (inUp && !prevU) queueSnakeDir(0, -1)
@@ -234,28 +344,51 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (event.repeatCount > 0) return true
         showTouchOverlay = false
 
+        if (state == STATE_READY || state == STATE_PAUSED || state == STATE_GAMEOVER) {
+            val cnt = getDialogButtonCount()
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (cnt > 0) dialogIndex = (dialogIndex + cnt - 1) % cnt
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (cnt > 0) dialogIndex = (dialogIndex + 1) % cnt
+                    return true
+                }
+                KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> {
+                    executeDialogChoice(dialogIndex)
+                    return true
+                }
+                KeyEvent.KEYCODE_BUTTON_B -> {
+                    onBackAction()
+                    return true
+                }
+            }
+            return super.onKeyDown(keyCode, event)
+        }
+
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 inLeft = true
-                if (mode == MODE_HUB) hubIndex = (hubIndex + 3) % 4
+                if (state == STATE_HUB) hubIndex = (hubIndex + 3) % 4
                 else if (mode == MODE_SNAKE) queueSnakeDir(-1, 0)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 inRight = true
-                if (mode == MODE_HUB) hubIndex = (hubIndex + 1) % 4
+                if (state == STATE_HUB) hubIndex = (hubIndex + 1) % 4
                 else if (mode == MODE_SNAKE) queueSnakeDir(1, 0)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_UP -> {
                 inUp = true
-                if (mode == MODE_HUB) hubIndex = (hubIndex + 2) % 4
+                if (state == STATE_HUB) hubIndex = (hubIndex + 2) % 4
                 else if (mode == MODE_SNAKE) queueSnakeDir(0, -1)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 inDown = true
-                if (mode == MODE_HUB) hubIndex = (hubIndex + 2) % 4
+                if (state == STATE_HUB) hubIndex = (hubIndex + 2) % 4
                 else if (mode == MODE_SNAKE) queueSnakeDir(0, 1)
                 return true
             }
@@ -263,7 +396,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_SPACE -> {
-                if (!btnA) btnAJustPressed = true
                 btnA = true
                 handlePrimaryAction()
                 return true
@@ -271,13 +403,16 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             KeyEvent.KEYCODE_BUTTON_B,
             KeyEvent.KEYCODE_BUTTON_X,
             KeyEvent.KEYCODE_BUTTON_Y -> {
-                if (!btnB) btnBJustPressed = true
                 btnB = true
                 handleSecondaryAction()
                 return true
             }
             KeyEvent.KEYCODE_BUTTON_START -> {
-                if (mode != MODE_HUB && !gameOver) paused = !paused
+                if (state == STATE_PLAYING) {
+                    clearInputs()
+                    state = STATE_PAUSED
+                    dialogIndex = 0
+                }
                 return true
             }
         }
@@ -301,19 +436,23 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         return super.onKeyUp(keyCode, event)
     }
 
+    // =========================================================================
+    // INPUT: SMARTPHONE TOUCHSCREEN (DYNAMIC ANALOG + DIRECT SWIPE + BUTTONS)
+    // =========================================================================
     override fun onTouchEvent(event: MotionEvent): Boolean {
         showTouchOverlay = true
         val w = width.toFloat()
         val h = height.toFloat()
+        val actionMasked = event.actionMasked
 
-        if (mode == MODE_HUB) {
-            if (event.action == MotionEvent.ACTION_DOWN) {
+        if (state == STATE_HUB) {
+            if (actionMasked == MotionEvent.ACTION_DOWN) {
                 val x = event.x
                 val y = event.y
                 for (i in 0..3) {
                     if (hubRects[i].contains(x, y)) {
                         hubIndex = i
-                        startGame(i + 1)
+                        openReadyScreen(i + 1)
                         return true
                     }
                 }
@@ -321,78 +460,185 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             return true
         }
 
-        if (gameOver && event.action == MotionEvent.ACTION_DOWN) {
-            if (event.y > h * 0.68f && event.x > w * 0.52f) {
-                mode = MODE_HUB
-            } else {
-                startGame(mode, keepProgress = victory)
+        if (state == STATE_READY || state == STATE_PAUSED || state == STATE_GAMEOVER) {
+            if (actionMasked == MotionEvent.ACTION_DOWN) {
+                val x = event.x
+                val y = event.y
+                val cnt = getDialogButtonCount()
+                for (i in 0 until cnt) {
+                    if (dialogBtnRects[i].contains(x, y)) {
+                        dialogIndex = i
+                        executeDialogChoice(i)
+                        return true
+                    }
+                }
             }
             return true
         }
 
-        // Multi-touch virtual gamepad handling
-        inLeft = false; inRight = false; inUp = false; inDown = false
-        var newA = false
-        var newB = false
+        // STATE_PLAYING touch handling
+        val hudH = dp(48f)
+        val deckTop = getControlDeckTop(h)
 
-        val count = event.pointerCount
-        for (i in 0 until count) {
-            val actionMasked = event.actionMasked
-            if ((actionMasked == MotionEvent.ACTION_UP || actionMasked == MotionEvent.ACTION_POINTER_UP || actionMasked == MotionEvent.ACTION_CANCEL) &&
-                i == event.actionIndex
-            ) continue
+        if (actionMasked == MotionEvent.ACTION_DOWN || actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            val idx = event.actionIndex
+            val pid = event.getPointerId(idx)
+            val px = event.getX(idx)
+            val py = event.getY(idx)
 
-            val px = event.getX(i)
-            val py = event.getY(i)
+            // 1. Check top HUD Pause/Stop button
+            if (hudPauseRect.contains(px, py)) {
+                clearInputs()
+                state = STATE_PAUSED
+                dialogIndex = 0
+                return true
+            }
 
-            val dx = px - touchDpadCenter[0]
-            val dy = py - touchDpadCenter[1]
-            if (dx * dx + dy * dy <= touchDpadRadius * touchDpadRadius * 2.2f) {
-                if (abs(dx) > touchDpadRadius * 0.22f) {
-                    if (dx < 0) inLeft = true else inRight = true
+            // 2. Check Action Buttons A & B
+            if (isInsideCircleOrRect(px, py, touchBtnARect, dp(14f))) {
+                if (!btnA) {
+                    btnA = true
+                    handlePrimaryAction()
                 }
-                if (abs(dy) > touchDpadRadius * 0.22f) {
-                    if (dy < 0) inUp = true else inDown = true
+                return true
+            }
+            if (hasSecondaryButton() && isInsideCircleOrRect(px, py, touchBtnBRect, dp(14f))) {
+                if (!btnB) {
+                    btnB = true
+                    handleSecondaryAction()
                 }
-                if (mode == MODE_SNAKE && (actionMasked == MotionEvent.ACTION_DOWN || actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
-                    if (abs(dx) > abs(dy)) queueSnakeDir(if (dx < 0) -1 else 1, 0)
-                    else queueSnakeDir(0, if (dy < 0) -1 else 1)
+                return true
+            }
+
+            // 3. Left-half control zone -> Dynamic Virtual Analog Stick
+            if (py >= deckTop && px <= w * 0.58f && dpadPointerId == -1) {
+                dpadPointerId = pid
+                val margin = touchDpadRadius + dp(12f)
+                dpadActiveX = px.coerceIn(margin, w * 0.48f)
+                dpadActiveY = py.coerceIn(deckTop + touchDpadRadius * 0.7f, h - margin)
+                updateVirtualStickFromPoint(px, py)
+                return true
+            }
+
+            // 4. Touch directly on game board (Swipe for Snake, Direct Slide for Brick)
+            if (py > hudH && py < deckTop && boardPointerId == -1) {
+                boardPointerId = pid
+                swipeStartX = px
+                swipeStartY = py
+                if (mode == MODE_BRICK) {
+                    brickPaddleX = ((px - brickBoard.left) / max(1f, brickBoard.width())).coerceIn(0.08f, 0.92f)
                 }
-            } else if (touchBtnARect.contains(px, py)) {
-                newA = true
-            } else if (touchBtnBRect.contains(px, py)) {
-                newB = true
-            } else if (mode == MODE_BRICK && py < h * 0.72f) {
-                brickPaddleX = ((px - brickBoard.left) / brickBoard.width()).coerceIn(0.08f, 0.92f)
+                return true
+            }
+        } else if (actionMasked == MotionEvent.ACTION_MOVE) {
+            for (i in 0 until event.pointerCount) {
+                val pid = event.getPointerId(i)
+                val px = event.getX(i)
+                val py = event.getY(i)
+
+                if (pid == dpadPointerId) {
+                    updateVirtualStickFromPoint(px, py)
+                } else if (pid == boardPointerId) {
+                    if (mode == MODE_BRICK) {
+                        brickPaddleX = ((px - brickBoard.left) / max(1f, brickBoard.width())).coerceIn(0.08f, 0.92f)
+                    } else if (mode == MODE_SNAKE) {
+                        val sdx = px - swipeStartX
+                        val sdy = py - swipeStartY
+                        val minSwipe = dp(20f)
+                        if (abs(sdx) > minSwipe || abs(sdy) > minSwipe) {
+                            if (abs(sdx) > abs(sdy)) queueSnakeDir(if (sdx < 0) -1 else 1, 0)
+                            else queueSnakeDir(0, if (sdy < 0) -1 else 1)
+                            swipeStartX = px
+                            swipeStartY = py
+                        }
+                    }
+                }
+            }
+        } else if (actionMasked == MotionEvent.ACTION_UP ||
+            actionMasked == MotionEvent.ACTION_POINTER_UP ||
+            actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            val idx = event.actionIndex
+            val pid = event.getPointerId(idx)
+            if (pid == dpadPointerId) {
+                dpadPointerId = -1
+                inLeft = false; inRight = false; inUp = false; inDown = false
+                dpadActiveX = dpadBaseX
+                dpadActiveY = dpadBaseY
+                dpadThumbX = dpadBaseX
+                dpadThumbY = dpadBaseY
+            } else if (pid == boardPointerId) {
+                boardPointerId = -1
+            } else {
+                // Re-check if A or B is still held by any remaining pointer
+                var stillA = false
+                var stillB = false
+                for (i in 0 until event.pointerCount) {
+                    if (i == idx) continue
+                    val rx = event.getX(i)
+                    val ry = event.getY(i)
+                    if (isInsideCircleOrRect(rx, ry, touchBtnARect, dp(14f))) stillA = true
+                    if (hasSecondaryButton() && isInsideCircleOrRect(rx, ry, touchBtnBRect, dp(14f))) stillB = true
+                }
+                btnA = stillA
+                btnB = stillB
             }
         }
-
-        if (newA && !btnA) {
-            btnAJustPressed = true
-            handlePrimaryAction()
-        }
-        if (newB && !btnB) {
-            btnBJustPressed = true
-            handleSecondaryAction()
-        }
-        btnA = newA
-        btnB = newB
         return true
     }
 
+    private fun isInsideCircleOrRect(x: Float, y: Float, r: RectF, pad: Float): Boolean {
+        return x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad
+    }
+
+    private fun updateVirtualStickFromPoint(px: Float, py: Float) {
+        val dx = px - dpadActiveX
+        val dy = py - dpadActiveY
+        val dist = hypot(dx, dy)
+        val maxR = touchDpadRadius
+        if (dist > maxR) {
+            dpadThumbX = dpadActiveX + (dx / dist) * maxR
+            dpadThumbY = dpadActiveY + (dy / dist) * maxR
+        } else {
+            dpadThumbX = px
+            dpadThumbY = py
+        }
+
+        val dead = maxR * 0.22f
+        inLeft = false; inRight = false; inUp = false; inDown = false
+        if (dist > dead) {
+            when (mode) {
+                MODE_BOMBER, MODE_SNAKE -> {
+                    // Dominant-axis 4-way lock so diagonal thumb slips never snag on walls
+                    if (abs(dx) > abs(dy)) {
+                        if (dx < 0f) inLeft = true else inRight = true
+                        if (mode == MODE_SNAKE) queueSnakeDir(if (dx < 0f) -1 else 1, 0)
+                    } else {
+                        if (dy < 0f) inUp = true else inDown = true
+                        if (mode == MODE_SNAKE) queueSnakeDir(0, if (dy < 0f) -1 else 1)
+                    }
+                }
+                MODE_BRICK -> {
+                    if (dx < -dead) inLeft = true
+                    if (dx > dead) inRight = true
+                }
+                MODE_STICKMAN -> {
+                    if (dx < -dead) inLeft = true
+                    if (dx > dead) inRight = true
+                    if (dy < -maxR * 0.55f) inUp = true
+                }
+            }
+        }
+    }
+
+    private fun hasSecondaryButton(): Boolean = (mode == MODE_BOMBER || mode == MODE_STICKMAN)
+
     private fun handlePrimaryAction() {
-        if (mode == MODE_HUB) {
-            startGame(hubIndex + 1)
+        if (state == STATE_HUB) {
+            openReadyScreen(hubIndex + 1)
             return
         }
-        if (gameOver) {
-            startGame(mode, keepProgress = victory)
-            return
-        }
-        if (paused) {
-            paused = false
-            return
-        }
+        if (state != STATE_PLAYING) return
         when (mode) {
             MODE_BOMBER -> placePlayerBomb()
             MODE_BRICK -> brickLaunched = true
@@ -401,34 +647,30 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun handleSecondaryAction() {
-        if (mode == MODE_HUB) return
-        if (gameOver) {
-            mode = MODE_HUB
-            return
-        }
+        if (state != STATE_PLAYING) return
         when (mode) {
             MODE_BOMBER -> detonateEarliestBomb()
             MODE_STICKMAN -> stickPlayerSpecialOrJump()
         }
     }
 
+    private fun getControlDeckTop(h: Float): Float {
+        if (!showTouchOverlay) return h
+        val isPortrait = h > width
+        return if (isPortrait) h * 0.72f else h - dp(148f)
+    }
+
     // =========================================================================
     // MASTER UPDATE & DRAW
     // =========================================================================
     private fun update(dt: Float) {
-        if (mode == MODE_HUB || paused || gameOver) {
-            btnAJustPressed = false
-            btnBJustPressed = false
-            return
-        }
+        if (state != STATE_PLAYING) return
         when (mode) {
             MODE_BOMBER -> updateBomber(dt)
             MODE_BRICK -> updateBrick(dt)
             MODE_SNAKE -> updateSnake(dt)
             MODE_STICKMAN -> updateStickman(dt)
         }
-        btnAJustPressed = false
-        btnBJustPressed = false
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -438,19 +680,27 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
         canvas.drawColor(COL_BG)
 
-        touchDpadRadius = min(w, h) * 0.13f
-        touchDpadCenter[0] = dp(24f) + touchDpadRadius
-        touchDpadCenter[1] = h - dp(24f) - touchDpadRadius
-        val bSize = touchDpadRadius * 0.88f
-        touchBtnARect.set(w - dp(24f) - bSize * 2f, h - dp(24f) - bSize * 2f, w - dp(24f), h - dp(24f))
+        val isPortrait = h > w
+        touchDpadRadius = if (isPortrait) min(w * 0.16f, dp(64f)) else dp(52f)
+        dpadBaseX = dp(26f) + touchDpadRadius
+        dpadBaseY = h - dp(24f) - touchDpadRadius
+        if (dpadPointerId == -1) {
+            dpadActiveX = dpadBaseX
+            dpadActiveY = dpadBaseY
+            dpadThumbX = dpadBaseX
+            dpadThumbY = dpadBaseY
+        }
+
+        val btnDia = if (isPortrait) min(w * 0.17f, dp(68f)) else dp(58f)
+        touchBtnARect.set(w - dp(22f) - btnDia, h - dp(26f) - btnDia, w - dp(22f), h - dp(26f))
         touchBtnBRect.set(
-            touchBtnARect.left - bSize * 2.2f,
-            touchBtnARect.top + bSize * 0.35f,
-            touchBtnARect.left - dp(12f),
-            touchBtnARect.bottom + bSize * 0.35f
+            touchBtnARect.left - btnDia - dp(16f),
+            touchBtnARect.top - dp(14f),
+            touchBtnARect.left - dp(16f),
+            touchBtnARect.bottom - dp(14f)
         )
 
-        if (mode == MODE_HUB) {
+        if (state == STATE_HUB) {
             drawHub(canvas, w, h)
             return
         }
@@ -464,26 +714,20 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             MODE_STICKMAN -> drawStickman(canvas, w, h)
         }
 
-        if (showTouchOverlay && !gameOver) {
-            drawTouchControls(canvas)
+        if (showTouchOverlay && state == STATE_PLAYING) {
+            drawTouchControls(canvas, w, h)
         }
 
-        if (paused) {
-            drawOverlayDialog(canvas, w, h, "JEDA", "Tekan START / A untuk lanjut · BACK untuk keluar", COL_GOLD_LIGHT)
-        } else if (gameOver) {
-            val title = if (victory) "STAGE SELESAI!" else "GAME OVER"
-            val sub = if (victory) {
-                "Skor: $score · Tekan A untuk Stage ${stage + 1} · B untuk Menu"
-            } else {
-                "Skor Akhir: $score · Tekan A untuk Ulang · B untuk Menu"
-            }
-            drawOverlayDialog(canvas, w, h, title, sub, if (victory) COL_GREEN else COL_RED)
+        when (state) {
+            STATE_READY -> drawReadyOverlay(canvas, w, h)
+            STATE_PAUSED -> drawPauseOverlay(canvas, w, h)
+            STATE_GAMEOVER -> drawGameOverOverlay(canvas, w, h)
         }
     }
 
     private fun drawHub(canvas: Canvas, w: Float, h: Float) {
         val isPortrait = h > w
-        val pad = dp(20f)
+        val pad = dp(18f)
 
         pText.typeface = Typeface.SERIF
         pText.textAlign = Paint.Align.LEFT
@@ -494,10 +738,10 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pText.typeface = Typeface.SANS_SERIF
         pText.color = COL_MUTE
         pText.textSize = dp(if (isPortrait) 12.5f else 14f)
-        canvas.drawText("Offline · Pilih dengan Joystick / Remote / Sentuh", pad, pad + dp(46f), pText)
+        canvas.drawText("100% Offline · Pilih Game untuk Membuka Tombol Mulai", pad, pad + dp(46f), pText)
 
-        val topY = pad + dp(64f)
-        val botY = h - dp(44f)
+        val topY = pad + dp(62f)
+        val botY = h - dp(42f)
         val gap = dp(12f)
 
         if (isPortrait) {
@@ -555,76 +799,240 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.CENTER
         pText.color = COL_MUTE
         pText.textSize = dp(12f)
-        canvas.drawText("Tekan A / OK untuk Mulai · Tombol BACK untuk Kembali ke Beranda", w * 0.5f, h - dp(16f), pText)
+        canvas.drawText("Sentuh Kartu / Tekan OK · Tombol BACK Kembali ke Beranda", w * 0.5f, h - dp(15f), pText)
     }
 
     private fun drawHud(canvas: Canvas, w: Float) {
-        val topH = dp(44f)
+        val topH = dp(48f)
         pFill.color = 0xFF141418.toInt()
         canvas.drawRect(0f, 0f, w, topH, pFill)
+        pStroke.strokeWidth = dp(1f)
+        pStroke.color = 0x22FFFFFF
+        canvas.drawLine(0f, topH, w, topH, pStroke)
+
+        // Interactive JEDA / STOP button on top-right
+        val btnW = dp(86f)
+        val btnH = dp(32f)
+        hudPauseRect.set(w - dp(12f) - btnW, (topH - btnH) * 0.5f, w - dp(12f), (topH + btnH) * 0.5f)
+        pFill.color = 0x28E05252
+        canvas.drawRoundRect(hudPauseRect, dp(10f), dp(10f), pFill)
+        pStroke.strokeWidth = dp(1.2f)
+        pStroke.color = COL_RED
+        canvas.drawRoundRect(hudPauseRect, dp(10f), dp(10f), pStroke)
 
         pText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        pText.textAlign = Paint.Align.CENTER
+        pText.color = Color.WHITE
+        pText.textSize = dp(12f)
+        canvas.drawText("❚❚ JEDA", hudPauseRect.centerX(), hudPauseRect.centerY() + dp(4f), pText)
+
+        // Game Title & Stage
         pText.textAlign = Paint.Align.LEFT
         pText.color = COL_GOLD_LIGHT
-        pText.textSize = dp(15f)
-        canvas.drawText("${gameTitles[mode - 1]}  ·  Stage $stage", dp(16f), dp(28f), pText)
+        pText.textSize = dp(14f)
+        canvas.drawText("${gameTitles[mode - 1]} · St.$stage", dp(12f), dp(29f), pText)
 
+        // Score & High Score
         pText.textAlign = Paint.Align.RIGHT
         pText.color = Color.WHITE
-        canvas.drawText("SKOR: $score   (REKOR: ${max(score, getHighScore(mode))})", w - dp(16f), dp(28f), pText)
+        pText.textSize = dp(13.5f)
+        canvas.drawText("SKOR: $score  (MAX: ${max(score, getHighScore(mode))})", hudPauseRect.left - dp(10f), dp(29f), pText)
     }
 
-    private fun drawTouchControls(canvas: Canvas) {
-        pFill.color = 0x26FFFFFF
-        canvas.drawCircle(touchDpadCenter[0], touchDpadCenter[1], touchDpadRadius, pFill)
+    private fun drawTouchControls(canvas: Canvas, w: Float, h: Float) {
+        val deckTop = getControlDeckTop(h)
+        // Subtle separator for control deck
+        pFill.color = 0xFF111115.toInt()
+        canvas.drawRect(0f, deckTop, w, h, pFill)
+        pStroke.strokeWidth = dp(1f)
+        pStroke.color = 0x24FFFFFF
+        canvas.drawLine(0f, deckTop, w, deckTop, pStroke)
+
+        // Virtual Analog Base
+        pFill.color = 0x1EFFFFFF
+        canvas.drawCircle(dpadActiveX, dpadActiveY, touchDpadRadius, pFill)
+        pStroke.strokeWidth = dp(1.8f)
+        pStroke.color = 0x55E6C88F
+        canvas.drawCircle(dpadActiveX, dpadActiveY, touchDpadRadius, pStroke)
+
+        // Directional Arrow Indicators (▲ ▼ ◄ ►)
+        pText.typeface = Typeface.DEFAULT_BOLD
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = dp(13f)
+        val rOff = touchDpadRadius * 0.68f
+        pText.color = if (inUp) COL_GOLD_LIGHT else 0x66FFFFFF
+        canvas.drawText("▲", dpadActiveX, dpadActiveY - rOff + dp(4f), pText)
+        pText.color = if (inDown) COL_GOLD_LIGHT else 0x66FFFFFF
+        canvas.drawText("▼", dpadActiveX, dpadActiveY + rOff + dp(5f), pText)
+        pText.color = if (inLeft) COL_GOLD_LIGHT else 0x66FFFFFF
+        canvas.drawText("◄", dpadActiveX - rOff, dpadActiveY + dp(4f), pText)
+        pText.color = if (inRight) COL_GOLD_LIGHT else 0x66FFFFFF
+        canvas.drawText("►", dpadActiveX + rOff, dpadActiveY + dp(4f), pText)
+
+        // Thumb Knob
+        pFill.color = 0x99E6C88F.toInt()
+        canvas.drawCircle(dpadThumbX, dpadThumbY, touchDpadRadius * 0.34f, pFill)
         pStroke.strokeWidth = dp(1.5f)
-        pStroke.color = 0x55FFFFFF
-        canvas.drawCircle(touchDpadCenter[0], touchDpadCenter[1], touchDpadRadius, pStroke)
+        pStroke.color = Color.WHITE
+        canvas.drawCircle(dpadThumbX, dpadThumbY, touchDpadRadius * 0.34f, pStroke)
 
-        pFill.color = 0x66E6C88F
-        val knobX = touchDpadCenter[0] + (if (inRight) 1f else if (inLeft) -1f else 0f) * touchDpadRadius * 0.45f
-        val knobY = touchDpadCenter[1] + (if (inDown) 1f else if (inUp) -1f else 0f) * touchDpadRadius * 0.45f
-        canvas.drawCircle(knobX, knobY, touchDpadRadius * 0.36f, pFill)
-
-        pFill.color = if (btnA) 0x88E6C88F.toInt() else 0x38E6C88F
+        // Action Button A with contextual label
+        val labelA = when (mode) {
+            MODE_BOMBER -> "BOM"
+            MODE_BRICK -> "LEPAS"
+            MODE_SNAKE -> "CEPAT"
+            MODE_STICKMAN -> "PUKUL"
+            else -> "A"
+        }
+        pFill.color = if (btnA) 0x99E6C88F.toInt() else 0x3CE6C88F
         canvas.drawOval(touchBtnARect, pFill)
+        pStroke.strokeWidth = dp(2f)
         pStroke.color = COL_GOLD_LIGHT
         canvas.drawOval(touchBtnARect, pStroke)
         pText.textAlign = Paint.Align.CENTER
         pText.color = Color.WHITE
-        pText.textSize = dp(16f)
-        canvas.drawText("A", touchBtnARect.centerX(), touchBtnARect.centerY() + dp(6f), pText)
+        pText.textSize = dp(13f)
+        canvas.drawText(labelA, touchBtnARect.centerX(), touchBtnARect.centerY() + dp(5f), pText)
 
-        pFill.color = if (btnB) 0x88E05252.toInt() else 0x33FFFFFF
-        canvas.drawOval(touchBtnBRect, pFill)
-        pStroke.color = 0x77FFFFFF
-        canvas.drawOval(touchBtnBRect, pStroke)
-        canvas.drawText("B", touchBtnBRect.centerX(), touchBtnBRect.centerY() + dp(6f), pText)
+        // Action Button B (only when game uses 2nd action)
+        if (hasSecondaryButton()) {
+            val labelB = if (mode == MODE_BOMBER) "LEDAK" else if (stEnergy >= 100) "JURUS" else "LOMPAT"
+            pFill.color = if (btnB) 0x99E05252.toInt() else 0x33FFFFFF
+            canvas.drawOval(touchBtnBRect, pFill)
+            pStroke.strokeWidth = dp(1.8f)
+            pStroke.color = if (mode == MODE_STICKMAN && stEnergy >= 100) COL_GOLD_LIGHT else 0x88FFFFFF.toInt()
+            canvas.drawOval(touchBtnBRect, pStroke)
+            pText.color = Color.WHITE
+            pText.textSize = dp(12f)
+            canvas.drawText(labelB, touchBtnBRect.centerX(), touchBtnBRect.centerY() + dp(4f), pText)
+        }
     }
 
-    private fun drawOverlayDialog(canvas: Canvas, w: Float, h: Float, title: String, subtitle: String, titleColor: Int) {
-        pFill.color = 0xCC09090B.toInt()
+    private fun drawActionButton(canvas: Canvas, r: RectF, label: String, focused: Boolean, accentColor: Int) {
+        pFill.color = if (focused) accentColor else 0xFF23232A.toInt()
+        canvas.drawRoundRect(r, dp(12f), dp(12f), pFill)
+        pStroke.strokeWidth = dp(if (focused) 2f else 1f)
+        pStroke.color = if (focused) Color.WHITE else 0x33FFFFFF
+        canvas.drawRoundRect(r, dp(12f), dp(12f), pStroke)
+
+        pText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        pText.textAlign = Paint.Align.CENTER
+        pText.color = if (focused && accentColor == COL_GOLD_LIGHT) Color.BLACK else Color.WHITE
+        pText.textSize = dp(14f)
+        canvas.drawText(label, r.centerX(), r.centerY() + dp(5f), pText)
+    }
+
+    private fun drawReadyOverlay(canvas: Canvas, w: Float, h: Float) {
+        pFill.color = 0xD809090B.toInt()
         canvas.drawRect(0f, 0f, w, h, pFill)
 
-        val boxW = min(w * 0.86f, dp(420f))
-        val boxH = dp(150f)
+        val boxW = min(w * 0.88f, dp(440f))
+        val boxH = dp(230f)
         rect.set((w - boxW) * 0.5f, (h - boxH) * 0.5f, (w + boxW) * 0.5f, (h + boxH) * 0.5f)
         pFill.color = COL_CARD
         canvas.drawRoundRect(rect, dp(18f), dp(18f), pFill)
         pStroke.strokeWidth = dp(2f)
-        pStroke.color = titleColor
+        pStroke.color = gameAccents[mode - 1]
         canvas.drawRoundRect(rect, dp(18f), dp(18f), pStroke)
 
         pText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         pText.textAlign = Paint.Align.CENTER
-        pText.color = titleColor
-        pText.textSize = dp(24f)
-        canvas.drawText(title, w * 0.5f, rect.top + dp(54f), pText)
+        pText.color = COL_GOLD_LIGHT
+        pText.textSize = dp(22f)
+        canvas.drawText(gameTitles[mode - 1], w * 0.5f, rect.top + dp(42f), pText)
+
+        pText.typeface = Typeface.SANS_SERIF
+        pText.color = COL_MUTE
+        pText.textSize = dp(12.5f)
+        canvas.drawText("Rekor Tertinggi: ${getHighScore(mode)}", w * 0.5f, rect.top + dp(66f), pText)
+
+        // Wrap guide text nicely into 2 lines if needed
+        val guide = gameGuides[mode - 1]
+        val mid = guide.length / 2
+        val splitAt = guide.indexOf(' ', mid).let { if (it == -1) guide.length else it }
+        pText.color = COL_IVORY
+        pText.textSize = dp(13f)
+        canvas.drawText(guide.substring(0, splitAt).trim(), w * 0.5f, rect.top + dp(100f), pText)
+        if (splitAt < guide.length) {
+            canvas.drawText(guide.substring(splitAt).trim(), w * 0.5f, rect.top + dp(120f), pText)
+        }
+
+        val btnY1 = rect.bottom - dp(64f)
+        val btnY2 = rect.bottom - dp(18f)
+        val gap = dp(12f)
+        val halfW = (boxW - dp(36f) - gap) * 0.5f
+        dialogBtnRects[0].set(rect.left + dp(18f), btnY1, rect.left + dp(18f) + halfW, btnY2)
+        dialogBtnRects[1].set(dialogBtnRects[0].right + gap, btnY1, rect.right - dp(18f), btnY2)
+
+        drawActionButton(canvas, dialogBtnRects[0], "▶ MULAI MAIN", dialogIndex == 0, COL_GOLD_LIGHT)
+        drawActionButton(canvas, dialogBtnRects[1], "KEMBALI", dialogIndex == 1, COL_RED)
+    }
+
+    private fun drawPauseOverlay(canvas: Canvas, w: Float, h: Float) {
+        pFill.color = 0xD809090B.toInt()
+        canvas.drawRect(0f, 0f, w, h, pFill)
+
+        val boxW = min(w * 0.86f, dp(380f))
+        val boxH = dp(245f)
+        rect.set((w - boxW) * 0.5f, (h - boxH) * 0.5f, (w + boxW) * 0.5f, (h + boxH) * 0.5f)
+        pFill.color = COL_CARD
+        canvas.drawRoundRect(rect, dp(18f), dp(18f), pFill)
+        pStroke.strokeWidth = dp(2f)
+        pStroke.color = COL_GOLD_LIGHT
+        canvas.drawRoundRect(rect, dp(18f), dp(18f), pStroke)
+
+        pText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        pText.textAlign = Paint.Align.CENTER
+        pText.color = COL_GOLD_LIGHT
+        pText.textSize = dp(22f)
+        canvas.drawText("PERMAINAN DIJEDA", w * 0.5f, rect.top + dp(42f), pText)
+
+        val labels = arrayOf("▶ LANJUTKAN", "↻ ULANGI STAGE", "■ STOP / KELUAR")
+        val colors = intArrayOf(COL_GREEN, COL_GOLD_LIGHT, COL_RED)
+        val btnH = dp(42f)
+        val startY = rect.top + dp(64f)
+        for (i in 0..2) {
+            val y = startY + i * (btnH + dp(10f))
+            dialogBtnRects[i].set(rect.left + dp(24f), y, rect.right - dp(24f), y + btnH)
+            drawActionButton(canvas, dialogBtnRects[i], labels[i], dialogIndex == i, colors[i])
+        }
+    }
+
+    private fun drawGameOverOverlay(canvas: Canvas, w: Float, h: Float) {
+        pFill.color = 0xD809090B.toInt()
+        canvas.drawRect(0f, 0f, w, h, pFill)
+
+        val boxW = min(w * 0.86f, dp(400f))
+        val boxH = dp(200f)
+        rect.set((w - boxW) * 0.5f, (h - boxH) * 0.5f, (w + boxW) * 0.5f, (h + boxH) * 0.5f)
+        val titleCol = if (victory) COL_GREEN else COL_RED
+        pFill.color = COL_CARD
+        canvas.drawRoundRect(rect, dp(18f), dp(18f), pFill)
+        pStroke.strokeWidth = dp(2f)
+        pStroke.color = titleCol
+        canvas.drawRoundRect(rect, dp(18f), dp(18f), pStroke)
+
+        pText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        pText.textAlign = Paint.Align.CENTER
+        pText.color = titleCol
+        pText.textSize = dp(23f)
+        canvas.drawText(if (victory) "STAGE SELESAI!" else "GAME OVER", w * 0.5f, rect.top + dp(46f), pText)
 
         pText.typeface = Typeface.SANS_SERIF
         pText.color = COL_IVORY
-        pText.textSize = dp(13.5f)
-        canvas.drawText(subtitle, w * 0.5f, rect.top + dp(94f), pText)
+        pText.textSize = dp(15f)
+        canvas.drawText("Skor Anda: $score  ·  Rekor: ${getHighScore(mode)}", w * 0.5f, rect.top + dp(82f), pText)
+
+        val btnY1 = rect.bottom - dp(64f)
+        val btnY2 = rect.bottom - dp(18f)
+        val gap = dp(12f)
+        val halfW = (boxW - dp(36f) - gap) * 0.5f
+        dialogBtnRects[0].set(rect.left + dp(18f), btnY1, rect.left + dp(18f) + halfW, btnY2)
+        dialogBtnRects[1].set(dialogBtnRects[0].right + gap, btnY1, rect.right - dp(18f), btnY2)
+
+        val nextLabel = if (victory) "▶ STAGE $stage" else "↻ MAIN LAGI"
+        drawActionButton(canvas, dialogBtnRects[0], nextLabel, dialogIndex == 0, COL_GOLD_LIGHT)
+        drawActionButton(canvas, dialogBtnRects[1], "■ MENU GAME", dialogIndex == 1, COL_RED)
     }
 
     // =========================================================================
@@ -768,7 +1176,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateBomber(dt: Float) {
-        val speed = 4.2f
+        val speed = 4.4f
         var vx = 0f
         var vy = 0f
         if (inLeft) vx -= 1f
@@ -783,7 +1191,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             val checkGx = (nextX + (if (vx > 0) 0.34f else -0.34f)).toInt()
             if (checkGx == curGx || isBomberWalkable(checkGx, curGy)) {
                 bpX = nextX
-                bpY += ((curGy + 0.5f) - bpY) * 10f * dt
+                bpY += ((curGy + 0.5f) - bpY) * 12f * dt
             }
         }
         if (vy != 0f) {
@@ -791,7 +1199,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             val checkGy = (nextY + (if (vy > 0) 0.34f else -0.34f)).toInt()
             if (checkGy == curGy || isBomberWalkable(curGx, checkGy)) {
                 bpY = nextY
-                bpX += ((curGx + 0.5f) - bpX) * 10f * dt
+                bpX += ((curGx + 0.5f) - bpX) * 12f * dt
             }
         }
 
@@ -818,7 +1226,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
         if (fireGrid[bpY.toInt() * bCols + bpX.toInt()] > 0f) {
             bpAlive = false
-            gameOver = true
+            clearInputs()
+            state = STATE_GAMEOVER
+            dialogIndex = 0
             victory = false
             saveHighScore(MODE_BOMBER, score)
             return
@@ -870,16 +1280,18 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (aliveBots == 0) {
             score += 300 * stage
             stage++
-            gameOver = true
+            clearInputs()
+            state = STATE_GAMEOVER
+            dialogIndex = 0
             victory = true
             saveHighScore(MODE_BOMBER, score)
         }
     }
 
     private fun drawBomber(canvas: Canvas, w: Float, h: Float) {
-        val topOffset = dp(52f)
-        val botOffset = if (showTouchOverlay) touchDpadRadius * 2.2f + dp(24f) else dp(18f)
-        val availW = w - dp(24f)
+        val topOffset = dp(56f)
+        val botOffset = (h - getControlDeckTop(h)) + dp(12f)
+        val availW = w - dp(20f)
         val availH = h - topOffset - botOffset
         val cell = min(availW / bCols, availH / bRows)
         val ox = (w - cell * bCols) * 0.5f
@@ -944,7 +1356,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private val brRows = 6
     private val bricks = IntArray(brCols * brRows)
     private var brickPaddleX = 0.5f
-    private var brickPaddleW = 0.22f
+    private var brickPaddleW = 0.24f
     private var brickBallX = 0.5f
     private var brickBallY = 0.80f
     private var brickVx = 0.42f
@@ -954,7 +1366,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
     private fun initBrick() {
         brickPaddleX = 0.5f
-        brickPaddleW = 0.22f
+        brickPaddleW = 0.24f
         brickLives = 3
         resetBrickBall()
         for (r in 0 until brRows) {
@@ -973,7 +1385,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateBrick(dt: Float) {
-        val pSpeed = 1.15f
+        val pSpeed = 1.25f
         if (inLeft) brickPaddleX -= pSpeed * dt
         if (inRight) brickPaddleX += pSpeed * dt
         brickPaddleX = brickPaddleX.coerceIn(brickPaddleW * 0.5f, 1f - brickPaddleW * 0.5f)
@@ -992,7 +1404,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (brickBallY < 0.02f) { brickBallY = 0.02f; brickVy = abs(brickVy) }
 
         if (brickVy > 0f && brickBallY in 0.85f..0.90f &&
-            abs(brickBallX - brickPaddleX) <= brickPaddleW * 0.54f
+            abs(brickBallX - brickPaddleX) <= brickPaddleW * 0.55f
         ) {
             val hitOffset = (brickBallX - brickPaddleX) / (brickPaddleW * 0.5f)
             brickVx = hitOffset * 0.72f
@@ -1027,7 +1439,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (remaining == 0) {
             score += 250 * stage
             stage++
-            gameOver = true
+            clearInputs()
+            state = STATE_GAMEOVER
+            dialogIndex = 0
             victory = true
             saveHighScore(MODE_BRICK, score)
             return
@@ -1036,7 +1450,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (brickBallY > 1.02f) {
             brickLives--
             if (brickLives <= 0) {
-                gameOver = true
+                clearInputs()
+                state = STATE_GAMEOVER
+                dialogIndex = 0
                 victory = false
                 saveHighScore(MODE_BRICK, score)
             } else {
@@ -1046,9 +1462,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun drawBrick(canvas: Canvas, w: Float, h: Float) {
-        val topOffset = dp(52f)
-        val botOffset = if (showTouchOverlay) touchDpadRadius * 2.2f + dp(20f) else dp(18f)
-        val boardW = min(w - dp(24f), dp(680f))
+        val topOffset = dp(56f)
+        val botOffset = (h - getControlDeckTop(h)) + dp(12f)
+        val boardW = min(w - dp(20f), dp(680f))
         val boardH = h - topOffset - botOffset
         brickBoard.set((w - boardW) * 0.5f, topOffset, (w + boardW) * 0.5f, topOffset + boardH)
 
@@ -1092,8 +1508,8 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
         pText.textAlign = Paint.Align.LEFT
         pText.color = COL_MUTE
-        pText.textSize = dp(12f)
-        canvas.drawText("Nyawa: $brickLives  ·  Tekan A untuk Lepas Bola", brickBoard.left + dp(10f), brickBoard.bottom - dp(10f), pText)
+        pText.textSize = dp(11.5f)
+        canvas.drawText("Nyawa: $brickLives · Geser Papan / Analog", brickBoard.left + dp(10f), brickBoard.bottom - dp(8f), pText)
     }
 
     // =========================================================================
@@ -1151,7 +1567,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateSnake(dt: Float) {
-        val interval = if (btnA) 0.07f else max(0.085f, 0.16f - snakeLen * 0.002f)
+        val interval = if (btnA) 0.08f else max(0.095f, 0.175f - snakeLen * 0.002f)
         sStepTimer += dt
         if (bonusX >= 0) {
             bonusTimer -= dt
@@ -1167,7 +1583,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
         for (i in 0 until snakeLen - 1) {
             if (snakeX[i] == nx && snakeY[i] == ny) {
-                gameOver = true
+                clearInputs()
+                state = STATE_GAMEOVER
+                dialogIndex = 0
                 victory = false
                 saveHighScore(MODE_SNAKE, score)
                 return
@@ -1201,9 +1619,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun drawSnake(canvas: Canvas, w: Float, h: Float) {
-        val topOffset = dp(52f)
-        val botOffset = if (showTouchOverlay) touchDpadRadius * 2.2f + dp(24f) else dp(18f)
-        val cell = min((w - dp(24f)) / sCols, (h - topOffset - botOffset) / sRows)
+        val topOffset = dp(56f)
+        val botOffset = (h - getControlDeckTop(h)) + dp(12f)
+        val cell = min((w - dp(20f)) / sCols, (h - topOffset - botOffset) / sRows)
         val ox = (w - cell * sCols) * 0.5f
         val oy = topOffset + ((h - topOffset - botOffset) - cell * sRows) * 0.5f
 
@@ -1276,7 +1694,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (stAttackTimer > 0.08f) return
         stAttackTimer = 0.24f
         stComboStep = (stComboStep % 3) + 1
-        val reach = if (stComboStep == 3) 0.14f else 0.11f
+        val reach = if (stComboStep == 3) 0.15f else 0.12f
         val dmg = if (stComboStep == 3) 45 else 25
 
         for (i in 0 until maxEnemies) {
@@ -1308,7 +1726,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateStickman(dt: Float) {
-        val speed = 0.48f
+        val speed = 0.50f
         if (inLeft) { stPlayerX -= speed * dt; stFacing = -1 }
         if (inRight) { stPlayerX += speed * dt; stFacing = 1 }
         stPlayerX = stPlayerX.coerceIn(0.06f, 0.94f)
@@ -1380,7 +1798,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         }
 
         if (stHp <= 0) {
-            gameOver = true
+            clearInputs()
+            state = STATE_GAMEOVER
+            dialogIndex = 0
             victory = false
             saveHighScore(MODE_STICKMAN, score)
             return
@@ -1389,7 +1809,9 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (stEnemiesLeft == 0 && activeCount == 0) {
             score += 300 * stage
             stage++
-            gameOver = true
+            clearInputs()
+            state = STATE_GAMEOVER
+            dialogIndex = 0
             victory = true
             saveHighScore(MODE_STICKMAN, score)
         }
@@ -1438,26 +1860,27 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun drawStickman(canvas: Canvas, w: Float, h: Float) {
-        val groundY = h - (if (showTouchOverlay) touchDpadRadius * 2.2f + dp(34f) else dp(44f))
+        val deckTop = getControlDeckTop(h)
+        val groundY = deckTop - dp(26f)
         val scale = dp(1f) * (if (h > w) 1.05f else 1.25f)
 
         pFill.color = 0x1AE6C88F
-        canvas.drawCircle(w * 0.5f, groundY - dp(120f), dp(86f), pFill)
+        canvas.drawCircle(w * 0.5f, groundY - dp(115f), dp(82f), pFill)
         pFill.color = 0xFF1A1A20.toInt()
-        canvas.drawRect(0f, groundY, w, h, pFill)
+        canvas.drawRect(0f, groundY, w, deckTop, pFill)
         pStroke.strokeWidth = dp(2f)
         pStroke.color = COL_GOLD
         canvas.drawLine(0f, groundY, w, groundY, pStroke)
 
         val barW = min(dp(180f), w * 0.38f)
-        rect.set(dp(16f), dp(54f), dp(16f) + barW, dp(64f))
+        rect.set(dp(16f), dp(58f), dp(16f) + barW, dp(68f))
         pFill.color = 0x33FFFFFF
         canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
         rect.right = dp(16f) + barW * (stHp / 100f)
         pFill.color = COL_GREEN
         canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
 
-        rect.set(dp(16f), dp(68f), dp(16f) + barW, dp(75f))
+        rect.set(dp(16f), dp(72f), dp(16f) + barW, dp(79f))
         pFill.color = 0x33FFFFFF
         canvas.drawRoundRect(rect, dp(4f), dp(4f), pFill)
         rect.right = dp(16f) + barW * (stEnergy / 100f)
@@ -1467,8 +1890,8 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.LEFT
         pText.color = COL_MUTE
         pText.textSize = dp(11f)
-        val spReady = if (stEnergy >= 100) " · JURUS B SIAP!" else " · A: Serang · B: Lompat/Jurus"
-        canvas.drawText("HP $stHp%$spReady", dp(16f), dp(89f), pText)
+        val spReady = if (stEnergy >= 100) " · JURUS SIAP!" else " · Energi $stEnergy%"
+        canvas.drawText("HP $stHp%$spReady", dp(16f), dp(93f), pText)
 
         for (i in 0 until maxEnemies) {
             if (!enActive[i]) continue
@@ -1490,7 +1913,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         drawStickFigure(
             canvas,
             w * stPlayerX,
-            groundY - stPlayerY * dp(150f),
+            groundY - stPlayerY * dp(145f),
             scale,
             stFacing,
             pColor,
