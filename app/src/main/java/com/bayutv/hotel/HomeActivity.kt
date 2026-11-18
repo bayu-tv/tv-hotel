@@ -148,6 +148,46 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
+    // Ikon Stik Gamepad Kustom (D-Pad kiri + Tombol A/B kanan + Pegangan Ergonomis)
+    private fun gamepadIconDrawable(color: Int): Drawable {
+        return object : Drawable() {
+            private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                if (w <= 0f || h <= 0f) return
+
+                p.color = color
+                // Badan kiri, kanan, dan tengah stik
+                canvas.drawCircle(w * 0.28f, h * 0.47f, w * 0.19f, p)
+                canvas.drawCircle(w * 0.72f, h * 0.47f, w * 0.19f, p)
+                canvas.drawRect(RectF(w * 0.28f, h * 0.30f, w * 0.72f, h * 0.61f), p)
+
+                // Pegangan kiri & kanan
+                canvas.save()
+                canvas.rotate(18f, w * 0.22f, h * 0.55f)
+                canvas.drawRoundRect(RectF(w * 0.11f, h * 0.43f, w * 0.31f, h * 0.78f), w * 0.09f, w * 0.09f, p)
+                canvas.restore()
+
+                canvas.save()
+                canvas.rotate(-18f, w * 0.78f, h * 0.55f)
+                canvas.drawRoundRect(RectF(w * 0.69f, h * 0.43f, w * 0.89f, h * 0.78f), w * 0.09f, w * 0.09f, p)
+                canvas.restore()
+
+                // Detail D-Pad & Tombol Aksi
+                p.color = 0xFF131317.toInt()
+                canvas.drawRoundRect(RectF(w * 0.20f, h * 0.44f, w * 0.36f, h * 0.49f), w * 0.015f, w * 0.015f, p)
+                canvas.drawRoundRect(RectF(w * 0.255f, h * 0.385f, w * 0.305f, h * 0.545f), w * 0.015f, w * 0.015f, p)
+                canvas.drawCircle(w * 0.745f, h * 0.415f, w * 0.036f, p)
+                canvas.drawCircle(w * 0.665f, h * 0.495f, w * 0.036f, p)
+            }
+            override fun setAlpha(alpha: Int) { p.alpha = alpha }
+            override fun setColorFilter(cf: ColorFilter?) { p.colorFilter = cf }
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+    }
+
     private fun box(focused: Boolean): GradientDrawable {
         val g = GradientDrawable()
         g.cornerRadius = dp(16).toFloat()
@@ -156,7 +196,7 @@ class HomeActivity : AppCompatActivity() {
         return g
     }
 
-    // Kartu klasik TV (7 tombol sejajar)
+    // Kartu klasik TV (sejajar horizontal)
     private fun classicTile(
         label: String,
         res: Int,
@@ -168,7 +208,7 @@ class HomeActivity : AppCompatActivity() {
         t.gravity = Gravity.CENTER
 
         val ic = ImageView(this).apply {
-            val sz = dp(36)
+            val sz = dp(34)
             layoutParams = LinearLayout.LayoutParams(sz, sz)
             if (customIcon != null) {
                 setImageDrawable(customIcon(mute))
@@ -179,8 +219,8 @@ class HomeActivity : AppCompatActivity() {
         }
         t.addView(ic)
 
-        val tx = tv(label, 15.5f, mute, Typeface.SERIF).apply {
-            setPadding(dp(4), dp(9), dp(4), 0)
+        val tx = tv(label, 14.5f, mute, Typeface.SERIF).apply {
+            setPadding(dp(3), dp(9), dp(3), 0)
             gravity = Gravity.CENTER_HORIZONTAL
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -206,7 +246,7 @@ class HomeActivity : AppCompatActivity() {
         }
 
         val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
-        lp.setMargins(dp(5), 0, dp(5), 0)
+        lp.setMargins(dp(4), 0, dp(4), 0)
         t.layoutParams = lp
         if (firstTile == null) firstTile = t
         return t
@@ -329,8 +369,13 @@ class HomeActivity : AppCompatActivity() {
         return card
     }
 
-    // Kartu utilitas sejajar 1x3 (Pindai Sinyal · Panduan · Pengaturan)
-    private fun bentoUtilityCard(label: String, res: Int, action: () -> Unit): LinearLayout {
+    // Kartu utilitas sejajar 1x4 (Game · Pindai · Panduan · Pengaturan)
+    private fun bentoUtilityCard(
+        label: String,
+        res: Int,
+        customIcon: ((Int) -> Drawable)? = null,
+        action: () -> Unit
+    ): LinearLayout {
         fun makeBg(focused: Boolean): GradientDrawable {
             return GradientDrawable().apply {
                 cornerRadius = dp(14).toFloat()
@@ -342,7 +387,7 @@ class HomeActivity : AppCompatActivity() {
         val btn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(6), dp(10), dp(6), dp(10))
+            setPadding(dp(4), dp(10), dp(4), dp(10))
             isFocusable = true
             isClickable = true
             background = makeBg(false)
@@ -351,10 +396,14 @@ class HomeActivity : AppCompatActivity() {
         val ic = ImageView(this).apply {
             val sz = dp(if (isPhoneLayout) 22 else 25)
             layoutParams = LinearLayout.LayoutParams(sz, sz)
-            setImageResource(res)
-            setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+            if (customIcon != null) {
+                setImageDrawable(customIcon(brassLight))
+            } else {
+                setImageResource(res)
+                setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+            }
         }
-        val tx = tv(label, if (isPhoneLayout) 12f else 13f, ivory, Typeface.SANS_SERIF).apply {
+        val tx = tv(label, if (isPhoneLayout) 11.5f else 12.5f, ivory, Typeface.SANS_SERIF).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -367,7 +416,11 @@ class HomeActivity : AppCompatActivity() {
         btn.setOnFocusChangeListener { _, f ->
             btn.background = makeBg(f)
             val c = if (f) Color.WHITE else brassLight
-            ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
+            if (customIcon != null) {
+                ic.setImageDrawable(customIcon(c))
+            } else {
+                ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
+            }
             tx.setTextColor(if (f) Color.WHITE else ivory)
         }
         return btn
@@ -416,7 +469,6 @@ class HomeActivity : AppCompatActivity() {
         decoLayer = FrameLayout(this)
         root.addView(decoLayer, FrameLayout.LayoutParams(-1, -1))
 
-        // Bangun komponen header & informasi
         buildSharedHeaderAndInfoViews()
 
         if (isPhoneLayout) {
@@ -571,7 +623,10 @@ class HomeActivity : AppCompatActivity() {
             onLongClick = { openAntennaMenu() }
         ) { if (!launchSaved()) chooseAntennaApp() }
 
-        val btnScan = bentoUtilityCard("Pindai Sinyal", R.drawable.ic_scan) {
+        val btnGame = bentoUtilityCard("Game", 0, customIcon = { c -> gamepadIconDrawable(c) }) {
+            startActivity(Intent(this, GameActivity::class.java))
+        }
+        val btnScan = bentoUtilityCard("Pindai", R.drawable.ic_scan) {
             startActivity(Intent(this, ScanActivity::class.java))
         }
         val btnPanduan = bentoUtilityCard("Panduan", R.drawable.ic_book) {
@@ -611,16 +666,17 @@ class HomeActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
         }
-        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(5) })
-        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
-        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5) })
+        row3.addView(btnGame, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(4) })
+        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(4) })
         menuCol.addView(row3, LinearLayout.LayoutParams(-1, -2))
 
         tiles = menuCol
         return menuCol
     }
 
-    // 1. TAMPILAN SMARTPHONE (PORTRAIT · BENTO 2x2 + 1x3)
+    // 1. TAMPILAN SMARTPHONE (PORTRAIT · BENTO 2x2 + 1x4)
     private fun buildPhoneBentoScreen(root: FrameLayout) {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -628,7 +684,6 @@ class HomeActivity : AppCompatActivity() {
             setPadding(dp(18), dp(18), dp(18), dp(22))
         }
 
-        // Baris atas: Sapaan kiri + Jam kanan
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         left.addView(buildBrandBadge())
@@ -653,7 +708,6 @@ class HomeActivity : AppCompatActivity() {
         val line = View(this).apply { setBackgroundColor(0xFF26262C.toInt()) }
         col.addView(line, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(10) })
 
-        // Bar Cuaca Ringkas 2 Baris Rapi (Tanpa kata terpotong)
         val wxBlock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, dp(4))
@@ -685,7 +739,6 @@ class HomeActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // Dock Jadwal Sholat
         val pray = buildPrayerDock()
         col.addView(pray, LinearLayout.LayoutParams(-1, -2))
 
@@ -714,7 +767,6 @@ class HomeActivity : AppCompatActivity() {
             setPadding(dp(38), dp(26), dp(38), dp(24))
         }
 
-        // Kolom Kiri: Info & Jadwal Sholat
         val infoCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, dp(26), 0)
@@ -764,7 +816,6 @@ class HomeActivity : AppCompatActivity() {
         }
         infoCol.addView(tvNote)
 
-        // Kolom Kanan: Kartu Bento 2x2 + 1x3
         val menuCol = buildBentoMenuColumn()
 
         mainRow.addView(infoCol, LinearLayout.LayoutParams(0, -1, 0.88f))
@@ -772,7 +823,7 @@ class HomeActivity : AppCompatActivity() {
         root.addView(mainRow, FrameLayout.LayoutParams(-1, -1))
     }
 
-    // 3. TAMPILAN TV KLASIK B-BOX (7 TOMBOL SEJAJAR BAWAAN)
+    // 3. TAMPILAN TV KLASIK B-BOX (TOMBOL SEJAJAR BAWAAN)
     private fun buildTvClassicScreen(root: FrameLayout) {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -842,6 +893,9 @@ class HomeActivity : AppCompatActivity() {
             if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
             else startActivity(Intent(this, FilmActivity::class.java))
         }
+        val tGame = classicTile("Game", 0, customIcon = { c -> gamepadIconDrawable(c) }) {
+            startActivity(Intent(this, GameActivity::class.java))
+        }
         val tPanduan = classicTile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
         val tScan = classicTile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) }
         val tSettings = classicTile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) }
@@ -856,6 +910,7 @@ class HomeActivity : AppCompatActivity() {
             addView(tMusic)
             addView(tAntenna)
             addView(tFilm)
+            addView(tGame)
             addView(tPanduan)
             addView(tScan)
             addView(tSettings)
