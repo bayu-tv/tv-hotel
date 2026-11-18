@@ -108,6 +108,13 @@ class HomeActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = Ui.dp(this, v)
 
+    private fun elevateView(v: View, focused: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            v.translationZ = if (focused) dp(12).toFloat() else 0f
+        }
+        (v.parent as? View)?.invalidate()
+    }
+
     private fun tv(t: String, sp: Float, color: Int, face: Typeface): TextView {
         val v = TextView(this)
         v.text = t
@@ -184,7 +191,7 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Kotak kartu TV Klasik (Obsidian pekat agar tidak tampak abu-abu pudar di layar TV)
+    // Kotak kartu TV Klasik (Obsidian pekat dengan border 2dp konsisten agar tidak loncat ukuran)
     private fun classicBox(focused: Boolean): GradientDrawable {
         return GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
@@ -195,7 +202,7 @@ class HomeActivity : AppCompatActivity() {
             }
         ).apply {
             cornerRadius = dp(16).toFloat()
-            setStroke(dp(if (focused) 2 else 1), if (focused) brassLight else 0x26FFFFFF)
+            setStroke(dp(2), if (focused) brassLight else 0x26FFFFFF)
         }
     }
 
@@ -223,8 +230,7 @@ class HomeActivity : AppCompatActivity() {
         }
         val ic = ImageView(this).apply {
             val sz = dp(28)
-            val lp = FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
-            layoutParams = lp
+            layoutParams = FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
             if (customIcon != null) {
                 setImageDrawable(customIcon(brassLight))
             } else {
@@ -247,6 +253,7 @@ class HomeActivity : AppCompatActivity() {
 
         t.setOnClickListener { action() }
         t.setOnFocusChangeListener { _, f ->
+            elevateView(t, f)
             t.background = classicBox(f)
             val c = if (f) Color.WHITE else brassLight
             if (customIcon != null) {
@@ -256,19 +263,19 @@ class HomeActivity : AppCompatActivity() {
             }
             tx.setTextColor(if (f) brassLight else ivory)
             arrow.setTextColor(if (f) brassLight else 0x55FFFFFF)
-            val s = if (f) 1.03f else 1f
+            val s = if (f) 1.025f else 1f
             t.animate().scaleX(s).scaleY(s).setDuration(180).start()
             if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(600).start()
         }
 
         val lp = LinearLayout.LayoutParams(0, dp(88), 1f)
-        lp.setMargins(dp(6), 0, dp(6), 0)
+        lp.setMargins(dp(7), 0, dp(7), 0)
         t.layoutParams = lp
         if (firstTile == null) firstTile = t
         return t
     }
 
-    // Kartu utama Bento 2x2 (Smartphone tetap rapi + TV Cinematic kaya visual & anti-kopong)
+    // Kartu utama Bento 2x2 (Smartphone tetap rapi + TV Cinematic dengan elevasi Z & border utuh)
     private fun bentoMainCard(
         title: String,
         subtitle: String,
@@ -299,21 +306,21 @@ class HomeActivity : AppCompatActivity() {
                     }
                 }
             } else {
-                // TV Cinematic: kontras pekat obsidian + aksen hangat saat disorot
                 val topCol = if (focused) {
-                    (tintColor and 0x00FFFFFF) or 0x48000000
+                    (tintColor and 0x00FFFFFF) or 0x4A000000
                 } else {
-                    (tintColor and 0x00FFFFFF) or 0x20000000
+                    (tintColor and 0x00FFFFFF) or 0x22000000
                 }
                 GradientDrawable(
                     GradientDrawable.Orientation.TL_BR,
                     intArrayOf(topCol, 0xFF111116.toInt())
                 ).apply {
                     cornerRadius = dp(18).toFloat()
+                    // Gunakan stroke 2dp konstan di TV agar ketebalan garis & padding dalam tidak bergeser saat fokus
                     when {
                         focused -> setStroke(dp(2), brassLight)
-                        highlightedBorder -> setStroke(dp(1), (brass and 0x00FFFFFF) or 0x66000000)
-                        else -> setStroke(dp(1), 0x24FFFFFF)
+                        highlightedBorder -> setStroke(dp(2), (brass and 0x00FFFFFF) or 0x66000000)
+                        else -> setStroke(dp(2), 0x24FFFFFF)
                     }
                 }
             }
@@ -326,14 +333,13 @@ class HomeActivity : AppCompatActivity() {
             clipChildren = true
         }
 
-        // Watermark dekoratif besar khusus TV agar kartu Bento tidak kosong di bagian tengah
         var watermark: ImageView? = null
         if (!isPhoneLayout) {
             watermark = ImageView(this).apply {
-                val wmSz = dp(104)
+                val wmSz = dp(96)
                 val wmLp = FrameLayout.LayoutParams(wmSz, wmSz, Gravity.BOTTOM or Gravity.END).apply {
-                    rightMargin = dp(12)
-                    bottomMargin = dp(10)
+                    rightMargin = dp(16)
+                    bottomMargin = dp(14)
                 }
                 layoutParams = wmLp
                 alpha = 0.07f
@@ -349,7 +355,12 @@ class HomeActivity : AppCompatActivity() {
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(if (isPhoneLayout) 15 else 20), dp(if (isPhoneLayout) 13 else 18), dp(if (isPhoneLayout) 15 else 20), dp(if (isPhoneLayout) 13 else 18))
+            setPadding(
+                dp(if (isPhoneLayout) 15 else 20),
+                dp(if (isPhoneLayout) 13 else 18),
+                dp(if (isPhoneLayout) 15 else 20),
+                dp(if (isPhoneLayout) 13 else 18)
+            )
         }
 
         val topRow = LinearLayout(this).apply {
@@ -359,10 +370,10 @@ class HomeActivity : AppCompatActivity() {
 
         val ic = ImageView(this).apply {
             val sz = dp(if (isPhoneLayout) 28 else 30)
-            if (isPhoneLayout) {
-                layoutParams = LinearLayout.LayoutParams(sz, sz)
+            layoutParams = if (isPhoneLayout) {
+                LinearLayout.LayoutParams(sz, sz)
             } else {
-                layoutParams = FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
+                FrameLayout.LayoutParams(sz, sz, Gravity.CENTER)
             }
             if (customIcon != null) {
                 setImageDrawable(customIcon(brassLight))
@@ -452,6 +463,7 @@ class HomeActivity : AppCompatActivity() {
             }
         }
         frame.setOnFocusChangeListener { _, f ->
+            elevateView(frame, f)
             frame.background = makeBg(f)
             val iconCol = if (f) Color.WHITE else brassLight
             if (customIcon != null) {
@@ -463,7 +475,7 @@ class HomeActivity : AppCompatActivity() {
             chevronTv?.setTextColor(if (f) brassLight else 0x55FFFFFF)
             watermark?.alpha = if (f) 0.14f else 0.07f
             if (!isPhoneLayout) {
-                val s = if (f) 1.022f else 1f
+                val s = if (f) 1.018f else 1f
                 frame.animate().scaleX(s).scaleY(s).setDuration(180).start()
             }
         }
@@ -490,7 +502,7 @@ class HomeActivity : AppCompatActivity() {
                     }
                 )
                 setStroke(
-                    dp(if (focused) 2 else 1),
+                    dp(if (isPhoneLayout && !focused) 1 else 2),
                     if (focused) (if (isPhoneLayout) Color.WHITE else brassLight) else 0x26FFFFFF
                 )
             }
@@ -526,6 +538,7 @@ class HomeActivity : AppCompatActivity() {
 
         btn.setOnClickListener { action() }
         btn.setOnFocusChangeListener { _, f ->
+            elevateView(btn, f)
             btn.background = makeBg(f)
             val c = if (f) Color.WHITE else brassLight
             if (customIcon != null) {
@@ -534,6 +547,10 @@ class HomeActivity : AppCompatActivity() {
                 ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
             }
             tx.setTextColor(if (f) brassLight else ivory)
+            if (!isPhoneLayout) {
+                val s = if (f) 1.03f else 1f
+                btn.animate().scaleX(s).scaleY(s).setDuration(180).start()
+            }
         }
         return btn
     }
@@ -551,7 +568,10 @@ class HomeActivity : AppCompatActivity() {
         brass = skin.accent
         brassLight = skin.accentLight
 
-        val root = FrameLayout(this)
+        val root = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
         val baseBgColor = if (skin.id == "default") {
             if (isPhoneLayout) 0xFF0D0D0F.toInt() else 0xFF09090B.toInt()
         } else {
@@ -759,37 +779,44 @@ class HomeActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
+            if (!isPhoneLayout) {
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }
         }
 
         val cardH = if (isPhoneLayout) dp(112) else 0
         val rowWeight = if (isPhoneLayout) 0f else 1f
-        val gap = if (isPhoneLayout) dp(6) else dp(7)
+        val gap = if (isPhoneLayout) dp(6) else dp(8)
 
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
+            clipToPadding = false
         }
         row1.addView(cardTv, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = gap })
         row1.addView(cardFilm, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = gap })
-        menuCol.addView(row1, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 12) })
+        menuCol.addView(row1, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 14) })
 
         val row2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
+            clipToPadding = false
         }
         row2.addView(cardMusic, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = gap })
         row2.addView(cardAntenna, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = gap })
-        menuCol.addView(row2, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 12) })
+        menuCol.addView(row2, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(if (isPhoneLayout) 10 else 14) })
 
         val utilH = dp(if (isPhoneLayout) 66 else 80)
+        val utilGap = if (isPhoneLayout) dp(5) else dp(6)
         val row3 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
+            clipToPadding = false
         }
-        row3.addView(btnGame, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(5) })
-        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
-        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
-        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5) })
+        row3.addView(btnGame, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = utilGap })
+        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = utilGap; rightMargin = utilGap })
+        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = utilGap; rightMargin = utilGap })
+        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = utilGap })
         menuCol.addView(row3, LinearLayout.LayoutParams(-1, -2))
 
         tiles = menuCol
@@ -801,6 +828,7 @@ class HomeActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
+            clipToPadding = false
             setPadding(dp(18), dp(18), dp(18), dp(22))
         }
 
@@ -874,7 +902,11 @@ class HomeActivity : AppCompatActivity() {
         }
         col.addView(tvNote)
 
-        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            clipChildren = false
+            clipToPadding = false
+        }
         scroll.addView(col, ViewGroup.LayoutParams(-1, -2))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
@@ -884,10 +916,10 @@ class HomeActivity : AppCompatActivity() {
         val mainRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
-            setPadding(dp(34), dp(24), dp(34), dp(24))
+            clipToPadding = false
+            setPadding(dp(34), dp(22), dp(34), dp(22))
         }
 
-        // Panel Kiri terbingkai rapi agar informatif & kontras
         val infoCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(20), dp(22), dp(16))
@@ -959,6 +991,7 @@ class HomeActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
+            clipToPadding = false
             setPadding(dp(42), dp(26), dp(42), dp(20))
         }
 
@@ -1056,7 +1089,7 @@ class HomeActivity : AppCompatActivity() {
             clipChildren = false
             clipToPadding = false
             setPadding(0, dp(8), 0, dp(8))
-            addView(rowTop, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+            addView(rowTop, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
             addView(rowBot, LinearLayout.LayoutParams(-1, -2))
         }
         col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
