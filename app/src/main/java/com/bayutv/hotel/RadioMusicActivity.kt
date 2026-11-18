@@ -133,7 +133,7 @@ class RadioMusicActivity : AppCompatActivity() {
     )
 
     data class RadioScanResult(
-        val state: Int, // 0 = belum dicek, 1 = mengecek, 2 = aktif, 3 = mati
+        val state: Int,
         val label: String,
         val detail: String
     )
@@ -317,7 +317,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // DSP VOCAL REDUCER 2 TINGKAT (0 = OFF, 1 = NORMAL, 2 = ULTRA) · AMAN & RINGAN
+    // DSP VOCAL REDUCER 2 TINGKAT (0 = OFF, 1 = NORMAL, 2 = ULTRA)
     // =========================================================================
     @OptIn(UnstableApi::class)
     class VocalReducerAudioProcessor : BaseAudioProcessor() {
@@ -389,7 +389,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // PEMUAT GAMBAR HEMAT RAM UNTUK TV 1-2 GB (RGB_565 + MAX 240PX + CACHE 3MB)
+    // PEMUAT GAMBAR HEMAT RAM + AUTO-CROP 1:1 (HILANGKAN BAR HITAM YOUTUBE)
     // =========================================================================
     object SafeArtLoader {
         private const val MAX_CACHE_BYTES = 3 * 1024 * 1024
@@ -459,7 +459,17 @@ class RadioMusicActivity : AppCompatActivity() {
                     inSampleSize = inSample
                     inPreferredConfig = Bitmap.Config.RGB_565
                 }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
+
+                // Potong persegi 1:1 di tengah agar garis hitam atas-bawah thumbnail YouTube hilang
+                if (rawUrl.contains("ytimg.com", ignoreCase = true) && decoded.width > decoded.height) {
+                    val side = decoded.height
+                    val xOffset = (decoded.width - side) / 2
+                    val square = Bitmap.createBitmap(decoded, xOffset, 0, side, side)
+                    if (square != decoded) decoded.recycle()
+                    return square
+                }
+                decoded
             } catch (_: Exception) {
                 null
             }
@@ -467,7 +477,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // PENYIMPANAN RIWAYAT TERAKHIR DIPUTAR (< 5 KB) & RADIO MANUAL
+    // PENYIMPANAN RIWAYAT & RADIO MANUAL
     // =========================================================================
     object RecentHistoryStore {
         private const val PREF_NAME = "bbox_recent"
@@ -1682,7 +1692,6 @@ class RadioMusicActivity : AppCompatActivity() {
     private val bgDark = 0xFF121212.toInt()
     private val surfaceCard = 0xFF181818.toInt()
     private val surfaceElevated = 0xFF242424.toInt()
-    private val brass = 0xFFB8975A.toInt()
     private val brassLight = 0xFFE6C88F.toInt()
     private val spotifyGreen = 0xFF1DB954.toInt()
     private val ivory = 0xFFFFFFFF.toInt()
@@ -1695,22 +1704,22 @@ class RadioMusicActivity : AppCompatActivity() {
     private val tabViews = ArrayList<TextView>()
     private var activeTab = 0
 
-    // Kurasi Spotify-style: Shortcut Cepat (6 ubin 2 kolom)
+    // 8 Ubin Akses Cepat (4 kolom x 2 baris di TV seperti Gambar 5 · 2 kolom x 4 baris di HP seperti Gambar 6)
     private val quickShortcuts = listOf(
-        CuratedMix("TRENDING", "Trending Indonesia", "Viral & Hits Terbaru", "Lagu Viral Trending Indonesia Terbaru", 0xFF1E3264.toInt(), 0xFF121C38.toInt()),
-        CuratedMix("TERBAIK", "Terbaik Indonesia", "Pop & Balada Pilihan", "Lagu Pop Indonesia Terbaik Terpopuler", 0xFF8C1932.toInt(), 0xFF3E0B16.toInt()),
-        CuratedMix("GLOBAL", "Top Global Hits", "Mancanegara Populer", "Top Global Hits Trending English Songs", 0xFF148A08.toInt(), 0xFF0A3D04.toInt()),
-        CuratedMix("ERA 90-AN", "Nostalgia 90-an", "Indo & Barat Era 90s", "Lagu Nostalgia Era 90an Indonesia & Barat Terbaik", 0xFFBA5D07.toInt(), 0xFF4D2603.toInt()),
-        CuratedMix("ERA 2000-AN", "Hits 2000-an", "Band & Pop Era 2000s", "Lagu Pop Indonesia & Barat Era 2000an Terpopuler", 0xFF477D95.toInt(), 0xFF1D3540.toInt()),
-        CuratedMix("KOPLO", "Dangdut & Koplo", "Pop Jawa & Koplo", "Lagu Dangdut Koplo & Pop Jawa Terpopuler", 0xFF8D67AB.toInt(), 0xFF3A2947.toInt())
+        CuratedMix("TRENDING", "Trending Indonesia", "Viral & Hits Terbaru Indonesia", "Lagu Viral Trending Indonesia Terbaru", 0xFF1E3264.toInt(), 0xFF121C38.toInt()),
+        CuratedMix("TERBAIK", "Terbaik Indonesia", "Pop & Balada Pilihan Tanah Air", "Lagu Pop Indonesia Terbaik Terpopuler", 0xFF8C1932.toInt(), 0xFF3E0B16.toInt()),
+        CuratedMix("GLOBAL", "Top Global Hits", "Tangga Lagu Mancanegara Populer", "Top Global Hits Trending English Songs", 0xFF148A08.toInt(), 0xFF0A3D04.toInt()),
+        CuratedMix("ERA 90-AN", "Nostalgia 90-an", "Lagu Klasik Indo & Barat Era 90s", "Lagu Nostalgia Era 90an Indonesia & Barat Terbaik", 0xFFBA5D07.toInt(), 0xFF4D2603.toInt()),
+        CuratedMix("ERA 2000-AN", "Hits 2000-an", "Band & Pop Legendaris Era 2000s", "Lagu Pop Indonesia & Barat Era 2000an Terpopuler", 0xFF477D95.toInt(), 0xFF1D3540.toInt()),
+        CuratedMix("KOPLO", "Dangdut & Koplo", "Pop Jawa & Koplo Terpopuler", "Lagu Dangdut Koplo & Pop Jawa Terpopuler", 0xFF8D67AB.toInt(), 0xFF3A2947.toInt()),
+        CuratedMix("BALADA", "Galau & Balada", "Lagu Menyentuh & Akustik Indonesia", "Lagu Galau Indonesia Terbaik Paling Menyentuh", 0xFF503750.toInt(), 0xFF221722.toInt()),
+        CuratedMix("TIMUR HITS", "Lagu Timur Viral", "Nyong Timur & Musik Timur Pilihan", "Lagu Timur Indonesia Viral Terbaik", 0xFFBC5900.toInt(), 0xFF4E2500.toInt())
     )
 
-    // Kurasi Spotify-style: Mix & Playlist Editorial (Kartu Cover Persegi Horizontal)
+    // Rak Horizontal "Made For You / Mix & Kurasi" (Seperti rak bawah di Gambar 5 & 6)
     private val editorialMixes = listOf(
         CuratedMix("DAILY MIX 01", "Pop Indonesia Terbaik", "Tulus, Mahalini, Lyodra, Hindia", "Lagu Pop Indonesia Terbaik Terpopuler", 0xFF283EA3.toInt(), 0xFF131D4D.toInt()),
         CuratedMix("VIRAL 50", "Viral TikTok & Reels", "Lagu paling ramai diputar saat ini", "Lagu Viral TikTok Indonesia Terbaru", 0xFFAF2896.toInt(), 0xFF4A103F.toInt()),
-        CuratedMix("BALADA", "Galau & Patah Hati", "Lagu menyentuh & akustik Indonesia", "Lagu Galau Indonesia Terbaik Paling Menyentuh", 0xFF503750.toInt(), 0xFF221722.toInt()),
-        CuratedMix("TIMUR HITS", "Lagu Timur Viral", "Nyong Timur & musik timur terpopuler", "Lagu Timur Indonesia Viral Terbaik", 0xFFBC5900.toInt(), 0xFF4E2500.toInt()),
         CuratedMix("GLOBAL POP", "Mancanegara Pilihan", "Hits internasional & R&B terbaik", "Best International Pop and R&B Hits", 0xFF0D73EC.toInt(), 0xFF063266.toInt()),
         CuratedMix("ROMANTIS", "Love Songs Barat", "Lagu cinta barat sepanjang masa", "Best English Love Songs Romantic Hits", 0xFF8C1932.toInt(), 0xFF3B0A15.toInt()),
         CuratedMix("90s INDO", "Pop & Rock 90-an Indo", "Nostalgia klasik Indonesia era 90-an", "Lagu Pop & Slow Rock Indonesia Era 90an Terbaik", 0xFF7D4B32.toInt(), 0xFF362015.toInt()),
@@ -1721,7 +1730,7 @@ class RadioMusicActivity : AppCompatActivity() {
         CuratedMix("ASIA HITS", "K-Pop & J-Pop Pilihan", "Hits Korea & Jepang terpopuler", "Top K-Pop and Japanese Pop Hits", 0xFFE13300.toInt(), 0xFF5C1500.toInt())
     )
 
-    // Kartu Jelajah Kategori & Album (Grid Bawah)
+    // Kartu Jelajah Kategori & Album
     private val browseGenreCards = listOf(
         CuratedMix("TREND", "Trend Saat Ini", "Tangga lagu & viral terbaru", "Lagu Viral Trending Indonesia & Barat Terbaru", 0xFFE8115B.toInt(), 0xFF630727.toInt()),
         CuratedMix("INDONESIA", "Lagu Terbaik Indo", "Kumpulan hits terbaik tanah air", "Lagu Pop Indonesia Terbaik Terpopuler", 0xFFDC148C.toInt(), 0xFF5E083C.toInt()),
@@ -1732,6 +1741,12 @@ class RadioMusicActivity : AppCompatActivity() {
         CuratedMix("DANGDUT", "Dangdut & Koplo", "Koplo terbaru hingga klasik", "Lagu Dangdut Koplo & Pop Jawa Terpopuler", 0xFF8D67AB.toInt(), 0xFF3C2B4A.toInt()),
         CuratedMix("ALBUM", "Jelajah Album", "Telusuri album penuh artis favorit", "Album Pop Indonesia Terbaik", 0xFF27856A.toInt(), 0xFF10382D.toInt(), isAlbumBrowse = true)
     )
+
+    // Komponen Spotlight Hero untuk TV (seperti bagian atas Gambar 5)
+    private var tvHeroBanner: LinearLayout? = null
+    private var tvHeroTag: TextView? = null
+    private var tvHeroTitle: TextView? = null
+    private var tvHeroSubtitle: TextView? = null
 
     private var lastAlbumSearchQuery = ""
     private var lastFoundAlbums: List<AlbumItem> = emptyList()
@@ -1851,7 +1866,7 @@ class RadioMusicActivity : AppCompatActivity() {
         val d = GlyphDrawable(glyph, color, dp(sizeDp)).apply {
             setBounds(0, 0, dp(sizeDp), dp(sizeDp))
         }
-        tv.compoundDrawablePadding = dp(6)
+        tv.compoundDrawablePadding = dp(5)
         tv.setCompoundDrawables(d, null, null, null)
     }
 
@@ -1860,8 +1875,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
         MusicEngine.lyricsEnabled = prefs.getBoolean("music_lyrics_enabled", false)
 
-        val isPhonePortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
-            resources.configuration.screenWidthDp < 600
+        val isPhonePortrait = isPortraitPhone()
         val padH = dp(if (isPhonePortrait) 14 else 28)
 
         val root = FrameLayout(this).apply { setBackgroundColor(bgDark) }
@@ -1871,7 +1885,7 @@ class RadioMusicActivity : AppCompatActivity() {
             setPadding(padH, dp(10), padH, dp(10))
         }
 
-        // Header B-BOX Music bergaya Spotify minimalis
+        // Header B-BOX Music
         val brandRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1902,7 +1916,7 @@ class RadioMusicActivity : AppCompatActivity() {
         brandRow.addView(btnGoogleAccount)
         browseContainer.addView(brandRow)
 
-        // Navigation Tabs (Spotify Clean Pill Tabs)
+        // Navigation Tabs
         val tabScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFocusable = false
@@ -1923,7 +1937,7 @@ class RadioMusicActivity : AppCompatActivity() {
         tabScroll.addView(tabRow)
         browseContainer.addView(tabScroll)
 
-        // Search Bar ala Spotify (bersih dengan ikon vektor kaca pembesar)
+        // Search Bar
         searchSectionBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -1972,7 +1986,7 @@ class RadioMusicActivity : AppCompatActivity() {
             setOnClickListener {
                 searchInput.setText("")
                 btnClearSearch.visibility = View.GONE
-                renderSpotifyHome(isPhonePortrait)
+                renderSpotifyHome(isPortraitPhone())
             }
         }
         val searchBtn = actionPillBtn("Cari", primary = true) {
@@ -2194,51 +2208,104 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // SPOTIFY HOME / JELAJAH: PENGELOMPOKAN KARTU & MIX EDITORIAL
+    // ADAPTIVE SPOTIFY UI: TV (GAMBAR 5 - SPOTLIGHT + 4 KOLOM) & HP (GAMBAR 6)
     // =========================================================================
     private fun isPortraitPhone(): Boolean =
         resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
 
+    private fun updateTvHero(mix: CuratedMix) {
+        val banner = tvHeroBanner ?: return
+        tvHeroTag?.text = "KURASI PILIHAN · ${mix.tag}"
+        tvHeroTitle?.text = mix.title
+        tvHeroSubtitle?.text = "${mix.subtitle} · Tekan OK pada remote untuk membuka playlist"
+        banner.background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(mix.colorStart, mix.colorEnd, surfaceCard)
+        ).apply {
+            cornerRadius = dp(14).toFloat()
+            setStroke(dp(1), 0x26FFFFFF)
+        }
+    }
+
     private fun renderSpotifyHome(isPhone: Boolean = isPortraitPhone()) {
         currentRenderedTracks = emptyList()
         lastRenderedPlayingTrackId = null
         btnClearSearch.visibility = View.GONE
+        tvHeroBanner = null
         listBox.removeAllViews()
         listScroll.scrollTo(0, 0)
 
-        // 1. SECTION: PILIHAN CEPAT (2 KOLOM UBIN HORIZONTAL ALA SPOTIFY HOME)
-        listBox.addView(
-            tv("Pilihan Cepat", 15.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-                setPadding(dp(2), 0, 0, dp(8))
-            }
-        )
+        val defaultMix = quickShortcuts.first()
 
+        // KHUSUS TV / LANDSCAPE (GAMBAR 5): Spotlight Hero Banner dinamis mengikuti sorotan remote D-Pad
+        if (!isPhone) {
+            val hero = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(16), dp(20), dp(16))
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(defaultMix.colorStart, defaultMix.colorEnd, surfaceCard)
+                ).apply {
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(1), 0x26FFFFFF)
+                }
+            }
+            val tag = tv("KURASI PILIHAN · ${defaultMix.tag}", 10f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply {
+                letterSpacing = 0.08f
+            }
+            val title = tv(defaultMix.title, 22f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(3), 0, dp(3))
+            }
+            val sub = tv("${defaultMix.subtitle} · Tekan OK pada remote untuk membuka playlist", 12.5f, 0xDDFFFFFF.toInt()).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            hero.addView(tag)
+            hero.addView(title)
+            hero.addView(sub)
+
+            tvHeroBanner = hero
+            tvHeroTag = tag
+            tvHeroTitle = title
+            tvHeroSubtitle = sub
+            listBox.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        } else {
+            listBox.addView(
+                tv("Pilihan Cepat", 15.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                    setPadding(dp(2), 0, 0, dp(8))
+                }
+            )
+        }
+
+        // 1. GRID AKSES CEPAT: 4 KOLOM x 2 BARIS DI TV (GAMBAR 5) · 2 KOLOM x 4 BARIS DI HP (GAMBAR 6)
+        val shortcutCols = if (isPhone) 2 else 4
+        val tileHeight = dp(if (isPhone) 50 else 54)
         var idx = 0
         while (idx < quickShortcuts.size) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            for (col in 0 until 2) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (col in 0 until shortcutCols) {
                 if (idx < quickShortcuts.size) {
                     val mix = quickShortcuts[idx]
-                    val tile = buildShortcutTile(mix)
-                    val lp = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                        if (col == 0) rightMargin = dp(8)
+                    val tile = buildShortcutTile(mix, tileHeight, isPhone)
+                    val lp = LinearLayout.LayoutParams(0, tileHeight, 1f).apply {
+                        if (col < shortcutCols - 1) rightMargin = dp(8)
                     }
                     row.addView(tile, lp)
                     idx++
                 } else {
-                    row.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f))
+                    row.addView(View(this), LinearLayout.LayoutParams(0, tileHeight, 1f))
                 }
             }
             listBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
 
-        // 2. SECTION: MIX & KURASI SPESIAL (KARTU COVER PERSEGI HORIZONTAL)
+        // 2. RAK HORIZONTAL: "Made for you / Mix & Kurasi Untuk Anda" (GAMBAR 5 & 6)
         listBox.addView(
             tv("Mix & Kurasi Untuk Anda", 15.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-                setPadding(dp(2), dp(10), 0, dp(8))
+                setPadding(dp(2), dp(8), 0, dp(8))
             }
         )
 
@@ -2248,16 +2315,17 @@ class RadioMusicActivity : AppCompatActivity() {
             setPadding(0, 0, 0, dp(6))
         }
         val mixRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val cardSize = dp(if (isPhone) 132 else 142)
         for (mix in editorialMixes) {
             mixRow.addView(
-                buildEditorialMixCard(mix, isPhone),
-                LinearLayout.LayoutParams(dp(if (isPhone) 136 else 148), -2).apply { rightMargin = dp(10) }
+                buildSpotifyShelfCard(mix, cardSize),
+                LinearLayout.LayoutParams(cardSize, -2).apply { rightMargin = dp(10) }
             )
         }
         mixScroll.addView(mixRow)
         listBox.addView(mixScroll, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
-        // 3. SECTION: JELAJAHI KATEGORI & ERA (GRID KARTU SPOTIFY BROWSE)
+        // 3. GRID JELAJAHI KATEGORI & ALBUM
         listBox.addView(
             tv("Jelajahi Kategori & Era", 15.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 setPadding(dp(2), dp(6), 0, dp(8))
@@ -2272,20 +2340,20 @@ class RadioMusicActivity : AppCompatActivity() {
                 if (gIdx < browseGenreCards.size) {
                     val item = browseGenreCards[gIdx]
                     val card = buildGenreBrowseCard(item)
-                    val lp = LinearLayout.LayoutParams(0, dp(74), 1f).apply {
+                    val lp = LinearLayout.LayoutParams(0, dp(72), 1f).apply {
                         if (c < cols - 1) rightMargin = dp(8)
                     }
                     gRow.addView(card, lp)
                     gIdx++
                 } else {
-                    gRow.addView(View(this), LinearLayout.LayoutParams(0, dp(74), 1f))
+                    gRow.addView(View(this), LinearLayout.LayoutParams(0, dp(72), 1f))
                 }
             }
             listBox.addView(gRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
     }
 
-    private fun buildShortcutTile(mix: CuratedMix): LinearLayout {
+    private fun buildShortcutTile(mix: CuratedMix, tileHeightPx: Int, isPhone: Boolean): LinearLayout {
         val tile = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2300,8 +2368,9 @@ class RadioMusicActivity : AppCompatActivity() {
                 background = GradientDrawable().apply {
                     cornerRadius = dp(8).toFloat()
                     setColor(if (f) 0xFF333333.toInt() else surfaceElevated)
-                    if (f) setStroke(dp(2), brassLight)
+                    if (f) setStroke(dp(2), Color.WHITE)
                 }
+                if (f) updateTvHero(mix)
             }
             setOnClickListener { openCuratedMixDetail(mix) }
         }
@@ -2313,9 +2382,14 @@ class RadioMusicActivity : AppCompatActivity() {
             )
         }
         leftSwatch.addView(iconView(Glyph.DISC, ivory, 18), FrameLayout.LayoutParams(-1, -1))
-        tile.addView(leftSwatch, LinearLayout.LayoutParams(dp(52), -1))
+        tile.addView(leftSwatch, LinearLayout.LayoutParams(tileHeightPx, -1))
 
-        val label = tv(mix.title, 12.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        val label = tv(
+            mix.title,
+            if (isPhone) 12.5f else 13f,
+            ivory,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             setPadding(dp(10), 0, dp(8), 0)
@@ -2324,23 +2398,22 @@ class RadioMusicActivity : AppCompatActivity() {
         return tile
     }
 
-    private fun buildEditorialMixCard(mix: CuratedMix, isPhone: Boolean): LinearLayout {
-        val cardW = dp(if (isPhone) 136 else 148)
-        val card = LinearLayout(this).apply {
+    // Kartu persegi bergaya Spotify TV & Mobile (Gambar 5 & 6: judul bersih di dalam/bawah cover)
+    private fun buildSpotifyShelfCard(mix: CuratedMix, cardSizePx: Int): LinearLayout {
+        val wrapper = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(10))
             isFocusable = true
             isClickable = true
-            background = GradientDrawable().apply {
-                cornerRadius = dp(10).toFloat()
-                setColor(surfaceCard)
-            }
-            setOnFocusChangeListener { _, f ->
-                background = GradientDrawable().apply {
+            setOnFocusChangeListener { v, f ->
+                val artView = (v as ViewGroup).getChildAt(0)
+                artView.background = GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(mix.colorStart, mix.colorEnd)
+                ).apply {
                     cornerRadius = dp(10).toFloat()
-                    setColor(if (f) surfaceElevated else surfaceCard)
-                    if (f) setStroke(dp(2), brassLight)
+                    if (f) setStroke(dp(2), Color.WHITE)
                 }
+                if (f) updateTvHero(mix)
             }
             setOnClickListener { openCuratedMixDetail(mix) }
         }
@@ -2353,35 +2426,29 @@ class RadioMusicActivity : AppCompatActivity() {
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(mix.colorStart, mix.colorEnd)
             ).apply {
-                cornerRadius = dp(8).toFloat()
+                cornerRadius = dp(10).toFloat()
             }
         }
-        val tagView = tv(mix.tag, 9f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply {
-            letterSpacing = 0.08f
-        }
-        artBox.addView(tagView, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        val coverTitle = tv(mix.title, 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        artBox.addView(coverTitle)
-        card.addView(artBox, LinearLayout.LayoutParams(-1, cardW - dp(16)))
-
-        card.addView(
-            tv(mix.title, 12.5f, ivory, Typeface.DEFAULT_BOLD).apply {
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                setPadding(0, dp(7), 0, dp(2))
-            }
+        artBox.addView(
+            tv(mix.tag, 9f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply { letterSpacing = 0.08f },
+            LinearLayout.LayoutParams(-1, 0, 1f)
         )
-        card.addView(
-            tv(mix.subtitle, 11f, mute).apply {
+        artBox.addView(
+            tv(mix.title, 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
             }
         )
-        return card
+        wrapper.addView(artBox, LinearLayout.LayoutParams(cardSizePx, cardSizePx))
+
+        wrapper.addView(
+            tv(mix.subtitle, 11f, mute).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(2), dp(6), dp(2), 0)
+            }
+        )
+        return wrapper
     }
 
     private fun buildGenreBrowseCard(mix: CuratedMix): LinearLayout {
@@ -2405,6 +2472,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     cornerRadius = dp(10).toFloat()
                     if (f) setStroke(dp(2), Color.WHITE)
                 }
+                if (f) updateTvHero(mix)
             }
             setOnClickListener {
                 if (mix.isAlbumBrowse) {
@@ -2439,15 +2507,13 @@ class RadioMusicActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(10))
         }
-        val btnBack = actionPillBtn("Kembali ke Jelajah", leadingGlyph = Glyph.BACK) {
+        backRow.addView(actionPillBtn("Kembali ke Jelajah", leadingGlyph = Glyph.BACK) {
             renderSpotifyHome()
-        }
-        backRow.addView(btnBack)
+        })
         listBox.addView(backRow)
 
         val heroCard = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -2457,10 +2523,15 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
 
+        val topInfoRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
         val coverSquare = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.BOTTOM
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(9), dp(9), dp(9), dp(9))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(mix.colorStart, mix.colorEnd)
@@ -2469,16 +2540,16 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
         coverSquare.addView(
-            tv(mix.tag, 9f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply { letterSpacing = 0.08f },
+            tv(mix.tag, 8.5f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply { letterSpacing = 0.08f },
             LinearLayout.LayoutParams(-1, 0, 1f)
         )
         coverSquare.addView(
-            tv(mix.title, 13f, ivory, Typeface.DEFAULT_BOLD).apply {
+            tv(mix.title, 12f, ivory, Typeface.DEFAULT_BOLD).apply {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
             }
         )
-        heroCard.addView(coverSquare, LinearLayout.LayoutParams(dp(84), dp(84)))
+        topInfoRow.addView(coverSquare, LinearLayout.LayoutParams(dp(74), dp(74)))
 
         val metaCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2493,22 +2564,25 @@ class RadioMusicActivity : AppCompatActivity() {
             tv(mix.title, 18f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
-                setPadding(0, dp(2), 0, dp(2))
+                setPadding(0, dp(2), 0, dp(3))
             }
         )
         metaCol.addView(
             tv(mix.subtitle, 12f, 0xCCFFFFFF.toInt()).apply {
-                maxLines = 1
+                maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
-                setPadding(0, 0, 0, dp(10))
             }
         )
+        topInfoRow.addView(metaCol, LinearLayout.LayoutParams(0, -2, 1f))
+        heroCard.addView(topInfoRow)
 
+        // Baris tombol satu baris utuh (tidak terpotong 2 baris di HP)
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
         }
-        val btnPlayAll = actionPillBtn("Putar Semua", primary = true, leadingGlyph = Glyph.PLAY) {
+        val btnPlayAll = actionPillBtn("Putar", primary = true, leadingGlyph = Glyph.PLAY) {
             if (currentRenderedTracks.isNotEmpty()) {
                 MusicEngine.shuffleEnabled = false
                 MusicEngine.playTrack(this, currentRenderedTracks[0], currentRenderedTracks, 0)
@@ -2531,9 +2605,8 @@ class RadioMusicActivity : AppCompatActivity() {
         actionRow.addView(btnPlayAll)
         actionRow.addView(btnShuffleAll, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
         actionRow.addView(btnSaveMix, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
-        metaCol.addView(actionRow)
+        heroCard.addView(actionRow)
 
-        heroCard.addView(metaCol, LinearLayout.LayoutParams(0, -2, 1f))
         listBox.addView(heroCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
         val loadingView = tv("Menyiapkan daftar lagu...", 13f, mute).apply {
@@ -2578,6 +2651,7 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         pillSearchSongs = tv("Lagu", 12f, if (!searchModeAlbum) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
             setPadding(dp(14), dp(6), dp(14), dp(6))
+            isSingleLine = true
             isFocusable = true
             isClickable = true
             background = GradientDrawable().apply {
@@ -2591,6 +2665,7 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         pillSearchAlbums = tv("Album", 12f, if (searchModeAlbum) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
             setPadding(dp(14), dp(6), dp(14), dp(6))
+            isSingleLine = true
             isFocusable = true
             isClickable = true
             background = GradientDrawable().apply {
@@ -2691,7 +2766,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // MINI PLAYER & FULL-SCREEN PLAYER BERGAYA SPOTIFY (IKON VEKTOR BERSIH)
+    // MINI PLAYER & FULL-SCREEN PLAYER RESPONSIF (TV & HP)
     // =========================================================================
     private fun buildSpotifyMiniPlayer(): LinearLayout {
         val wrapper = LinearLayout(this).apply {
@@ -2772,9 +2847,9 @@ class RadioMusicActivity : AppCompatActivity() {
         val btnMiniNext = miniVectorBtn(Glyph.NEXT) { MusicEngine.playNext(this) }
 
         contentRow.addView(btnMiniPrev)
-        contentRow.addView(miniBtnPlayPause, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(6) })
-        contentRow.addView(btnMiniStop, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(6) })
-        contentRow.addView(btnMiniNext, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(6) })
+        contentRow.addView(miniBtnPlayPause, LinearLayout.LayoutParams(dp(34), dp(34)).apply { leftMargin = dp(5) })
+        contentRow.addView(btnMiniStop, LinearLayout.LayoutParams(dp(34), dp(34)).apply { leftMargin = dp(5) })
+        contentRow.addView(btnMiniNext, LinearLayout.LayoutParams(dp(34), dp(34)).apply { leftMargin = dp(5) })
 
         wrapper.addView(contentRow)
         return wrapper
@@ -2797,9 +2872,9 @@ class RadioMusicActivity : AppCompatActivity() {
             else -> ivory
         }
         return ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+            layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
             scaleType = ImageView.ScaleType.CENTER
-            setImageDrawable(GlyphDrawable(glyph, baseFg, dp(16)))
+            setImageDrawable(GlyphDrawable(glyph, baseFg, dp(15)))
             isFocusable = true
             isClickable = true
             background = GradientDrawable().apply {
@@ -2811,7 +2886,7 @@ class RadioMusicActivity : AppCompatActivity() {
                     shape = GradientDrawable.OVAL
                     setColor(if (f) brassLight else baseBg)
                 }
-                setImageDrawable(GlyphDrawable(glyph, if (f) bgDark else baseFg, dp(16)))
+                setImageDrawable(GlyphDrawable(glyph, if (f) bgDark else baseFg, dp(15)))
             }
             setOnClickListener { onClick() }
         }
@@ -2887,7 +2962,7 @@ class RadioMusicActivity : AppCompatActivity() {
             isFocusable = false
         }
 
-        val artSize = dp(if (isPhone) 205 else 215)
+        val artSize = dp(if (isPhone) 200 else 215)
         val bigArtFrame = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(16).toFloat()
@@ -2903,7 +2978,7 @@ class RadioMusicActivity : AppCompatActivity() {
             bottomMargin = dp(16)
         })
 
-        fullNowTitle = tv("Belum ada lagu diputar", if (isPhone) 19.5f else 22f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+        fullNowTitle = tv("Belum ada lagu diputar", if (isPhone) 19f else 22f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
             gravity = Gravity.CENTER
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
@@ -3068,7 +3143,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
         page.addView(fullLyricsSection, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Seekbar & Kontrol Transport Melingkar Ala Spotify
+        // Seekbar & Kontrol Transport Responsif (Muat presisi di HP maupun TV)
         val bottomControls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, 0)
@@ -3117,26 +3192,32 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         bottomControls.addView(fullSeekBar, LinearLayout.LayoutParams(-1, -2))
 
+        val smallBtnDp = if (isPhone) 34 else 42
+        val medBtnDp = if (isPhone) 40 else 48
+        val bigBtnDp = if (isPhone) 54 else 60
+        val gapOuter = dp(if (isPhone) 8 else 12)
+        val gapInner = dp(if (isPhone) 10 else 14)
+
         val transportRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, dp(4))
         }
-        fullBtnShuffle = transportVectorBtn(Glyph.SHUFFLE, small = true) {
+        fullBtnShuffle = transportVectorBtn(Glyph.SHUFFLE, boxDp = smallBtnDp, iconDp = if (isPhone) 15 else 18) {
             MusicEngine.shuffleEnabled = !MusicEngine.shuffleEnabled
             syncAllPlayerViews()
             notice.show("Mode Acak", if (MusicEngine.shuffleEnabled) "Acak lagu aktif" else "Acak lagu nonaktif", 2000L)
         }
         fullBtnShuffle.setOnFocusChangeListener { _, f ->
-            styleTransportToggleBtn(fullBtnShuffle, Glyph.SHUFFLE, MusicEngine.shuffleEnabled, f)
+            styleTransportToggleBtn(fullBtnShuffle, Glyph.SHUFFLE, MusicEngine.shuffleEnabled, f, if (isPhone) 15 else 18)
         }
 
-        val btnPrev = transportVectorBtn(Glyph.PREV) { MusicEngine.playPrev(this) }
-        fullBtnPlayPause = transportVectorBtn(Glyph.PLAY, primary = true) { MusicEngine.togglePause() }
-        val btnStop = transportVectorBtn(Glyph.STOP, danger = true) { stopPlaybackCompletely() }
-        val btnNext = transportVectorBtn(Glyph.NEXT) { MusicEngine.playNext(this) }
+        val btnPrev = transportVectorBtn(Glyph.PREV, boxDp = medBtnDp, iconDp = if (isPhone) 18 else 21) { MusicEngine.playPrev(this) }
+        fullBtnPlayPause = transportVectorBtn(Glyph.PLAY, boxDp = bigBtnDp, iconDp = if (isPhone) 22 else 25, primary = true) { MusicEngine.togglePause() }
+        val btnStop = transportVectorBtn(Glyph.STOP, boxDp = medBtnDp, iconDp = if (isPhone) 17 else 20, danger = true) { stopPlaybackCompletely() }
+        val btnNext = transportVectorBtn(Glyph.NEXT, boxDp = medBtnDp, iconDp = if (isPhone) 18 else 21) { MusicEngine.playNext(this) }
 
-        fullBtnRepeat = transportVectorBtn(Glyph.REPEAT, small = true) {
+        fullBtnRepeat = transportVectorBtn(Glyph.REPEAT, boxDp = smallBtnDp, iconDp = if (isPhone) 15 else 18) {
             MusicEngine.repeatMode = (MusicEngine.repeatMode + 1) % 3
             syncAllPlayerViews()
             val msg = when (MusicEngine.repeatMode) {
@@ -3148,15 +3229,15 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         fullBtnRepeat.setOnFocusChangeListener { _, f ->
             val g = if (MusicEngine.repeatMode == 2) Glyph.REPEAT_ONE else Glyph.REPEAT
-            styleTransportToggleBtn(fullBtnRepeat, g, MusicEngine.repeatMode > 0, f)
+            styleTransportToggleBtn(fullBtnRepeat, g, MusicEngine.repeatMode > 0, f, if (isPhone) 15 else 18)
         }
 
         transportRow.addView(fullBtnShuffle)
-        transportRow.addView(btnPrev, LinearLayout.LayoutParams(dp(46), dp(46)).apply { leftMargin = dp(10) })
-        transportRow.addView(fullBtnPlayPause, LinearLayout.LayoutParams(dp(58), dp(58)).apply { leftMargin = dp(12) })
-        transportRow.addView(btnStop, LinearLayout.LayoutParams(dp(46), dp(46)).apply { leftMargin = dp(12) })
-        transportRow.addView(btnNext, LinearLayout.LayoutParams(dp(46), dp(46)).apply { leftMargin = dp(10) })
-        transportRow.addView(fullBtnRepeat, LinearLayout.LayoutParams(dp(40), dp(40)).apply { leftMargin = dp(10) })
+        transportRow.addView(btnPrev, LinearLayout.LayoutParams(dp(medBtnDp), dp(medBtnDp)).apply { leftMargin = gapOuter })
+        transportRow.addView(fullBtnPlayPause, LinearLayout.LayoutParams(dp(bigBtnDp), dp(bigBtnDp)).apply { leftMargin = gapInner })
+        transportRow.addView(btnStop, LinearLayout.LayoutParams(dp(medBtnDp), dp(medBtnDp)).apply { leftMargin = gapInner })
+        transportRow.addView(btnNext, LinearLayout.LayoutParams(dp(medBtnDp), dp(medBtnDp)).apply { leftMargin = gapOuter })
+        transportRow.addView(fullBtnRepeat, LinearLayout.LayoutParams(dp(smallBtnDp), dp(smallBtnDp)).apply { leftMargin = gapOuter })
         bottomControls.addView(transportRow)
 
         page.addView(bottomControls)
@@ -3165,13 +3246,12 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun transportVectorBtn(
         glyph: Glyph,
+        boxDp: Int,
+        iconDp: Int,
         primary: Boolean = false,
-        small: Boolean = false,
         danger: Boolean = false,
         onClick: () -> Unit
     ): ImageView {
-        val boxDp = if (primary) 58 else if (small) 40 else 46
-        val iconDp = if (primary) 24 else if (small) 17 else 20
         val baseBg = when {
             primary -> ivory
             danger -> 0x26E06C65
@@ -3263,9 +3343,9 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    private fun styleTransportToggleBtn(btn: ImageView, glyph: Glyph, active: Boolean, focused: Boolean) {
+    private fun styleTransportToggleBtn(btn: ImageView, glyph: Glyph, active: Boolean, focused: Boolean, iconDp: Int) {
         val fg = if (focused) bgDark else if (active) spotifyGreen else mute
-        btn.setImageDrawable(GlyphDrawable(glyph, fg, dp(17)))
+        btn.setImageDrawable(GlyphDrawable(glyph, fg, dp(iconDp)))
         btn.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(if (focused) brassLight else if (active) 0x261DB954 else 0x1AFFFFFF)
@@ -3342,7 +3422,9 @@ class RadioMusicActivity : AppCompatActivity() {
         val baseBg = if (primary) brassLight else surfaceElevated
         val baseFg = if (primary) bgDark else ivory
         return tv(label, 11.5f, baseFg, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setPadding(dp(11), dp(6), dp(11), dp(6))
+            isSingleLine = true
+            maxLines = 1
             gravity = Gravity.CENTER_VERTICAL
             if (leadingGlyph != null) {
                 setTextLeadingGlyph(this, leadingGlyph, baseFg, 13)
@@ -3783,8 +3865,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 listBox.addView(backRow)
 
                 val headerCard = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
+                    orientation = LinearLayout.VERTICAL
                     setPadding(dp(14), dp(14), dp(14), dp(14))
                     background = GradientDrawable(
                         GradientDrawable.Orientation.TOP_BOTTOM,
@@ -3792,6 +3873,10 @@ class RadioMusicActivity : AppCompatActivity() {
                     ).apply {
                         cornerRadius = dp(14).toFloat()
                     }
+                }
+                val topRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                 }
                 val artBox = FrameLayout(this).apply {
                     background = GradientDrawable().apply {
@@ -3803,7 +3888,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
                 SafeArtLoader.load(album.thumbUrl, img)
                 artBox.addView(img, FrameLayout.LayoutParams(-1, -1))
-                headerCard.addView(artBox, LinearLayout.LayoutParams(dp(76), dp(76)))
+                topRow.addView(artBox, LinearLayout.LayoutParams(dp(74), dp(74)))
 
                 val infoCol = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -3814,11 +3899,16 @@ class RadioMusicActivity : AppCompatActivity() {
                     ellipsize = TextUtils.TruncateAt.END
                 })
                 infoCol.addView(tv("${album.subtitle} · ${tracks.size} Lagu", 12f, mute).apply {
-                    setPadding(0, dp(3), 0, dp(10))
+                    setPadding(0, dp(3), 0, 0)
                 })
+                topRow.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
+                headerCard.addView(topRow)
 
-                val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 if (tracks.isNotEmpty()) {
+                    val btnRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        setPadding(0, dp(12), 0, 0)
+                    }
                     val btnPlayAlbum = actionPillBtn("Putar Semua", primary = true, leadingGlyph = Glyph.PLAY) {
                         MusicEngine.playTrack(this, tracks[0], tracks, 0)
                         openFullPlayer()
@@ -3828,9 +3918,8 @@ class RadioMusicActivity : AppCompatActivity() {
                     }
                     btnRow.addView(btnPlayAlbum)
                     btnRow.addView(btnSaveAlbum, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
+                    headerCard.addView(btnRow)
                 }
-                infoCol.addView(btnRow)
-                headerCard.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
                 listBox.addView(headerCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
                 if (tracks.isEmpty()) {
@@ -3948,6 +4037,7 @@ class RadioMusicActivity : AppCompatActivity() {
             val label = if (pl.isGoogleSynced && pl.tracks.isEmpty()) pl.name else "${pl.name} (${pl.tracks.size})"
             val chip = tv(label, 12f, if (isSel) bgDark else ivory, Typeface.DEFAULT_BOLD).apply {
                 setPadding(dp(13), dp(6), dp(13), dp(6))
+                isSingleLine = true
                 isFocusable = true
                 isClickable = true
                 background = GradientDrawable().apply {
@@ -4346,7 +4436,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // RENDER DAFTAR LAGU ALA SPOTIFY (THUMBNAIL COVER + NOMOR + TOMBOL + RINGKAS)
+    // RENDER DAFTAR LAGU ALA SPOTIFY
     // =========================================================================
     private fun renderTrackList(
         items: List<Track>,
@@ -4398,7 +4488,6 @@ class RadioMusicActivity : AppCompatActivity() {
                 viewToRefocus = playArea
             }
 
-            // Nomor urut lagu bergaya Spotify
             val indexLabel = tv(
                 if (isPlayingThis) "▶" else "${index + 1}",
                 12f,
@@ -4409,7 +4498,6 @@ class RadioMusicActivity : AppCompatActivity() {
             }
             playArea.addView(indexLabel, LinearLayout.LayoutParams(dp(24), -2).apply { rightMargin = dp(6) })
 
-            // Cover Album Persegi (44dp x 44dp)
             val artFrame = FrameLayout(this).apply {
                 background = GradientDrawable().apply {
                     cornerRadius = dp(6).toFloat()
@@ -4527,24 +4615,27 @@ class RadioMusicActivity : AppCompatActivity() {
         val t = MusicEngine.currentTrack
         val st = MusicEngine.state
         val isActive = (st == PlayState.PLAYING || st == PlayState.BUFFERING)
+        val isPhone = isPortraitPhone()
+        val bigIconDp = if (isPhone) 22 else 25
+        val smallIconDp = if (isPhone) 15 else 18
 
         if (t == null) {
             miniPlayerBar.visibility = View.GONE
             fullNowTitle.text = "Belum ada lagu diputar"
             fullNowArtist.text = "Pilih lagu atau album"
-            miniBtnPlayPause.setImageDrawable(GlyphDrawable(Glyph.PLAY, if (miniBtnPlayPause.hasFocus()) bgDark else bgDark, dp(16)))
-            fullBtnPlayPause.setImageDrawable(GlyphDrawable(Glyph.PLAY, bgDark, dp(24)))
+            miniBtnPlayPause.setImageDrawable(GlyphDrawable(Glyph.PLAY, bgDark, dp(15)))
+            fullBtnPlayPause.setImageDrawable(GlyphDrawable(Glyph.PLAY, bgDark, dp(bigIconDp)))
         } else {
             miniPlayerBar.visibility = View.VISIBLE
             miniTitle.text = t.title
             miniSubtitle.text = "${t.artist} · ${MusicEngine.statusDetail}"
             SafeArtLoader.load(t.thumbUrl, miniArtView)
-            miniBtnPlayPause.setImageDrawable(GlyphDrawable(if (isActive) Glyph.PAUSE else Glyph.PLAY, bgDark, dp(16)))
+            miniBtnPlayPause.setImageDrawable(GlyphDrawable(if (isActive) Glyph.PAUSE else Glyph.PLAY, bgDark, dp(15)))
 
             fullNowTitle.text = t.title
             fullNowArtist.text = t.artist
             SafeArtLoader.load(t.thumbUrl, fullArtView)
-            fullBtnPlayPause.setImageDrawable(GlyphDrawable(if (isActive) Glyph.PAUSE else Glyph.PLAY, bgDark, dp(24)))
+            fullBtnPlayPause.setImageDrawable(GlyphDrawable(if (isActive) Glyph.PAUSE else Glyph.PLAY, bgDark, dp(bigIconDp)))
 
             lyricMiniTitle.text = t.title
             lyricMiniSub.text = "${t.artist} · ${MusicEngine.statusDetail}"
@@ -4580,9 +4671,9 @@ class RadioMusicActivity : AppCompatActivity() {
             fullCoverSection.visibility = View.VISIBLE
         }
 
-        styleTransportToggleBtn(fullBtnShuffle, Glyph.SHUFFLE, MusicEngine.shuffleEnabled, fullBtnShuffle.hasFocus())
+        styleTransportToggleBtn(fullBtnShuffle, Glyph.SHUFFLE, MusicEngine.shuffleEnabled, fullBtnShuffle.hasFocus(), smallIconDp)
         val repGlyph = if (MusicEngine.repeatMode == 2) Glyph.REPEAT_ONE else Glyph.REPEAT
-        styleTransportToggleBtn(fullBtnRepeat, repGlyph, MusicEngine.repeatMode > 0, fullBtnRepeat.hasFocus())
+        styleTransportToggleBtn(fullBtnRepeat, repGlyph, MusicEngine.repeatMode > 0, fullBtnRepeat.hasFocus(), smallIconDp)
 
         val isBusy = (st == PlayState.RESOLVING || st == PlayState.BUFFERING)
         fullSpinner.visibility = if (isBusy) View.VISIBLE else View.GONE
