@@ -106,6 +106,10 @@
             android:screenOrientation="landscape" />
 
         <activity
+            android:name=".GameActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".PanduanActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
