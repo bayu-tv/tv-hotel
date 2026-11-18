@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -92,9 +93,13 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var bgView: ImageView
     private lateinit var glow: View
     private lateinit var glowAnim: ValueAnimator
+
     private var locSig = ""
     private var isPhoneLayout = false
+    private var currentTvTheme = "classic"
+    private var useBentoLayout = false
     private var firstTile: View? = null
+
     private val cells = ArrayList<Pair<TextView, TextView>>()
     private val times = IntArray(5) { -1 }
     private val prayNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
@@ -151,19 +156,19 @@ class HomeActivity : AppCompatActivity() {
         return g
     }
 
-    private fun tile(
+    // Kartu klasik TV (7 tombol sejajar)
+    private fun classicTile(
         label: String,
         res: Int,
         customIcon: ((Int) -> Drawable)? = null,
         action: () -> Unit
     ): LinearLayout {
         val t = LinearLayout(this)
-        t.orientation = if (isPhoneLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        t.orientation = LinearLayout.VERTICAL
         t.gravity = Gravity.CENTER
-        if (isPhoneLayout) t.setPadding(dp(14), dp(12), dp(14), dp(12))
 
         val ic = ImageView(this).apply {
-            val sz = dp(if (isPhoneLayout) 28 else 36)
+            val sz = dp(36)
             layoutParams = LinearLayout.LayoutParams(sz, sz)
             if (customIcon != null) {
                 setImageDrawable(customIcon(mute))
@@ -174,22 +179,13 @@ class HomeActivity : AppCompatActivity() {
         }
         t.addView(ic)
 
-        val tx = tv(label, if (isPhoneLayout) 14.5f else 15.5f, mute, Typeface.SERIF).apply {
-            if (isPhoneLayout) {
-                setPadding(dp(12), 0, 0, 0)
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            } else {
-                setPadding(dp(4), dp(9), dp(4), 0)
-                gravity = Gravity.CENTER_HORIZONTAL
-            }
+        val tx = tv(label, 15.5f, mute, Typeface.SERIF).apply {
+            setPadding(dp(4), dp(9), dp(4), 0)
+            gravity = Gravity.CENTER_HORIZONTAL
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
-        if (isPhoneLayout) {
-            t.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
-        } else {
-            t.addView(tx)
-        }
+        t.addView(tx)
 
         t.isFocusable = true
         t.isClickable = true
@@ -205,21 +201,176 @@ class HomeActivity : AppCompatActivity() {
             }
             tx.setTextColor(c)
             val s = if (f) 1.04f else 1f
-            t.animate().scaleX(s).scaleY(s).translationY(if (f && !isPhoneLayout) -dp(4).toFloat() else 0f).setDuration(200).start()
+            t.animate().scaleX(s).scaleY(s).translationY(if (f) -dp(4).toFloat() else 0f).setDuration(200).start()
             if (f) ObjectAnimator.ofFloat(ic, "rotation", 0f, -8f, 8f, -4f, 0f).setDuration(650).start()
         }
 
-        if (isPhoneLayout) {
-            val lp = LinearLayout.LayoutParams(0, dp(64), 1f)
-            lp.setMargins(dp(5), dp(5), dp(5), dp(5))
-            t.layoutParams = lp
-        } else {
-            val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
-            lp.setMargins(dp(5), 0, dp(5), 0)
-            t.layoutParams = lp
-        }
+        val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
+        lp.setMargins(dp(5), 0, dp(5), 0)
+        t.layoutParams = lp
         if (firstTile == null) firstTile = t
         return t
+    }
+
+    // Kartu utama Bento 2x2 (Smartphone & TV Bento)
+    private fun bentoMainCard(
+        title: String,
+        subtitle: String,
+        res: Int,
+        tintColor: Int,
+        highlightedBorder: Boolean = false,
+        badgeText: String? = null,
+        customIcon: ((Int) -> Drawable)? = null,
+        onLongClick: (() -> Unit)? = null,
+        action: () -> Unit
+    ): LinearLayout {
+        fun makeBg(focused: Boolean): GradientDrawable {
+            val topCol = if (focused) {
+                (tintColor and 0x00FFFFFF) or 0x55000000
+            } else {
+                (tintColor and 0x00FFFFFF) or 0x2E000000
+            }
+            return GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(topCol, 0xFF151519.toInt())
+            ).apply {
+                cornerRadius = dp(16).toFloat()
+                when {
+                    focused -> setStroke(dp(2), Color.WHITE)
+                    highlightedBorder -> setStroke(dp(1), brass)
+                    else -> setStroke(dp(1), 0x28FFFFFF)
+                }
+            }
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(15), dp(13), dp(15), dp(13))
+            isFocusable = true
+            isClickable = true
+            background = makeBg(false)
+        }
+
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val ic = ImageView(this).apply {
+            val sz = dp(if (isPhoneLayout) 28 else 32)
+            layoutParams = LinearLayout.LayoutParams(sz, sz)
+            if (customIcon != null) {
+                setImageDrawable(customIcon(brassLight))
+            } else {
+                setImageResource(res)
+                setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+            }
+        }
+        topRow.addView(ic)
+        topRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+
+        if (badgeText != null) {
+            val badge = tv(badgeText, 9.5f, Color.WHITE, Typeface.DEFAULT_BOLD).apply {
+                letterSpacing = 0.08f
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(6).toFloat()
+                    setColor(0xFFD32F2F.toInt())
+                }
+            }
+            topRow.addView(badge)
+        }
+        card.addView(topRow, LinearLayout.LayoutParams(-1, -2))
+        card.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val titleTv = tv(
+            title,
+            if (isPhoneLayout) 16.5f else 18f,
+            Color.WHITE,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        val subTv = tv(
+            subtitle,
+            if (isPhoneLayout) 11.5f else 12.5f,
+            mute,
+            Typeface.SANS_SERIF
+        ).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(2), 0, 0)
+        }
+        card.addView(titleTv)
+        card.addView(subTv)
+
+        card.setOnClickListener { action() }
+        if (onLongClick != null) {
+            card.setOnLongClickListener {
+                onLongClick()
+                true
+            }
+        }
+        card.setOnFocusChangeListener { _, f ->
+            card.background = makeBg(f)
+            val iconCol = if (f) Color.WHITE else brassLight
+            if (customIcon != null) {
+                ic.setImageDrawable(customIcon(iconCol))
+            } else {
+                ic.setColorFilter(iconCol, PorterDuff.Mode.SRC_IN)
+            }
+            if (!isPhoneLayout) {
+                val s = if (f) 1.025f else 1f
+                card.animate().scaleX(s).scaleY(s).setDuration(180).start()
+            }
+        }
+
+        if (firstTile == null) firstTile = card
+        return card
+    }
+
+    // Kartu utilitas sejajar 1x3 (Pindai Sinyal · Panduan · Pengaturan)
+    private fun bentoUtilityCard(label: String, res: Int, action: () -> Unit): LinearLayout {
+        fun makeBg(focused: Boolean): GradientDrawable {
+            return GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(if (focused) ((brass and 0x00FFFFFF) or 0x36000000) else 0xFF17171B.toInt())
+                setStroke(dp(if (focused) 2 else 1), if (focused) Color.WHITE else 0x26FFFFFF)
+            }
+        }
+
+        val btn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(10), dp(6), dp(10))
+            isFocusable = true
+            isClickable = true
+            background = makeBg(false)
+        }
+
+        val ic = ImageView(this).apply {
+            val sz = dp(if (isPhoneLayout) 22 else 25)
+            layoutParams = LinearLayout.LayoutParams(sz, sz)
+            setImageResource(res)
+            setColorFilter(brassLight, PorterDuff.Mode.SRC_IN)
+        }
+        val tx = tv(label, if (isPhoneLayout) 12f else 13f, ivory, Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(6), 0, 0)
+        }
+        btn.addView(ic)
+        btn.addView(tx)
+
+        btn.setOnClickListener { action() }
+        btn.setOnFocusChangeListener { _, f ->
+            btn.background = makeBg(f)
+            val c = if (f) Color.WHITE else brassLight
+            ic.setColorFilter(c, PorterDuff.Mode.SRC_IN)
+            tx.setTextColor(if (f) Color.WHITE else ivory)
+        }
+        return btn
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -228,14 +379,20 @@ class HomeActivity : AppCompatActivity() {
 
         isPhoneLayout = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
+        currentTvTheme = prefs.getString("tv_home_theme", "classic") ?: "classic"
+        useBentoLayout = isPhoneLayout || (currentTvTheme == "bento")
 
         skin = Themes.pick(this)
         brass = skin.accent
         brassLight = skin.accentLight
+
         val root = FrameLayout(this)
-        root.setBackgroundColor(skin.bg)
+        val baseBgColor = if (useBentoLayout && skin.id == "default") 0xFF0D0D0F.toInt() else skin.bg
+        root.setBackgroundColor(baseBgColor)
+
         bgView = ImageView(this)
         root.addView(bgView, FrameLayout.LayoutParams(-1, -1))
+
         glow = View(this)
         val gd = GradientDrawable()
         gd.shape = GradientDrawable.OVAL
@@ -259,225 +416,15 @@ class HomeActivity : AppCompatActivity() {
         decoLayer = FrameLayout(this)
         root.addView(decoLayer, FrameLayout.LayoutParams(-1, -1))
 
-        val col = LinearLayout(this)
-        col.orientation = LinearLayout.VERTICAL
-        col.clipChildren = false
-        if (isPhoneLayout) {
-            col.setPadding(dp(20), dp(22), dp(20), dp(24))
-        } else {
-            col.setPadding(dp(44), dp(28), dp(44), dp(18))
-        }
-
-        // Baris atas: sapaan dan jam
-        val top = LinearLayout(this)
-        top.orientation = LinearLayout.HORIZONTAL
-        val left = LinearLayout(this)
-        left.orientation = LinearLayout.VERTICAL
-        tvWelcome = tv("SELAMAT DATANG", if (isPhoneLayout) 11f else 13f, brass, Typeface.SANS_SERIF)
-        tvWelcome.letterSpacing = 0.22f
-        tvGreet = tv("", if (isPhoneLayout) 22f else 34f, ivory, Typeface.SERIF)
-        tvName = tv(
-            prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda",
-            if (isPhoneLayout) 22f else 34f,
-            brass,
-            Typeface.create(Typeface.SERIF, Typeface.ITALIC)
-        )
-        val brand = LinearLayout(this)
-        brand.gravity = Gravity.CENTER_VERTICAL
-        val logo = ImageView(this)
-        logo.setImageResource(R.drawable.ic_bbox_mark)
-        val logoSz = dp(if (isPhoneLayout) 24 else 32)
-        brand.addView(logo, LinearLayout.LayoutParams(logoSz, logoSz))
-        tvWelcome.setPadding(dp(8), 0, 0, 0)
-        brand.addView(tvWelcome)
-        left.addView(brand)
-        left.addView(tvGreet)
-        left.addView(tvName)
-
-        val right = LinearLayout(this)
-        right.orientation = LinearLayout.VERTICAL
-        right.gravity = Gravity.END
-        tvClock = tv("", if (isPhoneLayout) 36f else 52f, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
-        tvDate = tv("", if (isPhoneLayout) 12.5f else 15f, mute, Typeface.SANS_SERIF)
-        tvHijri = tv("", if (isPhoneLayout) 12.5f else 15f, mute, Typeface.SANS_SERIF)
-        tvClock.gravity = Gravity.END
-        tvDate.gravity = Gravity.END
-        tvHijri.gravity = Gravity.END
-        right.addView(tvClock)
-        right.addView(tvDate)
-        right.addView(tvHijri)
-        top.addView(left, LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(right, LinearLayout.LayoutParams(-2, -2))
-        col.addView(top, LinearLayout.LayoutParams(-1, -2))
-
-        val line = View(this)
-        line.setBackgroundColor(0xFF34302A.toInt())
-        val llp = LinearLayout.LayoutParams(-1, dp(1))
-        llp.topMargin = dp(12)
-        col.addView(line, llp)
-
-        // Cuaca
-        val wxOuter = LinearLayout(this)
-        wxOuter.orientation = if (isPhoneLayout) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        wxOuter.gravity = if (isPhoneLayout) Gravity.START else Gravity.CENTER_VERTICAL
-
-        val wxMainRow = LinearLayout(this)
-        wxMainRow.gravity = Gravity.CENTER_VERTICAL
-        wxIcon = icon(R.drawable.ic_cloud_sun, if (isPhoneLayout) 42 else 54, brassLight)
-        wxMainRow.addView(wxIcon)
-        val wt = LinearLayout(this)
-        wt.orientation = LinearLayout.VERTICAL
-        wt.setPadding(dp(14), 0, 0, 0)
-        tvWx1 = tv("Memuat cuaca...", if (isPhoneLayout) 15f else 18f, ivory, Typeface.SANS_SERIF)
-        val row2 = LinearLayout(this)
-        row2.gravity = Gravity.CENTER_VERTICAL
-        row2.addView(icon(R.drawable.ic_wind, 16, mute))
-        tvWx2 = tv("", if (isPhoneLayout) 13f else 15f, mute, Typeface.SANS_SERIF)
-        tvWx2.setPadding(dp(6), 0, 0, 0)
-        row2.addView(tvWx2)
-        wt.addView(tvWx1)
-        wt.addView(row2)
-        wxMainRow.addView(wt, LinearLayout.LayoutParams(0, -2, 1f))
-
-        fc = LinearLayout(this)
-        if (isPhoneLayout) {
-            wxOuter.addView(wxMainRow, LinearLayout.LayoutParams(-1, -2))
-            val fclp = LinearLayout.LayoutParams(-1, -2)
-            fclp.topMargin = dp(8)
-            wxOuter.addView(fc, fclp)
-        } else {
-            wxOuter.addView(wxMainRow, LinearLayout.LayoutParams(0, -2, 1f))
-            wxOuter.addView(fc)
-        }
-        val wlp = LinearLayout.LayoutParams(-1, -2)
-        wlp.topMargin = dp(12)
-        col.addView(wxOuter, wlp)
-
-        // Kartu Pengingat / Catatan Keluarga
-        noteBox = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor((brass and 0x00FFFFFF) or 0x1A000000)
-                setStroke(dp(1), (brass and 0x00FFFFFF) or 0x44000000)
-            }
-            visibility = View.GONE
-        }
-        noteBox.addView(icon(R.drawable.ic_book, 18, brassLight))
-        val noteTag = tv("CATATAN  ·  ", 12f, brassLight, Typeface.SANS_SERIF).apply {
-            letterSpacing = 0.08f
-            setPadding(dp(10), 0, 0, 0)
-        }
-        noteBox.addView(noteTag)
-        tvFamilyNote = tv("", 14f, ivory, Typeface.SANS_SERIF).apply {
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        noteBox.addView(tvFamilyNote, LinearLayout.LayoutParams(0, -2, 1f))
-        val nlp = LinearLayout.LayoutParams(-1, -2)
-        nlp.topMargin = dp(10)
-        col.addView(noteBox, nlp)
-
-        if (!isPhoneLayout) {
-            col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.1f))
-        }
-
-        // Menu Utama (7 Fitur termasuk Musik & Radio)
-        val tTv = tile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) }
-        val tMusic = tile("Musik & Radio", 0, customIcon = { c -> musicIconDrawable(c) }) {
-            startActivity(Intent(this, RadioMusicActivity::class.java))
-        }
-        val tAntenna = tile("TV Antena", R.drawable.ic_antenna) {
-            if (!launchSaved()) chooseAntennaApp()
-        }
-        tAntenna.setOnLongClickListener {
-            openAntennaMenu()
-            true
-        }
-        val tFilm = tile("Film", R.drawable.ic_film) {
-            if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
-            else startActivity(Intent(this, FilmActivity::class.java))
-        }
-        val tPanduan = tile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
-        val tScan = tile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) }
-        val tSettings = tile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) }
-
-        tiles = LinearLayout(this)
-        tiles.clipChildren = false
-        tiles.clipToPadding = false
-        if (isPhoneLayout) {
-            tiles.orientation = LinearLayout.VERTICAL
-            tiles.setPadding(0, dp(14), 0, dp(14))
-            val allTiles = listOf(tMusic, tTv, tFilm, tAntenna, tPanduan, tScan, tSettings)
-            var idx = 0
-            while (idx < allTiles.size) {
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                row.addView(allTiles[idx])
-                if (idx + 1 < allTiles.size) {
-                    row.addView(allTiles[idx + 1])
-                } else {
-                    val spacer = View(this)
-                    val slp = LinearLayout.LayoutParams(0, dp(64), 1f)
-                    slp.setMargins(dp(5), dp(5), dp(5), dp(5))
-                    row.addView(spacer, slp)
-                }
-                tiles.addView(row, LinearLayout.LayoutParams(-1, -2))
-                idx += 2
-            }
-        } else {
-            tiles.orientation = LinearLayout.HORIZONTAL
-            tiles.gravity = Gravity.CENTER
-            tiles.setPadding(0, dp(12), 0, dp(12))
-            tiles.addView(tTv)
-            tiles.addView(tMusic)
-            tiles.addView(tAntenna)
-            tiles.addView(tFilm)
-            tiles.addView(tPanduan)
-            tiles.addView(tScan)
-            tiles.addView(tSettings)
-        }
-        col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
-
-        if (!isPhoneLayout) {
-            col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
-        }
-
-        // Jadwal sholat
-        val pray = LinearLayout(this)
-        pray.background = box(false)
-        pray.setPadding(dp(6), dp(8), dp(6), dp(8))
-        for (i in 0..4) {
-            val c = LinearLayout(this)
-            c.orientation = LinearLayout.VERTICAL
-            c.gravity = Gravity.CENTER
-            val n = tv(prayNames[i], if (isPhoneLayout) 12f else 14f, mute, Typeface.SANS_SERIF)
-            val t = tv("--:--", if (isPhoneLayout) 17f else 22f, ivory, Typeface.SERIF)
-            n.gravity = Gravity.CENTER_HORIZONTAL
-            t.gravity = Gravity.CENTER_HORIZONTAL
-            c.addView(n)
-            c.addView(t)
-            cells.add(Pair(n, t))
-            pray.addView(c, LinearLayout.LayoutParams(0, -2, 1f))
-        }
-        val prayLp = LinearLayout.LayoutParams(-1, -2)
-        if (isPhoneLayout) prayLp.topMargin = dp(6)
-        col.addView(pray, prayLp)
-
-        tvCd = tv("", if (isPhoneLayout) 13f else 15f, mute, Typeface.SANS_SERIF)
-        tvCd.setPadding(dp(6), dp(8), 0, 0)
-        col.addView(tvCd)
-        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF)
-        tvNote.setPadding(dp(6), dp(4), 0, 0)
-        col.addView(tvNote)
+        // Bangun komponen header & informasi
+        buildSharedHeaderAndInfoViews()
 
         if (isPhoneLayout) {
-            val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
-            scroll.addView(col, ViewGroup.LayoutParams(-1, -2))
-            root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+            buildPhoneBentoScreen(root)
+        } else if (useBentoLayout) {
+            buildTvBentoScreen(root)
         } else {
-            root.addView(col, FrameLayout.LayoutParams(-1, -1))
+            buildTvClassicScreen(root)
         }
 
         notice = Notice(this, root)
@@ -491,6 +438,444 @@ class HomeActivity : AppCompatActivity() {
         ui.post(tick)
         Thread { checkUpdate() }.start()
         checkWorkflow()
+    }
+
+    private fun buildSharedHeaderAndInfoViews() {
+        tvWelcome = tv("SELAMAT DATANG", if (isPhoneLayout) 10.5f else 12.5f, brass, Typeface.SANS_SERIF).apply {
+            letterSpacing = 0.22f
+            setPadding(dp(8), 0, 0, 0)
+        }
+        val greetSp = if (isPhoneLayout) 22f else if (useBentoLayout) 28f else 34f
+        tvGreet = tv("", greetSp, ivory, Typeface.SERIF)
+        tvName = tv(
+            prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda",
+            greetSp,
+            brass,
+            Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+        )
+
+        val clockSp = if (isPhoneLayout) 36f else if (useBentoLayout) 46f else 52f
+        val dateSp = if (isPhoneLayout) 12f else 14f
+        tvClock = tv("", clockSp, ivory, Typeface.create("sans-serif-light", Typeface.NORMAL))
+        tvDate = tv("", dateSp, mute, Typeface.SANS_SERIF)
+        tvHijri = tv("", dateSp, mute, Typeface.SANS_SERIF)
+
+        wxIcon = icon(R.drawable.ic_cloud_sun, if (isPhoneLayout) 34 else if (useBentoLayout) 42 else 54, brassLight)
+        tvWx1 = tv("Memuat cuaca...", if (isPhoneLayout) 14.5f else if (useBentoLayout) 16f else 18f, ivory, Typeface.SANS_SERIF)
+        tvWx2 = tv("", if (isPhoneLayout) 12.5f else if (useBentoLayout) 13.5f else 15f, mute, Typeface.SANS_SERIF)
+        fc = LinearLayout(this)
+
+        noteBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor((brass and 0x00FFFFFF) or 0x1A000000)
+                setStroke(dp(1), (brass and 0x00FFFFFF) or 0x44000000)
+            }
+            visibility = View.GONE
+        }
+        noteBox.addView(icon(R.drawable.ic_book, 16, brassLight))
+        noteBox.addView(
+            tv("CATATAN · ", 11f, brassLight, Typeface.SANS_SERIF).apply {
+                letterSpacing = 0.08f
+                setPadding(dp(8), 0, 0, 0)
+            }
+        )
+        tvFamilyNote = tv("", 13f, ivory, Typeface.SANS_SERIF).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        noteBox.addView(tvFamilyNote, LinearLayout.LayoutParams(0, -2, 1f))
+    }
+
+    private fun buildBrandBadge(): LinearLayout {
+        return LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            val logo = ImageView(this@HomeActivity).apply {
+                setImageResource(R.drawable.ic_bbox_mark)
+            }
+            val logoSz = dp(if (isPhoneLayout) 24 else 30)
+            addView(logo, LinearLayout.LayoutParams(logoSz, logoSz))
+            addView(tvWelcome)
+        }
+    }
+
+    private fun buildPrayerDock(): LinearLayout {
+        cells.clear()
+        val pray = LinearLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(if (useBentoLayout) 0xFF151519.toInt() else 0x14FFFFFF)
+                setStroke(dp(1), 0x26FFFFFF)
+            }
+            setPadding(dp(6), dp(8), dp(6), dp(8))
+        }
+        for (i in 0..4) {
+            val c = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+            }
+            val n = tv(prayNames[i], if (isPhoneLayout) 11.5f else if (useBentoLayout) 12f else 14f, mute, Typeface.SANS_SERIF).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            val t = tv("--:--", if (isPhoneLayout) 16.5f else if (useBentoLayout) 17.5f else 22f, ivory, Typeface.SERIF).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            c.addView(n)
+            c.addView(t)
+            cells.add(Pair(n, t))
+            pray.addView(c, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        return pray
+    }
+
+    private fun buildBentoMenuColumn(): LinearLayout {
+        val cardTv = bentoMainCard(
+            title = "TV Live",
+            subtitle = "Siaran Streaming",
+            res = R.drawable.ic_tv,
+            tintColor = 0xFFB8975A.toInt(),
+            highlightedBorder = true,
+            badgeText = "LIVE"
+        ) { startActivity(Intent(this, MainActivity::class.java)) }
+
+        val cardFilm = bentoMainCard(
+            title = "Film",
+            subtitle = "Bioskop & Serial",
+            res = R.drawable.ic_film,
+            tintColor = 0xFF7A2828.toInt()
+        ) {
+            if (Lock.isLocked(this, "film")) {
+                Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
+            } else {
+                startActivity(Intent(this, FilmActivity::class.java))
+            }
+        }
+
+        val cardMusic = bentoMainCard(
+            title = "Musik & Radio",
+            subtitle = "Lagu, Karaoke & Radio",
+            res = 0,
+            tintColor = 0xFF235C42.toInt(),
+            customIcon = { c -> musicIconDrawable(c) }
+        ) { startActivity(Intent(this, RadioMusicActivity::class.java)) }
+
+        val cardAntenna = bentoMainCard(
+            title = "TV Antena",
+            subtitle = "Siaran Digital DVB-T2",
+            res = R.drawable.ic_antenna,
+            tintColor = 0xFF8F7443.toInt(),
+            highlightedBorder = true,
+            onLongClick = { openAntennaMenu() }
+        ) { if (!launchSaved()) chooseAntennaApp() }
+
+        val btnScan = bentoUtilityCard("Pindai Sinyal", R.drawable.ic_scan) {
+            startActivity(Intent(this, ScanActivity::class.java))
+        }
+        val btnPanduan = bentoUtilityCard("Panduan", R.drawable.ic_book) {
+            startActivity(Intent(this, PanduanActivity::class.java))
+        }
+        val btnSettings = bentoUtilityCard("Pengaturan", R.drawable.ic_phone) {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        val menuCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        val cardH = if (isPhoneLayout) dp(112) else 0
+        val rowWeight = if (isPhoneLayout) 0f else 1f
+
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+        }
+        row1.addView(cardTv, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = dp(6) })
+        row1.addView(cardFilm, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = dp(6) })
+        menuCol.addView(row1, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(10) })
+
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+        }
+        row2.addView(cardMusic, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { rightMargin = dp(6) })
+        row2.addView(cardAntenna, LinearLayout.LayoutParams(0, if (isPhoneLayout) cardH else -1, 1f).apply { leftMargin = dp(6) })
+        menuCol.addView(row2, LinearLayout.LayoutParams(-1, if (isPhoneLayout) -2 else 0, rowWeight).apply { bottomMargin = dp(10) })
+
+        val utilH = dp(if (isPhoneLayout) 66 else 74)
+        val row3 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+        }
+        row3.addView(btnScan, LinearLayout.LayoutParams(0, utilH, 1f).apply { rightMargin = dp(5) })
+        row3.addView(btnPanduan, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5); rightMargin = dp(5) })
+        row3.addView(btnSettings, LinearLayout.LayoutParams(0, utilH, 1f).apply { leftMargin = dp(5) })
+        menuCol.addView(row3, LinearLayout.LayoutParams(-1, -2))
+
+        tiles = menuCol
+        return menuCol
+    }
+
+    // 1. TAMPILAN SMARTPHONE (PORTRAIT · BENTO 2x2 + 1x3)
+    private fun buildPhoneBentoScreen(root: FrameLayout) {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            setPadding(dp(18), dp(18), dp(18), dp(22))
+        }
+
+        // Baris atas: Sapaan kiri + Jam kanan
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        left.addView(buildBrandBadge())
+        left.addView(tvGreet)
+        left.addView(tvName)
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+        }
+        tvClock.gravity = Gravity.END
+        tvDate.gravity = Gravity.END
+        tvHijri.gravity = Gravity.END
+        right.addView(tvClock)
+        right.addView(tvDate)
+        right.addView(tvHijri)
+
+        top.addView(left, LinearLayout.LayoutParams(0, -2, 1f))
+        top.addView(right, LinearLayout.LayoutParams(-2, -2))
+        col.addView(top, LinearLayout.LayoutParams(-1, -2))
+
+        val line = View(this).apply { setBackgroundColor(0xFF26262C.toInt()) }
+        col.addView(line, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(10) })
+
+        // Bar Cuaca Ringkas 2 Baris Rapi (Tanpa kata terpotong)
+        val wxBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(4))
+        }
+        val wxRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        wxRow1.addView(wxIcon)
+        val wxTextCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), 0, 0, 0)
+        }
+        wxTextCol.addView(tvWx1)
+        wxTextCol.addView(tvWx2)
+        wxRow1.addView(wxTextCol, LinearLayout.LayoutParams(0, -2, 1f))
+        wxBlock.addView(wxRow1)
+
+        fc.orientation = LinearLayout.HORIZONTAL
+        fc.gravity = Gravity.END
+        wxBlock.addView(fc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        col.addView(wxBlock)
+
+        col.addView(noteBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+        val bentoMenu = buildBentoMenuColumn()
+        col.addView(bentoMenu, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(10)
+            bottomMargin = dp(12)
+        })
+
+        // Dock Jadwal Sholat
+        val pray = buildPrayerDock()
+        col.addView(pray, LinearLayout.LayoutParams(-1, -2))
+
+        tvCd = tv("", 13f, brassLight, Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(8), 0, 0)
+        }
+        col.addView(tvCd)
+
+        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 10.5f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(3), 0, 0)
+        }
+        col.addView(tvNote)
+
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll.addView(col, ViewGroup.LayoutParams(-1, -2))
+        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    // 2. TAMPILAN TV BENTO (LANDSCAPE · 2 KOLOM MODERN)
+    private fun buildTvBentoScreen(root: FrameLayout) {
+        val mainRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            setPadding(dp(38), dp(26), dp(38), dp(24))
+        }
+
+        // Kolom Kiri: Info & Jadwal Sholat
+        val infoCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, dp(26), 0)
+        }
+        infoCol.addView(buildBrandBadge())
+        infoCol.addView(tvGreet)
+        infoCol.addView(tvName)
+
+        tvClock.gravity = Gravity.START
+        tvDate.gravity = Gravity.START
+        tvHijri.gravity = Gravity.START
+        infoCol.addView(tvClock, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        infoCol.addView(tvDate)
+        infoCol.addView(tvHijri)
+
+        val wxRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        wxRow.addView(wxIcon)
+        val wt = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+        }
+        wt.addView(tvWx1)
+        wt.addView(tvWx2)
+        wxRow.addView(wt, LinearLayout.LayoutParams(0, -2, 1f))
+        infoCol.addView(wxRow)
+
+        fc.orientation = LinearLayout.HORIZONTAL
+        infoCol.addView(fc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        infoCol.addView(noteBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        infoCol.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val pray = buildPrayerDock()
+        infoCol.addView(pray, LinearLayout.LayoutParams(-1, -2))
+
+        tvCd = tv("", 13f, brassLight, Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        infoCol.addView(tvCd)
+        tvNote = tv("Cuaca: Open-Meteo · Kualitas udara: CAMS · Jadwal sholat Kemenag RI.", 10.5f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(2), 0, 0)
+        }
+        infoCol.addView(tvNote)
+
+        // Kolom Kanan: Kartu Bento 2x2 + 1x3
+        val menuCol = buildBentoMenuColumn()
+
+        mainRow.addView(infoCol, LinearLayout.LayoutParams(0, -1, 0.88f))
+        mainRow.addView(menuCol, LinearLayout.LayoutParams(0, -1, 1.12f))
+        root.addView(mainRow, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    // 3. TAMPILAN TV KLASIK B-BOX (7 TOMBOL SEJAJAR BAWAAN)
+    private fun buildTvClassicScreen(root: FrameLayout) {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            setPadding(dp(44), dp(28), dp(44), dp(18))
+        }
+
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        left.addView(buildBrandBadge())
+        left.addView(tvGreet)
+        left.addView(tvName)
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+        }
+        tvClock.gravity = Gravity.END
+        tvDate.gravity = Gravity.END
+        tvHijri.gravity = Gravity.END
+        right.addView(tvClock)
+        right.addView(tvDate)
+        right.addView(tvHijri)
+        top.addView(left, LinearLayout.LayoutParams(0, -2, 1f))
+        top.addView(right, LinearLayout.LayoutParams(-2, -2))
+        col.addView(top, LinearLayout.LayoutParams(-1, -2))
+
+        val line = View(this).apply { setBackgroundColor(0xFF34302A.toInt()) }
+        col.addView(line, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(12) })
+
+        val wxOuter = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val wxMainRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        wxMainRow.addView(wxIcon)
+        val wt = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, 0, 0)
+        }
+        wt.addView(tvWx1)
+        val row2 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        row2.addView(icon(R.drawable.ic_wind, 16, mute))
+        tvWx2.setPadding(dp(6), 0, 0, 0)
+        row2.addView(tvWx2)
+        wt.addView(row2)
+        wxMainRow.addView(wt, LinearLayout.LayoutParams(0, -2, 1f))
+        wxOuter.addView(wxMainRow, LinearLayout.LayoutParams(0, -2, 1f))
+        wxOuter.addView(fc)
+        col.addView(wxOuter, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+
+        col.addView(noteBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1.1f))
+
+        val tTv = classicTile("TV Live", R.drawable.ic_tv) { startActivity(Intent(this, MainActivity::class.java)) }
+        val tMusic = classicTile("Musik & Radio", 0, customIcon = { c -> musicIconDrawable(c) }) {
+            startActivity(Intent(this, RadioMusicActivity::class.java))
+        }
+        val tAntenna = classicTile("TV Antena", R.drawable.ic_antenna) {
+            if (!launchSaved()) chooseAntennaApp()
+        }
+        tAntenna.setOnLongClickListener {
+            openAntennaMenu()
+            true
+        }
+        val tFilm = classicTile("Film", R.drawable.ic_film) {
+            if (Lock.isLocked(this, "film")) Lock.ask(this, "Menu Film terkunci", { startActivity(Intent(this, FilmActivity::class.java)) })
+            else startActivity(Intent(this, FilmActivity::class.java))
+        }
+        val tPanduan = classicTile("Panduan", R.drawable.ic_book) { startActivity(Intent(this, PanduanActivity::class.java)) }
+        val tScan = classicTile("Pindai Sinyal", R.drawable.ic_scan) { startActivity(Intent(this, ScanActivity::class.java)) }
+        val tSettings = classicTile("Pengaturan", R.drawable.ic_phone) { startActivity(Intent(this, SettingsActivity::class.java)) }
+
+        tiles = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            clipChildren = false
+            clipToPadding = false
+            setPadding(0, dp(12), 0, dp(12))
+            addView(tTv)
+            addView(tMusic)
+            addView(tAntenna)
+            addView(tFilm)
+            addView(tPanduan)
+            addView(tScan)
+            addView(tSettings)
+        }
+        col.addView(tiles, LinearLayout.LayoutParams(-1, -2))
+        col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 0.9f))
+
+        val pray = buildPrayerDock()
+        col.addView(pray, LinearLayout.LayoutParams(-1, -2))
+
+        tvCd = tv("", 15f, mute, Typeface.SANS_SERIF).apply {
+            setPadding(dp(6), dp(8), 0, 0)
+        }
+        col.addView(tvCd)
+        tvNote = tv("Cuaca: Open-Meteo. Kualitas udara: CAMS. Jadwal sholat sesuai Kemenag RI.", 11f, 0xFF6F685B.toInt(), Typeface.SANS_SERIF).apply {
+            setPadding(dp(6), dp(4), 0, 0)
+        }
+        col.addView(tvNote)
+
+        root.addView(col, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun refreshFamilyNote() {
@@ -654,28 +1039,41 @@ class HomeActivity : AppCompatActivity() {
             val ws = Math.round(cur.getDouble("wind_speed_10m")).toInt()
             val wd = cur.getDouble("wind_direction_10m")
             wxIcon.setImageResource(c.second)
+
             val head = temp.toString() + "\u00B0"
             val sp = SpannableString(head + "  " + c.first + " \u00B7 " + city)
-            sp.setSpan(RelativeSizeSpan(if (isPhoneLayout) 1.6f else 2.1f), 0, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sp.setSpan(RelativeSizeSpan(if (isPhoneLayout) 1.55f else if (useBentoLayout) 1.75f else 2.1f), 0, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             tvWx1.text = sp
 
-            val base = "Angin " + ws + " km/j " + dirName(wd)
             var aqText = ""
             var aqColor = mute
             val a = prefs.getString("aq", null)
             if (a != null) {
                 val aq = JSONObject(a).getJSONObject("current").getInt("us_aqi")
                 val lbl = if (aq <= 50) "Baik" else if (aq <= 100) "Sedang" else if (aq <= 150) "Kurang sehat" else "Tidak sehat"
-                aqColor = if (aq <= 50) 0xFF7FB08A.toInt() else if (aq <= 100) brass else 0xFFC9706A.toInt()
-                aqText = aq.toString() + " " + lbl
+                aqColor = if (aq <= 50) 0xFF7FB08A.toInt() else if (aq <= 100) brassLight else 0xFFC9706A.toInt()
+                aqText = "$aq ($lbl)"
             }
-            if (aqText.isEmpty()) {
-                tvWx2.text = base
+
+            if (useBentoLayout) {
+                val base = if (isPhoneLayout) "Udara " else "Angin $ws km/j · Udara "
+                if (aqText.isEmpty()) {
+                    tvWx2.text = "Angin $ws km/j ${dirName(wd)}"
+                } else {
+                    val s2 = SpannableString(base + aqText)
+                    s2.setSpan(ForegroundColorSpan(aqColor), base.length, base.length + aqText.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    tvWx2.text = s2
+                }
             } else {
-                val pre = base + "  \u00B7  Udara "
-                val s2 = SpannableString(pre + aqText)
-                s2.setSpan(ForegroundColorSpan(aqColor), pre.length, pre.length + aqText.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                tvWx2.text = s2
+                val base = "Angin " + ws + " km/j " + dirName(wd)
+                if (aqText.isEmpty()) {
+                    tvWx2.text = base
+                } else {
+                    val pre = base + "  \u00B7  Udara "
+                    val s2 = SpannableString(pre + aqText)
+                    s2.setSpan(ForegroundColorSpan(aqColor), pre.length, pre.length + aqText.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    tvWx2.text = s2
+                }
             }
 
             fc.removeAllViews()
@@ -687,15 +1085,15 @@ class HomeActivity : AppCompatActivity() {
                 val cal = Calendar.getInstance()
                 cal.add(Calendar.DAY_OF_YEAR, i)
                 val item = LinearLayout(this)
-                item.orientation = if (isPhoneLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+                item.orientation = if (useBentoLayout) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
                 item.gravity = Gravity.CENTER
-                item.setPadding(dp(10), dp(2), dp(10), dp(2))
-                item.addView(tv(SimpleDateFormat("EEE", Locale("id", "ID")).format(cal.time), 13f, mute, Typeface.SANS_SERIF))
-                val ic = icon(cond(codes.getInt(i)).second, if (isPhoneLayout) 22 else 28, 0xFFCFC7B8.toInt())
-                if (isPhoneLayout) ic.setPadding(dp(6), 0, dp(6), 0)
+                item.setPadding(dp(if (useBentoLayout) 6 else 10), dp(2), dp(if (useBentoLayout) 6 else 10), dp(2))
+                item.addView(tv(SimpleDateFormat("EEE", Locale("id", "ID")).format(cal.time), 12.5f, mute, Typeface.SANS_SERIF))
+                val ic = icon(cond(codes.getInt(i)).second, if (useBentoLayout) 18 else 28, 0xFFCFC7B8.toInt())
+                if (useBentoLayout) ic.setPadding(dp(4), 0, dp(4), 0)
                 item.addView(ic)
-                item.addView(tv(Math.round(maxs.getDouble(i)).toInt().toString() + "\u00B0", 14f, ivory, Typeface.SANS_SERIF))
-                if (isPhoneLayout) {
+                item.addView(tv(Math.round(maxs.getDouble(i)).toInt().toString() + "\u00B0", 13f, ivory, Typeface.SANS_SERIF))
+                if (useBentoLayout && !isPhoneLayout) {
                     fc.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
                 } else {
                     fc.addView(item)
@@ -1184,10 +1582,13 @@ class HomeActivity : AppCompatActivity() {
         super.onResume()
         if (pendingTrial != null) ui.postDelayed({ confirmTrial() }, 600L)
         ui.postDelayed({ if (!isFinishing) checkAutostartPermission() }, 1500L)
-        if (Themes.pick(this).id != skin.id) {
+
+        val latestTvTheme = prefs.getString("tv_home_theme", "classic") ?: "classic"
+        if (Themes.pick(this).id != skin.id || (!isPhoneLayout && latestTvTheme != currentTvTheme)) {
             recreate()
             return
         }
+
         buildDeco()
         tvName.text = prefs.getString("family", "Keluarga Anda") ?: "Keluarga Anda"
         refreshFamilyNote()
