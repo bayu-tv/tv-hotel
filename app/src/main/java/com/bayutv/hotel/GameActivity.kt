@@ -14,7 +14,6 @@ import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -103,7 +102,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private val pStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val pText = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.SANS_SERIF }
     private val rect = RectF()
-    private val rect2 = RectF()
     private val hubRects = Array(4) { RectF() }
 
     // Touch virtual buttons
@@ -365,7 +363,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             } else if (touchBtnBRect.contains(px, py)) {
                 newB = true
             } else if (mode == MODE_BRICK && py < h * 0.72f) {
-                // Direct finger slide for Neon Brick paddle
                 brickPaddleX = ((px - brickBoard.left) / brickBoard.width()).coerceIn(0.08f, 0.92f)
             }
         }
@@ -441,7 +438,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
         canvas.drawColor(COL_BG)
 
-        // Update touch virtual button bounds
         touchDpadRadius = min(w, h) * 0.13f
         touchDpadCenter[0] = dp(24f) + touchDpadRadius
         touchDpadCenter[1] = h - dp(24f) - touchDpadRadius
@@ -534,7 +530,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             pStroke.color = if (focused) Color.WHITE else 0x2EFFFFFF
             canvas.drawRoundRect(r, dp(16f), dp(16f), pStroke)
 
-            // Accent bar on left
             pFill.color = accent
             rect.set(r.left + dp(12f), r.top + dp(14f), r.left + dp(17f), r.bottom - dp(14f))
             canvas.drawRoundRect(rect, dp(3f), dp(3f), pFill)
@@ -580,7 +575,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun drawTouchControls(canvas: Canvas) {
-        // D-Pad circle
         pFill.color = 0x26FFFFFF
         canvas.drawCircle(touchDpadCenter[0], touchDpadCenter[1], touchDpadRadius, pFill)
         pStroke.strokeWidth = dp(1.5f)
@@ -592,8 +586,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         val knobY = touchDpadCenter[1] + (if (inDown) 1f else if (inUp) -1f else 0f) * touchDpadRadius * 0.45f
         canvas.drawCircle(knobX, knobY, touchDpadRadius * 0.36f, pFill)
 
-        // Button A
-        pFill.color = if (btnA) 0x88E6C88F else 0x38E6C88F
+        pFill.color = if (btnA) 0x88E6C88F.toInt() else 0x38E6C88F
         canvas.drawOval(touchBtnARect, pFill)
         pStroke.color = COL_GOLD_LIGHT
         canvas.drawOval(touchBtnARect, pStroke)
@@ -602,8 +595,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pText.textSize = dp(16f)
         canvas.drawText("A", touchBtnARect.centerX(), touchBtnARect.centerY() + dp(6f), pText)
 
-        // Button B
-        pFill.color = if (btnB) 0x88E05252 else 0x33FFFFFF
+        pFill.color = if (btnB) 0x88E05252.toInt() else 0x33FFFFFF
         canvas.drawOval(touchBtnBRect, pFill)
         pStroke.color = 0x77FFFFFF
         canvas.drawOval(touchBtnBRect, pStroke)
@@ -636,11 +628,10 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 1: BOMBER ARENA (13x9 GRID, PLAYER VS 3 BOTS, BOMBS & POWERUPS)
+    // GAME 1: BOMBER ARENA
     // =========================================================================
     private val bCols = 13
     private val bRows = 9
-    // 0 = empty, 1 = steel wall, 2 = brick crate, 3 = powerup bomb, 4 = powerup fire
     private val bGrid = IntArray(bCols * bRows)
     private var bpX = 1.5f
     private var bpY = 1.5f
@@ -659,7 +650,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     private val bombY = IntArray(maxBombs)
     private val bombTimer = FloatArray(maxBombs)
     private val bombRange = IntArray(maxBombs)
-    private val bombOwner = IntArray(maxBombs) // 0 = player, 1 = bot
+    private val bombOwner = IntArray(maxBombs)
 
     private val fireGrid = FloatArray(bCols * bRows)
 
@@ -804,7 +795,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Pickup powerup
         val pCellIdx = bpY.toInt() * bCols + bpX.toInt()
         if (bGrid[pCellIdx] == 3) {
             bGrid[pCellIdx] = 0
@@ -816,7 +806,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             score += 50
         }
 
-        // Update bombs & fires
         for (i in 0 until maxBombs) {
             if (bombTimer[i] > 0f) {
                 bombTimer[i] -= dt
@@ -827,7 +816,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             if (fireGrid[i] > 0f) fireGrid[i] = max(0f, fireGrid[i] - dt)
         }
 
-        // Check player in fire
         if (fireGrid[bpY.toInt() * bCols + bpX.toInt()] > 0f) {
             bpAlive = false
             gameOver = true
@@ -836,7 +824,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             return
         }
 
-        // Update Bots
         var aliveBots = 0
         val dxs = floatArrayOf(1f, -1f, 0f, 0f)
         val dys = floatArrayOf(0f, 0f, 1f, -1f)
@@ -923,7 +910,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Bombs
         for (i in 0 until maxBombs) {
             if (bombTimer[i] > 0f) {
                 val pulse = 0.30f + 0.06f * sin(bombTimer[i] * 14f)
@@ -935,14 +921,12 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Bots
         for (b in 0..2) {
             if (!botAlive[b]) continue
             pFill.color = COL_RED
             canvas.drawCircle(ox + botX[b] * cell, oy + botY[b] * cell, cell * 0.34f, pFill)
         }
 
-        // Player
         if (bpAlive) {
             pFill.color = COL_GOLD_LIGHT
             canvas.drawCircle(ox + bpX * cell, oy + bpY * cell, cell * 0.36f, pFill)
@@ -953,7 +937,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 2: NEON BRICK (ARCADE BREAKER)
+    // GAME 2: NEON BRICK
     // =========================================================================
     private val brickBoard = RectF()
     private val brCols = 9
@@ -1007,7 +991,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (brickBallX > 0.98f) { brickBallX = 0.98f; brickVx = -abs(brickVx) }
         if (brickBallY < 0.02f) { brickBallY = 0.02f; brickVy = abs(brickVy) }
 
-        // Paddle collision
         if (brickVy > 0f && brickBallY in 0.85f..0.90f &&
             abs(brickBallX - brickPaddleX) <= brickPaddleW * 0.54f
         ) {
@@ -1016,7 +999,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             brickVy = -abs(brickVy)
         }
 
-        // Brick collision
         val topArea = 0.08f
         val rowH = 0.055f
         val colW = 1f / brCols
@@ -1096,7 +1078,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Paddle
         val pw = brickBoard.width() * brickPaddleW
         val px = brickBoard.left + brickBoard.width() * brickPaddleX
         val py = brickBoard.top + brickBoard.height() * 0.87f
@@ -1104,13 +1085,11 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = COL_GOLD_LIGHT
         canvas.drawRoundRect(rect, dp(6f), dp(6f), pFill)
 
-        // Ball
         val bx = brickBoard.left + brickBoard.width() * brickBallX
         val by = brickBoard.top + brickBoard.height() * brickBallY
         pFill.color = Color.WHITE
         canvas.drawCircle(bx, by, dp(7f), pFill)
 
-        // Lives indicator
         pText.textAlign = Paint.Align.LEFT
         pText.color = COL_MUTE
         pText.textSize = dp(12f)
@@ -1118,7 +1097,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 3: GOLD SNAKE (CLASSIC GRID + TIMED BONUS ORB)
+    // GAME 3: GOLD SNAKE
     // =========================================================================
     private val sCols = 22
     private val sRows = 14
@@ -1235,17 +1214,14 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = 0x33B8975A
         canvas.drawRoundRect(rect, dp(12f), dp(12f), pStroke)
 
-        // Food
         pFill.color = COL_RED
         canvas.drawCircle(ox + (foodX + 0.5f) * cell, oy + (foodY + 0.5f) * cell, cell * 0.34f, pFill)
 
-        // Bonus Orb
         if (bonusX >= 0) {
             pFill.color = COL_CYAN
             canvas.drawCircle(ox + (bonusX + 0.5f) * cell, oy + (bonusY + 0.5f) * cell, cell * 0.42f, pFill)
         }
 
-        // Snake segments
         for (i in snakeLen - 1 downTo 0) {
             val sx = ox + snakeX[i] * cell
             val sy = oy + snakeY[i] * cell
@@ -1256,7 +1232,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 4: STICKMAN FIGHTER (WAVE DOJO BRAWLER + COMBO & GOLDEN WAVE)
+    // GAME 4: STICKMAN FIGHTER
     // =========================================================================
     private var stPlayerX = 0.5f
     private var stPlayerY = 0f
@@ -1350,7 +1326,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         if (stAttackTimer > 0f) stAttackTimer = max(0f, stAttackTimer - dt)
         if (stHurtTimer > 0f) stHurtTimer = max(0f, stHurtTimer - dt)
 
-        // Golden energy wave
         if (stWaveTimer > 0f) {
             stWaveTimer -= dt
             stWaveX += stWaveDir * 1.35f * dt
@@ -1365,7 +1340,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Spawn enemies
         if (stEnemiesLeft > 0) {
             stSpawnCd -= dt
             if (stSpawnCd <= 0f) {
@@ -1384,7 +1358,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Update enemies
         var activeCount = 0
         for (i in 0 until maxEnemies) {
             if (!enActive[i]) continue
@@ -1442,17 +1415,12 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         val shoulderY = hipY - 28f * scale
         val headY = shoulderY - headR - 3f * scale
 
-        // Head
         pFill.color = color
         canvas.drawCircle(cx, headY, headR, pFill)
-
-        // Torso
         canvas.drawLine(cx, shoulderY, cx, hipY, pStroke)
 
-        // Legs
         val stride = sin(phase) * 14f * scale
         if (isAttacking && combo == 3) {
-            // High Roundhouse Kick
             canvas.drawLine(cx, hipY, cx - facing * 8f * scale, footY, pStroke)
             canvas.drawLine(cx, hipY, cx + facing * 34f * scale, hipY - 12f * scale, pStroke)
         } else {
@@ -1460,7 +1428,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawLine(cx, hipY, cx + stride, footY, pStroke)
         }
 
-        // Arms
         if (isAttacking && combo != 3) {
             canvas.drawLine(cx, shoulderY + 4f * scale, cx + facing * 34f * scale, shoulderY + 2f * scale, pStroke)
             canvas.drawLine(cx, shoulderY + 4f * scale, cx - facing * 10f * scale, shoulderY + 14f * scale, pStroke)
@@ -1474,7 +1441,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         val groundY = h - (if (showTouchOverlay) touchDpadRadius * 2.2f + dp(34f) else dp(44f))
         val scale = dp(1f) * (if (h > w) 1.05f else 1.25f)
 
-        // Dojo Floor & Moon backdrop
         pFill.color = 0x1AE6C88F
         canvas.drawCircle(w * 0.5f, groundY - dp(120f), dp(86f), pFill)
         pFill.color = 0xFF1A1A20.toInt()
@@ -1483,7 +1449,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = COL_GOLD
         canvas.drawLine(0f, groundY, w, groundY, pStroke)
 
-        // Player HP & Golden Energy bars
         val barW = min(dp(180f), w * 0.38f)
         rect.set(dp(16f), dp(54f), dp(16f) + barW, dp(64f))
         pFill.color = 0x33FFFFFF
@@ -1505,7 +1470,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
         val spReady = if (stEnergy >= 100) " · JURUS B SIAP!" else " · A: Serang · B: Lompat/Jurus"
         canvas.drawText("HP $stHp%$spReady", dp(16f), dp(89f), pText)
 
-        // Enemies
         for (i in 0 until maxEnemies) {
             if (!enActive[i]) continue
             drawStickFigure(
@@ -1521,7 +1485,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             )
         }
 
-        // Player
         val pColor = if (stHurtTimer > 0f) Color.WHITE else COL_GOLD_LIGHT
         val phase = if (inLeft || inRight) System.nanoTime() / 80_000_000f else 0f
         drawStickFigure(
@@ -1536,7 +1499,6 @@ private class ArcadeCanvasView(context: Context) : View(context) {
             phase
         )
 
-        // Golden Wave
         if (stWaveTimer > 0f) {
             pFill.color = 0xCCE6C88F.toInt()
             rect.set(w * stWaveX - dp(12f), groundY - dp(75f), w * stWaveX + dp(12f), groundY)
