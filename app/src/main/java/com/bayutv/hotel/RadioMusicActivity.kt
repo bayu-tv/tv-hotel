@@ -317,6 +317,56 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     // =========================================================================
+    // ORNAMEN DEKORATIF KARTU SPOTIFY (0 KB RAM, LANGSUNG TAMPIL INSTAN)
+    // =========================================================================
+    class SpotifyCardDecorDrawable(private val showCenterVinyl: Boolean) : Drawable() {
+        private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x16FFFFFF
+            style = Paint.Style.FILL
+        }
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x24FFFFFF
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+        }
+
+        override fun draw(canvas: Canvas) {
+            val b = bounds
+            val w = b.width().toFloat()
+            val h = b.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            canvas.save()
+            canvas.translate(b.left.toFloat(), b.top.toFloat())
+
+            // Kilau lingkaran halus di sudut kiri atas
+            canvas.drawCircle(w * 0.14f, h * 0.16f, w * 0.42f, circlePaint)
+
+            // Siluet piringan hitam tipis di tengah kartu
+            if (showCenterVinyl) {
+                val cx = w * 0.5f
+                val cy = h * 0.45f
+                val r = minOf(w, h) * 0.28f
+                canvas.drawCircle(cx, cy, r, ringPaint)
+                canvas.drawCircle(cx, cy, r * 0.44f, ringPaint)
+            }
+            canvas.restore()
+        }
+
+        override fun setAlpha(alpha: Int) {
+            circlePaint.alpha = alpha
+            ringPaint.alpha = alpha
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            circlePaint.colorFilter = colorFilter
+            ringPaint.colorFilter = colorFilter
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
+    // =========================================================================
     // DSP VOCAL REDUCER 2 TINGKAT (0 = OFF, 1 = NORMAL, 2 = ULTRA)
     // =========================================================================
     @OptIn(UnstableApi::class)
@@ -2186,6 +2236,7 @@ class RadioMusicActivity : AppCompatActivity() {
     override fun onDestroy() {
         MusicEngine.onStateChanged = null
         activeScanPool?.shutdownNow()
+        mixArtPool.shutdownNow()
         super.onDestroy()
     }
 
@@ -2213,6 +2264,32 @@ class RadioMusicActivity : AppCompatActivity() {
     private fun isPortraitPhone(): Boolean =
         resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT ||
             resources.configuration.screenWidthDp < 600
+
+    private val mixThumbCache = ConcurrentHashMap<String, String>()
+    private val mixArtPool = Executors.newFixedThreadPool(2)
+
+    private fun bindMixCover(mix: CuratedMix, target: ImageView) {
+        val key = "mix_${mix.query}"
+        target.tag = key
+        val cachedUrl = mixThumbCache[mix.query]
+        if (!cachedUrl.isNullOrBlank()) {
+            SafeArtLoader.load(cachedUrl, target)
+            return
+        }
+        target.setImageDrawable(null)
+        mixArtPool.execute {
+            val tracks = queryYtMusicTracks(mix.query)
+            val foundThumb = tracks.firstOrNull { !it.thumbUrl.isNullOrBlank() }?.thumbUrl
+            if (!foundThumb.isNullOrBlank()) {
+                mixThumbCache[mix.query] = foundThumb
+                ui.post {
+                    if (!isFinishing && target.tag == key) {
+                        SafeArtLoader.load(foundThumb, target)
+                    }
+                }
+            }
+        }
+    }
 
     private fun updateTvHero(mix: CuratedMix) {
         val banner = tvHeroBanner ?: return
@@ -2381,7 +2458,10 @@ class RadioMusicActivity : AppCompatActivity() {
                 intArrayOf(mix.colorStart, mix.colorEnd)
             )
         }
-        leftSwatch.addView(iconView(Glyph.DISC, ivory, 18), FrameLayout.LayoutParams(-1, -1))
+        leftSwatch.addView(iconView(Glyph.DISC, 0xCCFFFFFF.toInt(), 18), FrameLayout.LayoutParams(-1, -1))
+        val coverImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        bindMixCover(mix, coverImg)
+        leftSwatch.addView(coverImg, FrameLayout.LayoutParams(-1, -1))
         tile.addView(leftSwatch, LinearLayout.LayoutParams(tileHeightPx, -1))
 
         val label = tv(
@@ -2405,42 +2485,98 @@ class RadioMusicActivity : AppCompatActivity() {
             isFocusable = true
             isClickable = true
             setOnFocusChangeListener { v, f ->
-                val artView = (v as ViewGroup).getChildAt(0)
-                artView.background = GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(mix.colorStart, mix.colorEnd)
-                ).apply {
-                    cornerRadius = dp(10).toFloat()
-                    if (f) setStroke(dp(2), Color.WHITE)
-                }
+                val artFrame = (v as ViewGroup).getChildAt(0) as FrameLayout
+                val borderView = artFrame.getChildAt(artFrame.childCount - 1)
+                borderView.visibility = if (f) View.VISIBLE else View.GONE
                 if (f) updateTvHero(mix)
             }
             setOnClickListener { openCuratedMixDetail(mix) }
         }
 
-        val artBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+        val artFrame = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(mix.colorStart, mix.colorEnd)
             ).apply {
                 cornerRadius = dp(10).toFloat()
             }
+            clipToOutline = true
         }
-        artBox.addView(
-            tv(mix.tag, 9f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply { letterSpacing = 0.08f },
-            LinearLayout.LayoutParams(-1, 0, 1f)
+
+        // Lapis 1: Ornamen piringan hitam instan (0 KB)
+        artFrame.addView(
+            View(this).apply { background = SpotifyCardDecorDrawable(showCenterVinyl = true) },
+            FrameLayout.LayoutParams(-1, -1)
         )
-        artBox.addView(
-            tv(mix.title, 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+
+        // Lapis 2: Foto cover album asli
+        val coverImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        bindMixCover(mix, coverImg)
+        artFrame.addView(coverImg, FrameLayout.LayoutParams(-1, -1))
+
+        // Lapis 3: Gradasi gelap di bawah agar teks putih tetap kontras
+        artFrame.addView(
+            View(this).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0x22000000, 0x33000000, 0xDF000000.toInt())
+                )
+            },
+            FrameLayout.LayoutParams(-1, -1)
+        )
+
+        // Lapis 4: Label tag, judul & garis warna Daily Mix di bagian bawah
+        val overlayCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        val topTag = tv(mix.tag, 8.5f, ivory, Typeface.DEFAULT_BOLD).apply {
+            letterSpacing = 0.08f
+            setPadding(dp(7), dp(3), dp(7), dp(3))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(0x99000000.toInt())
+            }
+        }
+        val tagWrap = LinearLayout(this).apply { setPadding(dp(9), dp(9), dp(9), 0) }
+        tagWrap.addView(topTag)
+        overlayCol.addView(tagWrap, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(9), 0, dp(9), dp(8))
+        }
+        val accentBar = View(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(2).toFloat()
+                setColor(mix.colorStart)
+            }
+        }
+        titleRow.addView(accentBar, LinearLayout.LayoutParams(dp(4), dp(24)).apply { rightMargin = dp(7) })
+        titleRow.addView(
+            tv(mix.title, 13f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
-            }
+            },
+            LinearLayout.LayoutParams(0, -2, 1f)
         )
-        wrapper.addView(artBox, LinearLayout.LayoutParams(cardSizePx, cardSizePx))
+        overlayCol.addView(titleRow)
 
+        val bottomAccentLine = View(this).apply { setBackgroundColor(mix.colorStart) }
+        overlayCol.addView(bottomAccentLine, LinearLayout.LayoutParams(-1, dp(4)))
+
+        artFrame.addView(overlayCol, FrameLayout.LayoutParams(-1, -1))
+
+        // Lapis 5: Bingkai putih saat disorot remote
+        val focusBorder = View(this).apply {
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(2), Color.WHITE)
+            }
+        }
+        artFrame.addView(focusBorder, FrameLayout.LayoutParams(-1, -1))
+
+        wrapper.addView(artFrame, LinearLayout.LayoutParams(cardSizePx, cardSizePx))
         wrapper.addView(
             tv(mix.subtitle, 11f, mute).apply {
                 maxLines = 2
@@ -2450,12 +2586,16 @@ class RadioMusicActivity : AppCompatActivity() {
         )
         return wrapper
     }
+    private fun buildGenreBrowseCard(mix: CuratedMix): FrameLayout {
+        val focusOutline = View(this).apply {
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(2), Color.WHITE)
+            }
+        }
 
-    private fun buildGenreBrowseCard(mix: CuratedMix): LinearLayout {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+        val card = FrameLayout(this).apply {
             isFocusable = true
             isClickable = true
             background = GradientDrawable(
@@ -2464,14 +2604,9 @@ class RadioMusicActivity : AppCompatActivity() {
             ).apply {
                 cornerRadius = dp(10).toFloat()
             }
+            clipToOutline = true
             setOnFocusChangeListener { _, f ->
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(mix.colorStart, mix.colorEnd)
-                ).apply {
-                    cornerRadius = dp(10).toFloat()
-                    if (f) setStroke(dp(2), Color.WHITE)
-                }
+                focusOutline.visibility = if (f) View.VISIBLE else View.GONE
                 if (f) updateTvHero(mix)
             }
             setOnClickListener {
@@ -2482,18 +2617,56 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // Lapis 1: Kilau dekorasi halus
         card.addView(
-            tv(mix.tag, 9f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply {
-                letterSpacing = 0.08f
-            },
-            LinearLayout.LayoutParams(-1, 0, 1f)
+            View(this).apply { background = SpotifyCardDecorDrawable(showCenterVinyl = false) },
+            FrameLayout.LayoutParams(-1, -1)
         )
+
+        // Lapis 2: Kotak Cover Miring 24° Terpotong di Pojok Kanan Bawah
+        val tiltBoxSize = dp(58)
+        val tiltedArtFrame = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(7).toFloat()
+                setColor(0x44000000)
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            clipToOutline = true
+            rotation = 24f
+            translationX = dp(10).toFloat()
+            translationY = dp(9).toFloat()
+            elevation = dp(4).toFloat()
+        }
+        tiltedArtFrame.addView(iconView(Glyph.DISC, 0xCCFFFFFF.toInt(), 24), FrameLayout.LayoutParams(-1, -1))
+        val tiltedImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        bindMixCover(mix, tiltedImg)
+        tiltedArtFrame.addView(tiltedImg, FrameLayout.LayoutParams(-1, -1))
+
         card.addView(
-            tv(mix.title, 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
+            tiltedArtFrame,
+            FrameLayout.LayoutParams(tiltBoxSize, tiltBoxSize, Gravity.BOTTOM or Gravity.END)
+        )
+
+        // Lapis 3: Judul Kategori di Sisi Kiri Atas (margin kanan 54dp agar tidak bertabrakan dengan gambar miring)
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(54), dp(10))
+        }
+        textCol.addView(
+            tv(mix.tag, 8.5f, 0xCCFFFFFF.toInt(), Typeface.DEFAULT_BOLD).apply {
+                letterSpacing = 0.08f
             }
         )
+        textCol.addView(
+            tv(mix.title, 13.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(3), 0, 0)
+            }
+        )
+        card.addView(textCol, FrameLayout.LayoutParams(-1, -1))
+        card.addView(focusOutline, FrameLayout.LayoutParams(-1, -1))
         return card
     }
 
@@ -4433,6 +4606,20 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 202 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (activeTab == 5) {
+                listBox.removeAllViews()
+                loadLocalMusic()
+            }
+        }
     }
 
     // =========================================================================
