@@ -2264,7 +2264,7 @@ class RadioMusicActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(ev)
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         lastInteractionMs = System.currentTimeMillis()
         return super.dispatchKeyEvent(event)
     }
