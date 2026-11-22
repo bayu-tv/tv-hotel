@@ -1897,7 +1897,7 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var btnGoogleAccount: TextView
     private lateinit var searchSectionBox: LinearLayout
     private lateinit var searchInput: EditText
-    private lateinit var btnClearSearch: TextView
+    private lateinit var btnClearSearch: ImageView
 
     private lateinit var recentBarBox: LinearLayout
     private lateinit var playlistBarBox: LinearLayout
@@ -2018,7 +2018,7 @@ class RadioMusicActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        voiceInput = VoiceInput(this)
+        
         MusicEngine.lyricsEnabled = prefs.getBoolean("music_lyrics_enabled", false)
         autoDimEnabled = prefs.getBoolean("music_auto_dim_20s", false)
         lastInteractionMs = System.currentTimeMillis()
@@ -2132,7 +2132,7 @@ class RadioMusicActivity : AppCompatActivity() {
                 } else false
             }
         }
-        val micBtn = voiceInput.createMicButton(searchInput, "Ucapkan judul lagu atau penyanyi...")
+        
         btnClearSearch = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER
             setImageDrawable(GlyphDrawable(Glyph.CLOSE, mute, dp(13)))
