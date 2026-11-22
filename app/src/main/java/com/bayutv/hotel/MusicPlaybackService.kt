@@ -166,18 +166,33 @@ class MusicPlaybackService : Service() {
                 description = "Kontrol pemutaran musik dan radio di bilah notifikasi & layar kunci"
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager.class.java)?.createNotificationChannel(ch)
+            getSystemService(NotificationManager.classjava)?.createNotificationChannel(ch)
         }
     }
 
     private fun setupMediaSession() {
         mediaSession = MediaSession(this, "BBoxMusicSession").apply {
             setCallback(object : MediaSession.Callback() {
-                override fun onPlay() { togglePlayPause() }
-                override fun onPause() { pausePlayback(byExternalInterruption = false) }
-                override fun onSkipToNext() { playNext() }
-                override fun onSkipToPrevious() { playPrev() }
-                override fun onStop() { stopAndDismissService() }
+                override fun onPlay() {
+                    togglePlayPause()
+                }
+
+                override fun onPause() {
+                    pausePlayback(byExternalInterruption = false)
+                }
+
+                override fun onSkipToNext() {
+                    playNext()
+                }
+
+                override fun onSkipToPrevious() {
+                    playPrev()
+                }
+
+                override fun onStop() {
+                    stopAndDismissService()
+                }
+
                 override fun onSeekTo(pos: Long) {
                     if (currentItem?.isRadio == false) {
                         player?.seekTo(pos.toInt())
@@ -208,7 +223,11 @@ class MusicPlaybackService : Service() {
             isPreparing -> PlaybackState.STATE_BUFFERING
             else -> PlaybackState.STATE_PAUSED
         }
-        val pos = try { if (item?.isRadio == false) (player?.currentPosition ?: 0).toLong() else 0L } catch (_: Exception) { 0L }
+        val pos = try {
+            if (item?.isRadio == false) (player?.currentPosition ?: 0).toLong() else 0L
+        } catch (_: Exception) {
+            0L
+        }
         val actions = PlaybackState.ACTION_PLAY or
             PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_PLAY_PAUSE or
@@ -232,7 +251,9 @@ class MusicPlaybackService : Service() {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val contentPi = PendingIntent.getActivity(
-            this, 10, openAppIntent,
+            this,
+            10,
+            openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -485,8 +506,17 @@ class MusicPlaybackService : Service() {
         }
     }
 
-    fun getPositionMs(): Int = try { player?.currentPosition ?: 0 } catch (_: Exception) { 0 }
-    fun getDurationMs(): Int = try { player?.duration ?: 0 } catch (_: Exception) { 0 }
+    fun getPositionMs(): Int = try {
+        player?.currentPosition ?: 0
+    } catch (_: Exception) {
+        0
+    }
+
+    fun getDurationMs(): Int = try {
+        player?.duration ?: 0
+    } catch (_: Exception) {
+        0
+    }
 
     fun dismissAdzanBanner(resumeMusic: Boolean) {
         activeAdzanPrayer = null
@@ -534,7 +564,9 @@ class MusicPlaybackService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
                     val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-                        override fun onCallStateChanged(state: Int) { handleCallState(state) }
+                        override fun onCallStateChanged(state: Int) {
+                            handleCallState(state)
+                        }
                     }
                     telephonyCallback = cb
                     telephonyManager?.registerTelephonyCallback(mainExecutor, cb)
@@ -543,7 +575,9 @@ class MusicPlaybackService : Service() {
                 @Suppress("DEPRECATION")
                 val listener = object : PhoneStateListener() {
                     @Deprecated("Deprecated in Java")
-                    override fun onCallStateChanged(state: Int, phoneNumber: String?) { handleCallState(state) }
+                    override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                        handleCallState(state)
+                    }
                 }
                 legacyPhoneListener = listener
                 @Suppress("DEPRECATION")
@@ -693,7 +727,10 @@ class MusicPlaybackService : Service() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
-        try { unregisterReceiver(noisyReceiver) } catch (_: Exception) {}
+        try {
+            unregisterReceiver(noisyReceiver)
+        } catch (_: Exception) {
+        }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 (telephonyCallback as? TelephonyCallback)?.let { telephonyManager?.unregisterTelephonyCallback(it) }
@@ -701,10 +738,12 @@ class MusicPlaybackService : Service() {
                 @Suppress("DEPRECATION")
                 telephonyManager?.listen(legacyPhoneListener, PhoneStateListener.LISTEN_NONE)
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         try {
             networkCallback?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(it) }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         releasePlayerOnly()
         mediaSession?.release()
         super.onDestroy()
