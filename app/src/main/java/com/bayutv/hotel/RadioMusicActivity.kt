@@ -2,38 +2,27 @@ package com.bayutv.hotel
 
 import android.Manifest
 import android.app.AlertDialog
-import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.media.RingtoneManager
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
-import android.os.PowerManager
 import android.provider.MediaStore
-import android.telephony.PhoneStateListener
-import android.telephony.TelephonyCallback
-import android.telephony.TelephonyManager
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -46,13 +35,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.random.Random
 
 class RadioMusicActivity : AppCompatActivity() {
 
@@ -72,42 +59,20 @@ class RadioMusicActivity : AppCompatActivity() {
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
 
-    // MediaPlayer & Audio Focus
-    private var player: MediaPlayer? = null
-    private lateinit var audioManager: AudioManager
-    private var focusRequest: AudioFocusRequest? = null
-    private var isPlaying = false
-    private var isPreparing = false
-    private var pausedByCallOrFocus = false
-    private var pausedByAdzan = false
+    private var musicService: MusicPlaybackService? = null
+    private var serviceBound = false
 
-    // Playlist & Mode
     private var tabRadio = true
     private val radioList = ArrayList<AudioItem>()
     private val localList = ArrayList<AudioItem>()
     private val visibleList = ArrayList<AudioItem>()
     private var currentList: List<AudioItem> = emptyList()
-    private var currentIndex = -1
-    private var currentItem: AudioItem? = null
 
-    // Radio Signal Watchdog & Reconnect
-    private var retryCount = 0
-    private val maxRetries = 10
-    private var lastPlaybackPos = -1
-    private var stallTicks = 0
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
-
-    // Phone Call State Listener
-    private var telephonyManager: TelephonyManager? = null
-    private var telephonyCallback: Any? = null
-    @Suppress("DEPRECATION")
-    private var legacyPhoneListener: PhoneStateListener? = null
-
-    // Adzan Schedule Monitor
-    private val prayerTimes = IntArray(5) { -1 }
-    private val prayerNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
-    private var lastTriggeredAdzanKey = ""
-    private var adzanAlertDialog: AlertDialog? = null
+    // Auto Dark Screen (OLED / TV Screensaver after 20s of inactivity while playing)
+    private var lastUserActivityMs = 0L
+    private val autoDarkDelayMs = 20_000L
+    private var darkScreenActive = false
+    private var adzanDialogShownFor: String? = null
 
     // UI Views
     private lateinit var tvTabRadio: TextView
@@ -125,7 +90,30 @@ class RadioMusicActivity : AppCompatActivity() {
     private lateinit var listContainer: LinearLayout
     private lateinit var drawerOverlay: FrameLayout
     private lateinit var drawerContainer: LinearLayout
+
+    // Dark Screen Overlay Views
+    private lateinit var darkOverlay: FrameLayout
+    private lateinit var darkFloatingBox: LinearLayout
+    private lateinit var tvDarkClock: TextView
+    private lateinit var tvDarkTrack: TextView
+    private lateinit var tvDarkSub: TextView
     private var userSeeking = false
+
+    private val serviceConn = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val svc = (service as MusicPlaybackService.LocalBinder).getService()
+            musicService = svc
+            serviceBound = true
+            svc.onStateChanged = { syncUiFromService() }
+            syncUiFromService()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService?.onStateChanged = null
+            musicService = null
+            serviceBound = false
+        }
+    }
 
     private fun dp(v: Int): Int = Ui.dp(this, v)
 
@@ -138,82 +126,109 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    private val noisyReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && isPlaying) {
-                pausePlayback(byExternalInterruption = false)
-            }
-        }
-    }
-
-    private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
-        when (focusChange) {
-            AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                if (isPlaying || isPreparing) {
-                    pausedByCallOrFocus = true
-                    pausePlayback(byExternalInterruption = true)
-                }
-            }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                player?.setVolume(0.2f, 0.2f)
-            }
-            AudioManager.AUDIOFOCUS_GAIN -> {
-                player?.setVolume(1.0f, 1.0f)
-                if (pausedByCallOrFocus && !pausedByAdzan) {
-                    pausedByCallOrFocus = false
-                    resumePlayback()
-                }
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         voiceInput = VoiceInput(this)
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        lastUserActivityMs = System.currentTimeMillis()
 
         val skin = Themes.pick(this)
         brass = skin.accent
         brassLight = skin.accentLight
 
+        requestNotificationPermissionIfNeeded()
         buildUi()
         loadRadioStations()
-        loadPrayerSchedule()
-        registerCallAndNetworkMonitors()
         switchTab(toRadio = true)
 
-        ui.post(monitorRunnable)
+        val svcIntent = Intent(this, MusicPlaybackService::class.java)
+        startService(svcIntent)
+        bindService(svcIntent, serviceConn, Context.BIND_AUTO_CREATE)
+
+        ui.post(screenAndSeekUpdater)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (drawerOverlay.visibility == View.VISIBLE) {
-                    drawerOverlay.visibility = View.GONE
-                } else {
-                    finish()
+                when {
+                    darkScreenActive -> exitDarkScreen()
+                    drawerOverlay.visibility == View.VISIBLE -> drawerOverlay.visibility = View.GONE
+                    else -> finish()
                 }
             }
         })
     }
 
-    private fun buildUi() {
-        val root = FrameLayout(this).apply {
-            setBackgroundColor(0xFF0A0A0D.toInt())
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 303)
+            }
         }
+    }
+
+    // Wake up immediately from Dark Screen on any touch or remote button
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        lastUserActivityMs = System.currentTimeMillis()
+        if (darkScreenActive) {
+            if (ev.action == MotionEvent.ACTION_UP) exitDarkScreen()
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        lastUserActivityMs = System.currentTimeMillis()
+        if (darkScreenActive) {
+            if (event.action == KeyEvent.ACTION_UP) exitDarkScreen()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun enterDarkScreen() {
+        if (darkScreenActive) return
+        darkScreenActive = true
+        updateDarkScreenText()
+        darkOverlay.visibility = View.VISIBLE
+    }
+
+    private fun exitDarkScreen() {
+        darkScreenActive = false
+        lastUserActivityMs = System.currentTimeMillis()
+        darkOverlay.visibility = View.GONE
+    }
+
+    private fun updateDarkScreenText() {
+        val nowStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        tvDarkClock.text = nowStr
+        val item = musicService?.currentItem
+        tvDarkTrack.text = item?.title ?: "Pemutar Musik & Radio"
+        tvDarkSub.text = "${item?.subtitle ?: "Siap"}  ·  ${musicService?.adzanCountdownText ?: ""}"
+
+        // Subtle pixel-shift every update to prevent burn-in on OLED / TV
+        val lp = darkFloatingBox.layoutParams as? FrameLayout.LayoutParams
+        if (lp != null) {
+            lp.leftMargin = dp(Random.nextInt(-18, 19))
+            lp.topMargin = dp(Random.nextInt(-18, 19))
+            darkFloatingBox.layoutParams = lp
+        }
+    }
+
+    private fun buildUi() {
+        val root = FrameLayout(this).apply { setBackgroundColor(0xFF0A0A0D.toInt()) }
 
         val mainCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(14), dp(18), dp(14))
         }
 
-        // Top Bar: Back + Title + Adzan Status Badge
+        // Top Bar: Back + Title + Manual Dark Screen Button + Adzan Badge
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val btnBack = tv("← KEMBALI", 13f, brassLight, Typeface.DEFAULT_BOLD).apply {
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+        val btnBack = tv("← KEMBALI", 12.5f, brassLight, Typeface.DEFAULT_BOLD).apply {
+            setPadding(dp(11), dp(7), dp(11), dp(7))
             isFocusable = true
             background = pillBg(false)
             setOnClickListener { finish() }
@@ -221,13 +236,22 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         topBar.addView(btnBack)
 
-        val titleTv = tv("Musik & Radio", 20f, ivory, Typeface.SERIF).apply {
-            setPadding(dp(14), 0, dp(8), 0)
+        val titleTv = tv("Musik & Radio", 19f, ivory, Typeface.SERIF).apply {
+            setPadding(dp(12), 0, dp(8), 0)
         }
         topBar.addView(titleTv, LinearLayout.LayoutParams(0, -2, 1f))
 
-        tvAdzanStatus = tv("Adzan: Memuat...", 11.5f, brassLight, Typeface.SANS_SERIF).apply {
-            setPadding(dp(10), dp(6), dp(10), dp(6))
+        val btnDark = tv("🌙 GELAP", 11.5f, ivory, Typeface.DEFAULT_BOLD).apply {
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            isFocusable = true
+            background = pillBg(false)
+            setOnClickListener { enterDarkScreen() }
+            setOnFocusChangeListener { _, f -> background = pillBg(f) }
+        }
+        topBar.addView(btnDark, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+
+        tvAdzanStatus = tv("Adzan: ...", 11.5f, brassLight, Typeface.SANS_SERIF).apply {
+            setPadding(dp(10), dp(7), dp(10), dp(7))
             background = GradientDrawable().apply {
                 cornerRadius = dp(10).toFloat()
                 setColor(0xFF16161C.toInt())
@@ -259,7 +283,7 @@ class RadioMusicActivity : AppCompatActivity() {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
-        tvNowSub = tv("Siap diputar · Auto-Jeda saat Telepon & Adzan", 12.5f, mute).apply {
+        tvNowSub = tv("Notifikasi aktif · Layar gelap otomatis 20 detik", 12f, mute).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setPadding(0, dp(2), 0, 0)
@@ -278,7 +302,7 @@ class RadioMusicActivity : AppCompatActivity() {
         infoHeader.addView(tvSignalStatus)
         playerCard.addView(infoHeader)
 
-        // Seekbar Row (for Local Music)
+        // Seekbar Row
         val seekRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -289,17 +313,17 @@ class RadioMusicActivity : AppCompatActivity() {
             max = 1000
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser && player != null && currentItem?.isRadio == false) {
-                        val dur = player?.duration ?: 0
+                    if (fromUser && musicService?.currentItem?.isRadio == false) {
+                        val dur = musicService?.getDurationMs() ?: 0
                         if (dur > 0) tvTimeCur.text = formatMs((dur.toLong() * progress / 1000L).toInt())
                     }
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) { userSeeking = true }
                 override fun onStopTrackingTouch(sb: SeekBar?) {
                     userSeeking = false
-                    val p = player ?: return
-                    if (currentItem?.isRadio == false && p.duration > 0) {
-                        p.seekTo((p.duration.toLong() * (sb?.progress ?: 0) / 1000L).toInt())
+                    val svc = musicService ?: return
+                    if (svc.currentItem?.isRadio == false && svc.getDurationMs() > 0) {
+                        svc.seekTo((svc.getDurationMs().toLong() * (sb?.progress ?: 0) / 1000L).toInt())
                     }
                 }
             })
@@ -316,9 +340,16 @@ class RadioMusicActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, 0)
         }
-        val btnPrev = controlButton("⏮", false) { playPrev() }
-        btnPlayPause = controlButton("▶ PUTAR", true) { togglePlayPause() }
-        val btnNext = controlButton("⏭", false) { playNext() }
+        val btnPrev = controlButton("⏮", false) { musicService?.playPrev() }
+        btnPlayPause = controlButton("▶ PUTAR", true) {
+            val svc = musicService ?: return@controlButton
+            if (svc.currentItem == null && visibleList.isNotEmpty()) {
+                svc.playFromList(visibleList, 0)
+            } else {
+                svc.togglePlayPause()
+            }
+        }
+        val btnNext = controlButton("⏭", false) { musicService?.playNext() }
         btnListDrawer = controlButton("☰ DAFTAR LAGU", false) { openQuickListDrawer() }
 
         ctrlRow.addView(btnPrev, LinearLayout.LayoutParams(dp(54), dp(42)).apply { rightMargin = dp(8) })
@@ -329,7 +360,7 @@ class RadioMusicActivity : AppCompatActivity() {
 
         mainCol.addView(playerCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
-        // Tabs (Radio Online vs Musik Lokal) + Search Bar with Voice Input
+        // Tabs + Search Bar with Voice Input
         val filterRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -361,24 +392,19 @@ class RadioMusicActivity : AppCompatActivity() {
             })
         }
         filterRow.addView(etSearch, LinearLayout.LayoutParams(0, dp(42), 1f))
-
-        // Voice-to-Text Mic Button
-        val micBtn = voiceInput.createMicButton(etSearch, "Sebutkan nama lagu atau stasiun radio...", brassLight)
-        filterRow.addView(micBtn)
-
+        filterRow.addView(voiceInput.createMicButton(etSearch, "Sebutkan nama lagu atau radio...", brassLight))
         mainCol.addView(filterRow)
 
-        // Scrollable List of Stations / Songs
+        // Scrollable List
         listContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             addView(listContainer, LinearLayout.LayoutParams(-1, -2))
         }
         mainCol.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-
         root.addView(mainCol, FrameLayout.LayoutParams(-1, -1))
 
-        // Quick Playlist Modal Overlay (like TV channel list for instant song jumping)
+        // Quick Playlist Drawer Overlay
         drawerOverlay = FrameLayout(this).apply {
             setBackgroundColor(0xCC050507.toInt())
             visibility = View.GONE
@@ -410,9 +436,7 @@ class RadioMusicActivity : AppCompatActivity() {
         drawerBox.addView(dHead, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
         drawerContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val dScroll = ScrollView(this).apply {
-            addView(drawerContainer, LinearLayout.LayoutParams(-1, -2))
-        }
+        val dScroll = ScrollView(this).apply { addView(drawerContainer, LinearLayout.LayoutParams(-1, -2)) }
         drawerBox.addView(dScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val dLp = FrameLayout.LayoutParams(dp(440).coerceAtMost(resources.displayMetrics.widthPixels - dp(32)), -1, Gravity.END).apply {
@@ -420,6 +444,34 @@ class RadioMusicActivity : AppCompatActivity() {
         }
         drawerOverlay.addView(drawerBox, dLp)
         root.addView(drawerOverlay, FrameLayout.LayoutParams(-1, -1))
+
+        // Pure Pitch-Black OLED/TV Dark Screen Overlay
+        darkOverlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+            isClickable = true
+        }
+        darkFloatingBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+        }
+        tvDarkClock = tv("00:00", 54f, 0xCCEFE8DA.toInt(), Typeface.SERIF).apply { gravity = Gravity.CENTER }
+        tvDarkTrack = tv("Pemutar Musik", 18f, 0xCCE6C88F.toInt(), Typeface.DEFAULT_BOLD).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, dp(4))
+        }
+        tvDarkSub = tv("", 13f, 0x88A79F90.toInt()).apply { gravity = Gravity.CENTER }
+        val tvWakeHint = tv("Sentuh layar atau tekan tombol remote untuk menyalakan tampilan", 11.5f, 0x55FFFFFF).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(24), 0, 0)
+        }
+        darkFloatingBox.addView(tvDarkClock)
+        darkFloatingBox.addView(tvDarkTrack)
+        darkFloatingBox.addView(tvDarkSub)
+        darkFloatingBox.addView(tvWakeHint)
+        darkOverlay.addView(darkFloatingBox, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        root.addView(darkOverlay, FrameLayout.LayoutParams(-1, -1))
 
         setContentView(root)
     }
@@ -491,7 +543,6 @@ class RadioMusicActivity : AppCompatActivity() {
 
     private fun loadRadioStations() {
         radioList.clear()
-        // Built-in reliable Indonesian Radio Streams
         radioList.add(AudioItem("RRI Pro 3 Nasional", "Berita & Informasi Nasional", "https://stream-node1.rri.co.id/streaming/14/9014/rripro3.mp3", true))
         radioList.add(AudioItem("RRI Pro 1 Samarinda", "Kalimantan Timur · Regional", "https://stream-node1.rri.co.id/streaming/12/9012/rripro1samarinda.mp3", true))
         radioList.add(AudioItem("RRI Pro 2 Samarinda", "Musik & Kreativitas Muda", "https://stream-node1.rri.co.id/streaming/12/9012/rripro2samarinda.mp3", true))
@@ -500,7 +551,6 @@ class RadioMusicActivity : AppCompatActivity() {
         radioList.add(AudioItem("Suara Surabaya FM", "Berita & Interaktif Jawa Timur", "https://c1.siar.us:8000/stream", true))
         radioList.add(AudioItem("Radio Rodja 756 AM", "Kajian Islam & Murottal Al-Qur'an", "https://radioislamindonesia.com/rodja.mp3", true))
 
-        // Load any custom user-saved radios from SharedPreferences
         try {
             val raw = prefs.getString("custom_radios", null)
             if (!raw.isNullOrEmpty()) {
@@ -515,11 +565,7 @@ class RadioMusicActivity : AppCompatActivity() {
     }
 
     private fun ensureLocalAudioPermissionAndScan() {
-        val perm = if (Build.VERSION.SDK_INT >= 33) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
+        val perm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(perm), 202)
             currentList = emptyList()
@@ -539,16 +585,11 @@ class RadioMusicActivity : AppCompatActivity() {
     private fun scanLocalMusic() {
         localList.clear()
         try {
-            val projection = arrayOf(
-                MediaStore.Audio.Media.TITLE,
-                MediaStore.Audio.Media.ARTIST,
-                MediaStore.Audio.Media.DATA
-            )
-            val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+            val projection = arrayOf(MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.DATA)
             contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 projection,
-                selection,
+                "${MediaStore.Audio.Media.IS_MUSIC} != 0",
                 null,
                 "${MediaStore.Audio.Media.TITLE} ASC"
             )?.use { cur ->
@@ -593,8 +634,9 @@ class RadioMusicActivity : AppCompatActivity() {
             return
         }
 
+        val activeUri = musicService?.currentItem?.uri
         items.forEachIndexed { idx, item ->
-            val active = (currentItem?.uri == item.uri)
+            val active = (activeUri == item.uri)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -608,27 +650,22 @@ class RadioMusicActivity : AppCompatActivity() {
                 }
             }
 
-            val numTv = tv("${idx + 1}.", 13f, if (active) brassLight else mute, Typeface.DEFAULT_BOLD)
-            row.addView(numTv, LinearLayout.LayoutParams(dp(32), -2))
+            row.addView(tv("${idx + 1}.", 13f, if (active) brassLight else mute, Typeface.DEFAULT_BOLD), LinearLayout.LayoutParams(dp(32), -2))
 
             val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val tTv = tv(item.title, if (compact) 13.5f else 14.5f, if (active) brassLight else Color.WHITE, Typeface.DEFAULT_BOLD).apply {
+            col.addView(tv(item.title, if (compact) 13.5f else 14.5f, if (active) brassLight else Color.WHITE, Typeface.DEFAULT_BOLD).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-            }
-            val sTv = tv(item.subtitle, 11.5f, mute).apply {
+            })
+            col.addView(tv(item.subtitle, 11.5f, mute).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-            }
-            col.addView(tTv)
-            col.addView(sTv)
+            })
             row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-
-            val badge = tv(if (active) "▶ DIPUTAR" else if (item.isRadio) "LIVE" else "MP3", 10.5f, if (active) brassLight else mute, Typeface.DEFAULT_BOLD)
-            row.addView(badge)
+            row.addView(tv(if (active) "▶ DIPUTAR" else if (item.isRadio) "LIVE" else "MP3", 10.5f, if (active) brassLight else mute, Typeface.DEFAULT_BOLD))
 
             row.setOnClickListener {
-                playItem(item, items)
+                musicService?.playFromList(items, idx)
                 if (compact) drawerOverlay.visibility = View.GONE
             }
             row.setOnFocusChangeListener { _, focused ->
@@ -643,433 +680,76 @@ class RadioMusicActivity : AppCompatActivity() {
         }
     }
 
-    // =========================================================================
-    // AUDIO PLAYBACK, FOCUS, CALL HANDLING & RADIO AUTO-RECONNECT
-    // =========================================================================
-    private fun requestFocus(): Boolean {
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attrs)
-                .setAcceptsDelayedFocusGain(true)
-                .setOnAudioFocusChangeListener(focusChangeListener)
-                .build()
-            focusRequest = req
-            audioManager.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(focusChangeListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        }
-    }
+    private fun syncUiFromService() {
+        val svc = musicService ?: return
+        val item = svc.currentItem
 
-    private fun playItem(item: AudioItem, sourceList: List<AudioItem> = visibleList) {
-        if (!requestFocus()) {
-            setSignalBadge("● MENUNGGU AUDIO", 0xFFE6C88F.toInt())
-            return
-        }
-        pausedByCallOrFocus = false
-        pausedByAdzan = false
-        currentItem = item
-        currentIndex = sourceList.indexOfFirst { it.uri == item.uri }
-        retryCount = 0
-        stallTicks = 0
-        lastPlaybackPos = -1
-
-        tvNowTitle.text = item.title
-        tvNowSub.text = item.subtitle
-        tvTimeDur.text = if (item.isRadio) "LIVE" else "--:--"
-        seekBar.isEnabled = !item.isRadio
-        if (item.isRadio) seekBar.progress = 1000
-
-        renderList(listContainer, visibleList, compact = false)
-        startMediaPlayer(item)
-    }
-
-    private fun startMediaPlayer(item: AudioItem) {
-        releasePlayer()
-        isPreparing = true
-        isPlaying = false
-        btnPlayPause.text = "⏳ MEMUAT"
-        setSignalBadge(if (item.isRadio) "● MENYAMBUNG..." else "● MEMUAT...", brassLight)
-
-        try {
-            val mp = MediaPlayer().apply {
-                setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                setDataSource(item.uri)
-                setOnPreparedListener { p ->
-                    isPreparing = false
-                    retryCount = 0
-                    stallTicks = 0
-                    if (pausedByCallOrFocus || pausedByAdzan) {
-                        btnPlayPause.text = "▶ LANJUT"
-                        return@setOnPreparedListener
-                    }
-                    p.start()
-                    isPlaying = true
-                    btnPlayPause.text = "❚❚ JEDA"
-                    setSignalBadge(if (item.isRadio) "● SINYAL STABIL" else "● MEMUTAR", 0xFF4CAF7D.toInt())
-                    if (!item.isRadio && p.duration > 0) {
-                        tvTimeDur.text = formatMs(p.duration)
-                    }
-                }
-                setOnCompletionListener {
-                    isPlaying = false
-                    if (item.isRadio) {
-                        scheduleRadioReconnect("Sinyal terputus, menyambung ulang...")
-                    } else {
-                        playNext()
-                    }
-                }
-                setOnErrorListener { _, _, _ ->
-                    isPreparing = false
-                    isPlaying = false
-                    if (item.isRadio) {
-                        scheduleRadioReconnect("Jaringan melemah, mencari sinyal...")
-                    } else {
-                        setSignalBadge("● FILE ERROR", 0xFFE05252.toInt())
-                        btnPlayPause.text = "▶ PUTAR"
-                    }
-                    true
-                }
-                prepareAsync()
-            }
-            player = mp
-        } catch (_: Exception) {
-            isPreparing = false
-            if (item.isRadio) {
-                scheduleRadioReconnect("Gagal terhubung, mencoba ulang...")
-            }
-        }
-    }
-
-    private fun scheduleRadioReconnect(reason: String) {
-        val item = currentItem ?: return
-        if (!item.isRadio || pausedByCallOrFocus || pausedByAdzan) return
-        if (retryCount >= maxRetries) {
-            setSignalBadge("● SINYAL HILANG", 0xFFE05252.toInt())
-            btnPlayPause.text = "↻ COBA LAGI"
-            return
-        }
-        retryCount++
-        setSignalBadge("● RECONNECT ($retryCount/$maxRetries)", 0xFFFF9800.toInt())
-        tvNowSub.text = reason
-        ui.removeCallbacks(reconnectRunnable)
-        ui.postDelayed(reconnectRunnable, 2500L)
-    }
-
-    private val reconnectRunnable = Runnable {
-        val item = currentItem ?: return@Runnable
-        if (item.isRadio && !pausedByCallOrFocus && !pausedByAdzan) {
-            startMediaPlayer(item)
-        }
-    }
-
-    private fun togglePlayPause() {
-        val item = currentItem
-        if (item == null) {
-            if (visibleList.isNotEmpty()) playItem(visibleList[0])
-            return
-        }
-        if (isPlaying) {
-            pausedByCallOrFocus = false
-            pausePlayback(byExternalInterruption = false)
-        } else {
-            if (player != null && !isPreparing) {
-                if (requestFocus()) resumePlayback()
-            } else {
-                retryCount = 0
-                playItem(item)
-            }
-        }
-    }
-
-    private fun pausePlayback(byExternalInterruption: Boolean) {
-        try {
-            if (player?.isPlaying == true) player?.pause()
-        } catch (_: Exception) {
-        }
-        isPlaying = false
-        btnPlayPause.text = "▶ PUTAR"
-        if (byExternalInterruption) {
-            setSignalBadge(if (pausedByAdzan) "● JEDA ADZAN" else "● JEDA TELEPON", brassLight)
-        } else {
-            setSignalBadge("● DIJEDA", mute)
-        }
-    }
-
-    private fun resumePlayback() {
-        try {
-            player?.start()
-            isPlaying = true
-            btnPlayPause.text = "❚❚ JEDA"
-            setSignalBadge(if (currentItem?.isRadio == true) "● SINYAL STABIL" else "● MEMUTAR", 0xFF4CAF7D.toInt())
-        } catch (_: Exception) {
-            currentItem?.let { startMediaPlayer(it) }
-        }
-    }
-
-    private fun playNext() {
-        val list = if (visibleList.isNotEmpty()) visibleList else currentList
-        if (list.isEmpty()) return
-        val nextIdx = (currentIndex + 1) % list.size
-        playItem(list[nextIdx], list)
-    }
-
-    private fun playPrev() {
-        val list = if (visibleList.isNotEmpty()) visibleList else currentList
-        if (list.isEmpty()) return
-        val prevIdx = if (currentIndex <= 0) list.size - 1 else currentIndex - 1
-        playItem(list[prevIdx], list)
-    }
-
-    private fun setSignalBadge(text: String, color: Int) {
-        tvSignalStatus.text = text
-        tvSignalStatus.setTextColor(color)
+        tvAdzanStatus.text = svc.adzanCountdownText
+        tvSignalStatus.text = svc.signalText
+        tvSignalStatus.setTextColor(svc.signalColor)
         tvSignalStatus.background = GradientDrawable().apply {
             cornerRadius = dp(8).toFloat()
-            setColor((color and 0x00FFFFFF) or 0x22000000)
+            setColor((svc.signalColor and 0x00FFFFFF) or 0x22000000)
         }
-    }
 
-    private fun releasePlayer() {
-        ui.removeCallbacks(reconnectRunnable)
-        try {
-            player?.stop()
-            player?.release()
-        } catch (_: Exception) {
-        }
-        player = null
-        isPlaying = false
-        isPreparing = false
-    }
-
-    // =========================================================================
-    // PHONE CALL STATE + NETWORK RECOVERY MONITORS
-    // =========================================================================
-    private fun registerCallAndNetworkMonitors() {
-        registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
-
-        // 1. Phone Call State Listener (Android 12+ TelephonyCallback & Legacy PhoneStateListener)
-        try {
-            telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                    val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-                        override fun onCallStateChanged(state: Int) {
-                            handlePhoneCallState(state)
-                        }
-                    }
-                    telephonyCallback = cb
-                    telephonyManager?.registerTelephonyCallback(mainExecutor, cb)
-                }
+        if (item != null) {
+            tvNowTitle.text = item.title
+            tvNowSub.text = item.subtitle
+            seekBar.isEnabled = !item.isRadio
+            if (item.isRadio) {
+                tvTimeCur.text = "LIVE"
+                tvTimeDur.text = "RADIO"
+                seekBar.progress = 1000
             } else {
-                @Suppress("DEPRECATION")
-                val listener = object : PhoneStateListener() {
-                    @Deprecated("Deprecated in Java")
-                    override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-                        handlePhoneCallState(state)
-                    }
-                }
-                legacyPhoneListener = listener
-                @Suppress("DEPRECATION")
-                telephonyManager?.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
-            }
-        } catch (_: Exception) {
-        }
-
-        // 2. Network Recovery Callback for Radio Auto-Resume
-        try {
-            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val req = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            val cb = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    ui.post {
-                        val item = currentItem
-                        if (item != null && item.isRadio && !isPlaying && !isPreparing && !pausedByCallOrFocus && !pausedByAdzan) {
-                            retryCount = 0
-                            startMediaPlayer(item)
-                        }
-                    }
-                }
-            }
-            networkCallback = cb
-            cm.registerNetworkCallback(req, cb)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun handlePhoneCallState(callState: Int) {
-        ui.post {
-            when (callState) {
-                TelephonyManager.CALL_STATE_RINGING,
-                TelephonyManager.CALL_STATE_OFFHOOK -> {
-                    if (isPlaying || isPreparing) {
-                        pausedByCallOrFocus = true
-                        pausePlayback(byExternalInterruption = true)
-                    }
-                }
-                TelephonyManager.CALL_STATE_IDLE -> {
-                    if (pausedByCallOrFocus && !pausedByAdzan) {
-                        pausedByCallOrFocus = false
-                        if (requestFocus()) resumePlayback()
+                val dur = svc.getDurationMs()
+                val pos = svc.getPositionMs()
+                if (dur > 0) {
+                    tvTimeDur.text = formatMs(dur)
+                    if (!userSeeking) {
+                        tvTimeCur.text = formatMs(pos)
+                        seekBar.progress = ((pos.toLong() * 1000L) / dur).toInt().coerceIn(0, 1000)
                     }
                 }
             }
         }
-    }
 
-    // =========================================================================
-    // ADZAN SCHEDULE CHECKER (SYNCHRONIZED WITH HOMEACTIVITY PREFS)
-    // =========================================================================
-    private fun loadPrayerSchedule() {
-        val today = SimpleDateFormat("dd-MM-yyyy", Locale.US).format(Date())
-        val cachedDate = prefs.getString("pray_date", "")
-        val cachedJson = prefs.getString("pray", null)
-        if (cachedDate == today && cachedJson != null && parsePrayerJson(cachedJson)) {
-            return
+        btnPlayPause.text = when {
+            svc.isPreparing -> "⏳ MEMUAT"
+            svc.isPlaying -> "❚❚ JEDA"
+            else -> "▶ PUTAR"
         }
-        val lat = prefs.getString("lat", null)?.toDoubleOrNull() ?: -0.0263
-        val lon = prefs.getString("lon", null)?.toDoubleOrNull() ?: 109.3425
-        val tz = prefs.getString("tz", null) ?: "Asia/Pontianak"
-        Thread {
-            try {
-                val u = "https://api.aladhan.com/v1/timings/$today?latitude=$lat&longitude=$lon&method=20&timezonestring=${java.net.URLEncoder.encode(tz, "UTF-8")}"
-                val c = URL(u).openConnection() as HttpURLConnection
-                c.connectTimeout = 8000
-                c.readTimeout = 10000
-                val res = c.inputStream.bufferedReader().use { it.readText() }
-                ui.post {
-                    if (parsePrayerJson(res)) {
-                        prefs.edit().putString("pray_date", today).putString("pray", res).apply()
-                    }
+
+        val prayer = svc.activeAdzanPrayer
+        if (prayer != null && adzanDialogShownFor != prayer && !isFinishing) {
+            adzanDialogShownFor = prayer
+            AlertDialog.Builder(this)
+                .setTitle("Waktu Sholat $prayer")
+                .setMessage("Telah masuk waktu sholat $prayer. Pemutaran musik/radio dijeda sementara.")
+                .setPositiveButton("Lanjutkan Musik") { _, _ ->
+                    adzanDialogShownFor = null
+                    svc.dismissAdzanBanner(resumeMusic = true)
                 }
-            } catch (_: Exception) {
-            }
-        }.start()
-    }
-
-    private fun parsePrayerJson(json: String): Boolean {
-        return try {
-            val t = JSONObject(json).getJSONObject("data").getJSONObject("timings")
-            val keys = arrayOf("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
-            for (i in 0..4) {
-                val s = t.getString(keys[i])
-                prayerTimes[i] = s.substring(0, 2).toInt() * 60 + s.substring(3, 5).toInt()
-            }
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun checkAdzanAndUpdateCountdown() {
-        if (prayerTimes[0] < 0) {
-            tvAdzanStatus.text = "Adzan: Sinkron..."
-            return
-        }
-        val cal = Calendar.getInstance()
-        val nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
-        val offset = (prefs.getString("adzan_offset", "0") ?: "0").toIntOrNull()?.coerceIn(-15, 15) ?: 0
-        val today = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
-
-        // Check if current minute matches any prayer time
-        for (i in 0..4) {
-            val pMin = prayerTimes[i] + offset
-            val key = "${today}_$i"
-            if (nowMin == pMin && lastTriggeredAdzanKey != key) {
-                lastTriggeredAdzanKey = key
-                triggerAdzanInterruption(prayerNames[i])
-                break
-            }
-        }
-
-        // Update next prayer badge
-        var nx = prayerTimes.indexOfFirst { (it + offset) > nowMin }
-        val diff = if (nx < 0) {
-            nx = 0
-            (prayerTimes[0] + offset) + 1440 - nowMin
-        } else {
-            (prayerTimes[nx] + offset) - nowMin
-        }
-        val h = diff / 60
-        val m = diff % 60
-        tvAdzanStatus.text = "${prayerNames[nx]} -${h}j ${m}m"
-    }
-
-    private fun triggerAdzanInterruption(prayerName: String) {
-        val wasPlaying = isPlaying || isPreparing
-        if (wasPlaying) {
-            pausedByAdzan = true
-            pausePlayback(byExternalInterruption = true)
-        }
-
-        try {
-            val notifUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            RingtoneManager.getRingtone(applicationContext, notifUri)?.play()
-        } catch (_: Exception) {
-        }
-
-        if (isFinishing || isDestroyed) return
-        adzanAlertDialog?.dismiss()
-        adzanAlertDialog = AlertDialog.Builder(this)
-            .setTitle("Waktu Sholat $prayerName")
-            .setMessage("Telah masuk waktu sholat $prayerName. Pemutaran musik/radio dijeda sementara.")
-            .setPositiveButton("Lanjutkan Musik") { _, _ ->
-                pausedByAdzan = false
-                if (wasPlaying && !pausedByCallOrFocus && requestFocus()) {
-                    resumePlayback()
+                .setNegativeButton("Tutup") { _, _ ->
+                    adzanDialogShownFor = null
+                    svc.dismissAdzanBanner(resumeMusic = false)
                 }
-            }
-            .setNegativeButton("Tutup") { _, _ ->
-                pausedByAdzan = false
-            }
-            .show()
+                .show()
+        }
     }
 
-    // =========================================================================
-    // PERIODIC WATCHDOG (SEEKBAR + RADIO STALL DETECTION + ADZAN)
-    // =========================================================================
-    private val monitorRunnable = object : Runnable {
+    private val screenAndSeekUpdater = object : Runnable {
         override fun run() {
-            checkAdzanAndUpdateCountdown()
+            syncUiFromService()
 
-            val p = player
-            val item = currentItem
-            if (p != null && item != null && isPlaying) {
-                try {
-                    val pos = p.currentPosition
-                    if (!item.isRadio) {
-                        val dur = p.duration
-                        if (dur > 0 && !userSeeking) {
-                            tvTimeCur.text = formatMs(pos)
-                            seekBar.progress = ((pos.toLong() * 1000L) / dur).toInt().coerceIn(0, 1000)
-                        }
-                    } else {
-                        // Watchdog: if radio stream position freezes for 6 seconds, reconnect automatically
-                        if (pos == lastPlaybackPos) {
-                            stallTicks++
-                            if (stallTicks >= 6) {
-                                stallTicks = 0
-                                scheduleRadioReconnect("Buffer terhenti, menyegarkan aliran radio...")
-                            }
-                        } else {
-                            stallTicks = 0
-                            lastPlaybackPos = pos
-                        }
-                    }
-                } catch (_: Exception) {
+            // Auto Dark Screen after 20 seconds of inactivity while playing
+            val svc = musicService
+            if (svc != null && svc.isPlaying && !darkScreenActive && drawerOverlay.visibility != View.VISIBLE) {
+                if (System.currentTimeMillis() - lastUserActivityMs >= autoDarkDelayMs) {
+                    enterDarkScreen()
                 }
+            }
+            if (darkScreenActive) {
+                updateDarkScreenText()
             }
             ui.postDelayed(this, 1000L)
         }
@@ -1082,27 +762,11 @@ class RadioMusicActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
-        adzanAlertDialog?.dismiss()
-        try {
-            unregisterReceiver(noisyReceiver)
-        } catch (_: Exception) {
+        if (serviceBound) {
+            musicService?.onStateChanged = null
+            unbindService(serviceConn)
+            serviceBound = false
         }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                (telephonyCallback as? TelephonyCallback)?.let { telephonyManager?.unregisterTelephonyCallback(it) }
-            } else {
-                @Suppress("DEPRECATION")
-                telephonyManager?.listen(legacyPhoneListener, PhoneStateListener.LISTEN_NONE)
-            }
-        } catch (_: Exception) {
-        }
-        try {
-            networkCallback?.let {
-                (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(it)
-            }
-        } catch (_: Exception) {
-        }
-        releasePlayer()
         super.onDestroy()
     }
 }
