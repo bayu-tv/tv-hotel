@@ -5,6 +5,9 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
+import android.speech.RecognizerIntent
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -161,7 +164,7 @@ class RadioMusicActivity : AppCompatActivity() {
     // =========================================================================
     enum class Glyph {
         PLAY, PAUSE, STOP, NEXT, PREV, SHUFFLE, REPEAT, REPEAT_ONE,
-        MIC, LYRICS, TIMER, MOON, SEARCH, PLUS, CHEVRON_DOWN, BACK, DISC, RADIO
+        MIC, LYRICS, TIMER, MOON, SEARCH, PLUS, CLOSE, CHEVRON_DOWN, BACK, DISC, RADIO
     }
 
     class GlyphDrawable(
@@ -291,6 +294,10 @@ class RadioMusicActivity : AppCompatActivity() {
                 Glyph.PLUS -> {
                     canvas.drawLine(w * 0.50f, h * 0.22f, w * 0.50f, h * 0.78f, strokePaint)
                     canvas.drawLine(w * 0.22f, h * 0.50f, w * 0.78f, h * 0.50f, strokePaint)
+                }
+                Glyph.CLOSE -> {
+                    canvas.drawLine(w * 0.28f, h * 0.28f, w * 0.72f, h * 0.72f, strokePaint)
+                    canvas.drawLine(w * 0.72f, h * 0.28f, w * 0.28f, h * 0.72f, strokePaint)
                 }
                 Glyph.CHEVRON_DOWN -> {
                     canvas.drawLine(w * 0.22f, h * 0.36f, w * 0.50f, h * 0.66f, strokePaint)
@@ -1873,7 +1880,19 @@ class RadioMusicActivity : AppCompatActivity() {
     private var combinedPlaylists: List<UserPlaylist> = emptyList()
     private var selectedPlaylistIdx = 0
 
-    private lateinit var voiceInput: VoiceInput
+    private val voiceSearchLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull()?.trim().orEmpty()
+            if (spoken.isNotEmpty()) {
+                searchInput.setText(spoken)
+                searchInput.setSelection(spoken.length)
+                executeSearch()
+            }
+        }
+    }
     private lateinit var browseContainer: LinearLayout
     private lateinit var btnGoogleAccount: TextView
     private lateinit var searchSectionBox: LinearLayout
@@ -2114,17 +2133,22 @@ class RadioMusicActivity : AppCompatActivity() {
             }
         }
         val micBtn = voiceInput.createMicButton(searchInput, "Ucapkan judul lagu atau penyanyi...")
-        btnClearSearch = tv("Reset", 11f, mute, Typeface.DEFAULT_BOLD).apply {
-            setPadding(dp(9), dp(5), dp(9), dp(5))
+        btnClearSearch = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER
+            setImageDrawable(GlyphDrawable(Glyph.CLOSE, mute, dp(13)))
             isFocusable = true
             isClickable = true
             visibility = View.GONE
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x1AFFFFFF)
+            }
             setOnFocusChangeListener { _, f ->
-                setTextColor(if (f) bgDark else mute)
-                background = if (f) GradientDrawable().apply {
-                    cornerRadius = dp(12).toFloat()
-                    setColor(Color.WHITE)
-                } else null
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(if (f) Color.WHITE else 0x1AFFFFFF)
+                }
+                setImageDrawable(GlyphDrawable(Glyph.CLOSE, if (f) bgDark else mute, dp(13)))
             }
             setOnClickListener {
                 searchInput.setText("")
@@ -2132,14 +2156,35 @@ class RadioMusicActivity : AppCompatActivity() {
                 renderSpotifyHome(isPortraitPhone())
             }
         }
+
+        val btnVoiceMic = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER
+            setImageDrawable(GlyphDrawable(Glyph.MIC, brassLight, dp(16)))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x22E6C88F)
+            }
+            setOnFocusChangeListener { _, f ->
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(if (f) brassLight else 0x22E6C88F)
+                }
+                setImageDrawable(GlyphDrawable(Glyph.MIC, if (f) bgDark else brassLight, dp(16)))
+            }
+            setOnClickListener { startIndonesianVoiceSearch() }
+        }
+
         val searchBtn = actionPillBtn("Cari", primary = true) {
             executeSearch()
             hideKeyboard()
         }
+
         searchBarBox.addView(searchInput, LinearLayout.LayoutParams(0, -2, 1f))
-        searchBarBox.addView(micBtn)
-        searchBarBox.addView(btnClearSearch, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        searchBarBox.addView(searchBtn, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(4) })
+        searchBarBox.addView(btnClearSearch, LinearLayout.LayoutParams(dp(28), dp(28)).apply { leftMargin = dp(4) })
+        searchBarBox.addView(btnVoiceMic, LinearLayout.LayoutParams(dp(32), dp(32)).apply { leftMargin = dp(6) })
+        searchBarBox.addView(searchBtn, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
         searchSectionBox.addView(searchBarBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
         browseContainer.addView(searchSectionBox)
@@ -5148,6 +5193,21 @@ class RadioMusicActivity : AppCompatActivity() {
     private fun hideKeyboard() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(searchInput.windowToken, 0)
+    }
+
+    private fun startIndonesianVoiceSearch() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Sebutkan judul lagu atau nama penyanyi...")
+        }
+        try {
+            voiceSearchLauncher.launch(intent)
+        } catch (_: ActivityNotFoundException) {
+            notice.show("Pencarian Suara", "Layanan input suara tidak tersedia di perangkat ini.", 3000L)
+        }
     }
 
     override fun onStart() {
