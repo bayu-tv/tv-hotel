@@ -41,7 +41,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.max
 
 class MusicPlaybackService : Service() {
 
@@ -73,25 +72,25 @@ class MusicPlaybackService : Service() {
     val currentItem: RadioMusicActivity.AudioItem?
         get() = playlist.getOrNull(currentIndex)
 
-    var isPlaying = false
+    var isPlaying: Boolean = false
         private set
-    var isPreparing = false
+    var isPreparing: Boolean = false
         private set
-    var signalText = "● SIAP"
+    var signalText: String = "● SIAP"
         private set
-    var signalColor = 0xFF4CAF7D.toInt()
+    var signalColor: Int = 0xFF4CAF7D.toInt()
         private set
-    var adzanCountdownText = "Adzan: Sinkron..."
+    var adzanCountdownText: String = "Adzan: Sinkron..."
         private set
     var activeAdzanPrayer: String? = null
         private set
 
-    private var pausedByCallOrFocus = false
-    private var pausedByAdzan = false
-    private var retryCount = 0
-    private val maxRetries = 10
-    private var lastPlaybackPos = -1
-    private var stallTicks = 0
+    private var pausedByCallOrFocus: Boolean = false
+    private var pausedByAdzan: Boolean = false
+    private var retryCount: Int = 0
+    private val maxRetries: Int = 10
+    private var lastPlaybackPos: Int = -1
+    private var stallTicks: Int = 0
 
     private var telephonyManager: TelephonyManager? = null
     private var telephonyCallback: Any? = null
@@ -101,7 +100,7 @@ class MusicPlaybackService : Service() {
 
     private val prayerTimes = IntArray(5) { -1 }
     private val prayerNames = arrayOf("Subuh", "Zuhur", "Asar", "Magrib", "Isya")
-    private var lastTriggeredAdzanKey = ""
+    private var lastTriggeredAdzanKey: String = ""
 
     var onStateChanged: (() -> Unit)? = null
 
@@ -167,7 +166,7 @@ class MusicPlaybackService : Service() {
                 description = "Kontrol pemutaran musik dan radio di bilah notifikasi & layar kunci"
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
+            getSystemService(NotificationManager.class.java)?.createNotificationChannel(ch)
         }
     }
 
@@ -527,9 +526,6 @@ class MusicPlaybackService : Service() {
         ui.post { onStateChanged?.invoke() }
     }
 
-    // =========================================================================
-    // MONITORS: TELEPHONY CALL STATE, NETWORK RECOVERY & ADZAN SCHEDULE
-    // =========================================================================
     private fun registerMonitors() {
         registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
 
