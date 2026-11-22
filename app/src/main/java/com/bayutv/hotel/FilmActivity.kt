@@ -328,6 +328,40 @@ class FilmActivity : AppCompatActivity() {
         val alp = LinearLayout.LayoutParams(-2, -2)
         alp.leftMargin = dp(10)
         topBar.addView(addonBtn, alp)
+        val domainAnimeBtn = tv(
+            "Domain Anime", 12f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0x28B8975A)
+                setStroke(dp(1), brass)
+            }
+            setOnFocusChangeListener { _, f ->
+                setTextColor(if (f) bgDark else brassLight)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    if (f) {
+                        setColor(brassLight)
+                        setStroke(dp(2), Color.WHITE)
+                    } else {
+                        setColor(0x28B8975A)
+                        setStroke(dp(1), brass)
+                    }
+                }
+            }
+            setOnClickListener {
+                AnimeIndoProvider.showDomainDialog(this@FilmActivity) { newUrl ->
+                    notice.show("Domain Anime Diperbarui", newUrl, 3000L)
+                }
+            }
+        }
+        val dlp = LinearLayout.LayoutParams(-2, -2)
+        dlp.leftMargin = dp(8)
+        topBar.addView(domainAnimeBtn, dlp)
 
         mainCol.addView(topBar)
         buildSearchPanel(mainCol)
@@ -562,10 +596,21 @@ class FilmActivity : AppCompatActivity() {
     private fun runLiveSearch(q: String) {
         val my = ++token
         rowsBox.removeAllViews()
+        Thread {
+            val animeHits = AnimeIndoProvider.search(this, q).take(16)
+            if (animeHits.isNotEmpty() && my == token && !isFinishing) {
+                ui.post {
+                    if (my == token && !isFinishing) {
+                        notice.hide()
+                        addAnimeIndoRow("Anime Sub-Indo: \"$q\"", animeHits)
+                    }
+                }
+            }
+        }.start()
         val enc = URLEncoder.encode(q, "UTF-8")
         loadCategoryRows(
             my,
-            listOf(Triple("Hasil Pencarian: \"$q\"", "/search/multi", "language=id-ID&include_adult=false&query=$enc")),
+            listOf(Triple("Hasil TMDB: \"$q\"", "/search/multi", "language=id-ID&include_adult=false&query=$enc")),
             "movie"
         )
     }
@@ -672,16 +717,19 @@ class FilmActivity : AppCompatActivity() {
                 ),
                 "movie"
             )
-            2 -> loadCategoryRows(
-                my,
-                listOf(
-                    Triple("Anime Populer", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=1"),
-                    Triple("Anime Rating Tertinggi", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=vote_average.desc&vote_count.gte=150&page=1"),
-                    Triple("Serial TV Populer", "/tv/popular", "language=id-ID&page=1"),
-                    Triple("Drama Korea Populer", "/discover/tv", "language=id-ID&with_original_language=ko&sort_by=popularity.desc&page=1")
-                ),
-                "tv"
-            )
+            2 -> {
+                loadAnimeIndoRows(my)
+                loadCategoryRows(
+                    my,
+                    listOf(
+                        Triple("Anime Populer (TMDB)", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=1"),
+                        Triple("Anime Rating Tertinggi (TMDB)", "/discover/tv", "language=id-ID&with_genres=16&with_original_language=ja&sort_by=vote_average.desc&vote_count.gte=150&page=1"),
+                        Triple("Serial TV Populer", "/tv/popular", "language=id-ID&page=1"),
+                        Triple("Drama Korea Populer", "/discover/tv", "language=id-ID&with_original_language=ko&sort_by=popularity.desc&page=1")
+                    ),
+                    "tv"
+                )
+            }
             3 -> loadCategoryRows(
                 my,
                 listOf(
@@ -733,6 +781,153 @@ class FilmActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun loadAnimeIndoRows(my: Int) {
+        notice.show(null, "Memuat katalog Anime Sub-Indo...")
+        Thread {
+            val ongoing = AnimeIndoProvider.fetchOngoing(this).take(16)
+            if (ongoing.isNotEmpty() && my == token && !isFinishing) {
+                ui.post {
+                    if (my == token && !isFinishing) {
+                        notice.hide()
+                        addAnimeIndoRow("Anime Sub-Indo Terbaru (Ongoing)", ongoing)
+                    }
+                }
+            }
+            val complete = AnimeIndoProvider.fetchComplete(this).take(16)
+            if (complete.isNotEmpty() && my == token && !isFinishing) {
+                ui.post {
+                    if (my == token && !isFinishing) {
+                        notice.hide()
+                        addAnimeIndoRow("Anime Sub-Indo Tamat (Full Episode)", complete)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun addAnimeIndoRow(rowTitle: String, items: List<AnimeIndoProvider.AnimeItem>) {
+        if (items.isEmpty()) return
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+            setPadding(0, dp(4), 0, dp(10))
+        }
+        val header = tv(
+            rowTitle, 17f, brassLight,
+            Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        ).apply {
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
+            setPadding(dp(44), 0, dp(44), dp(6))
+        }
+        section.addView(header)
+
+        val hScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            clipChildren = false
+            setPadding(dp(44), dp(8), dp(44), dp(8))
+        }
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        for (item in items) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                clipChildren = false
+                isFocusable = true
+                isClickable = true
+            }
+            val posterFrame = FrameLayout(this).apply {
+                foreground = posterStroke(false)
+            }
+            roundPoster(posterFrame, 10)
+
+            val img = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(0xFF1B1916.toInt())
+            }
+            posterFrame.addView(img, FrameLayout.LayoutParams(-1, dp(192)))
+
+            if (item.badge.isNotEmpty()) {
+                val b = tv(
+                    item.badge, 9.5f, brassLight,
+                    Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                ).apply {
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(4).toFloat()
+                        setColor(0xDD0B0A09.toInt())
+                    }
+                }
+                val blp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
+                blp.setMargins(dp(6), dp(6), dp(6), 0)
+                posterFrame.addView(b, blp)
+            }
+
+            card.addView(posterFrame, LinearLayout.LayoutParams(-1, dp(192)))
+
+            val title = tv(
+                item.title, 12f, mute,
+                Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            ).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(2), dp(6), dp(2), 0)
+            }
+            card.addView(title)
+
+            card.setOnFocusChangeListener { _, hasFocus ->
+                posterFrame.foreground = posterStroke(hasFocus)
+                title.setTextColor(if (hasFocus) ivory else mute)
+                card.z = if (hasFocus) 8f else 0f
+                card.animate()
+                    .scaleX(if (hasFocus) 1.06f else 1f)
+                    .scaleY(if (hasFocus) 1.06f else 1f)
+                    .setDuration(130)
+                    .start()
+                if (hasFocus) {
+                    focusedMovie = null
+                    ui.removeCallbacks(applyHeroRunnable)
+                    heroTitle.text = item.title
+                    heroBadge.text = "ANIME SUB-INDO  |  ${item.status.uppercase()}  |  BEBAS IKLAN"
+                    heroMeta.text = "${item.badge}   |   Tekan OK untuk Pilih Episode"
+                    heroOverview.text = "Tonton seluruh episode ${item.title} dengan Subtitle Indonesia langsung di pemutar B-BOX Native."
+                    if (item.poster.isNotEmpty()) loadHeroImage(item.poster, false, heroBackdrop)
+                    val parentRow = card.parent?.parent?.parent as? View
+                    if (parentRow != null) {
+                        rowsScroll.smoothScrollTo(0, (parentRow.top - dp(10)).coerceAtLeast(0))
+                    }
+                }
+            }
+
+            card.setOnClickListener {
+                AnimeIndoProvider.openEpisodeSelector(
+                    context = this,
+                    item = item,
+                    onStatus = { t, msg, ms ->
+                        if (ms > 0L) notice.show(t, msg, ms) else notice.show(t, msg)
+                    },
+                    onHideStatus = { notice.hide() }
+                )
+            }
+
+            if (item.poster.isNotEmpty()) Images.load(item.poster, img)
+            val lp = LinearLayout.LayoutParams(dp(136), -2)
+            lp.rightMargin = dp(16)
+            strip.addView(card, lp)
+        }
+
+        hScroll.addView(strip)
+        section.addView(hScroll)
+        rowsBox.addView(section)
     }
 
     private fun addYoutubeRow(my: Int, rowTitle: String, items: List<YoutubeCatalog.Entry>) {
