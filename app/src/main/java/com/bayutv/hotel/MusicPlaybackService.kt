@@ -166,7 +166,7 @@ class MusicPlaybackService : Service() {
                 description = "Kontrol pemutaran musik dan radio di bilah notifikasi & layar kunci"
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager.classjava)?.createNotificationChannel(ch)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
         }
     }
 
@@ -373,14 +373,14 @@ class MusicPlaybackService : Service() {
                         return@setOnPreparedListener
                     }
                     p.start()
-                    isPlaying = true
+                    this@MusicPlaybackService.isPlaying = true
                     signalText = if (item.isRadio) "● SINYAL STABIL" else "● MEMUTAR"
                     signalColor = 0xFF4CAF7D.toInt()
                     updateNotification()
                     notifyUi()
                 }
                 setOnCompletionListener {
-                    isPlaying = false
+                    this@MusicPlaybackService.isPlaying = false
                     if (item.isRadio) {
                         scheduleRadioReconnect()
                     } else {
@@ -389,7 +389,7 @@ class MusicPlaybackService : Service() {
                 }
                 setOnErrorListener { _, _, _ ->
                     isPreparing = false
-                    isPlaying = false
+                    this@MusicPlaybackService.isPlaying = false
                     if (item.isRadio) {
                         scheduleRadioReconnect()
                     } else {
@@ -557,7 +557,12 @@ class MusicPlaybackService : Service() {
     }
 
     private fun registerMonitors() {
-        registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        ContextCompat.registerReceiver(
+            this,
+            noisyReceiver,
+            IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         try {
             telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
