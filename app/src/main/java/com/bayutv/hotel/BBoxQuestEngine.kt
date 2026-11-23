@@ -11,7 +11,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import kotlin.math.abs
-import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -24,6 +24,9 @@ class BBoxQuestEngine(private val context: Context) {
         fun onShake(duration: Float, strengthDp: Float)
         fun onParticles(x: Float, y: Float, count: Int, color: Int, speedMin: Float, speedMax: Float, sizeDp: Float)
         fun onFloatText(x: Float, y: Float, text: String, color: Int)
+        fun onShockwave(x: Float, y: Float, maxRadiusDp: Float, color: Int)
+        fun onHitStop(duration: Float)
+        fun onComboEvent(x: Float, y: Float)
         fun onStageFinished(victory: Boolean, nextStage: Int)
     }
 
@@ -60,7 +63,7 @@ class BBoxQuestEngine(private val context: Context) {
     private var coins = 0
     private var animTime = 0f
 
-    // Player physics (in tile units)
+    // Player physics & juice states
     private var px = 3f
     private var py = 8f
     private var vx = 0f
@@ -70,10 +73,14 @@ class BBoxQuestEngine(private val context: Context) {
     private var coyoteTimer = 0f
     private var jumpBufferTimer = 0f
     private var jumpHoldTimer = 0f
-    private var powerLevel = 0 // 0=Normal, 1=Super (Big), 2=Fire
+    private var powerLevel = 0 // 0=Normal, 1=Super, 2=Fire
     private var invulnTimer = 0f
     private var fireCooldown = 0f
     private var landSquash = 0f
+    private var jumpStretch = 0f
+    private var fireRecoil = 0f
+    private var muzzleFlashTimer = 0f
+    private var runDustTimer = 0f
     private var checkpointX = 3f
     private var checkpointY = 8f
     private var checkpointReached = false
@@ -89,7 +96,7 @@ class BBoxQuestEngine(private val context: Context) {
     private var cachedSpriteSize = 0
     private var cachedSpriteStage = 0
 
-    // Pre-rendered tile & sprite bitmaps (zero per-frame allocation)
+    // Pre-rendered tile & sprite bitmaps
     private var bmpGround: Bitmap? = null
     private var bmpBrick: Bitmap? = null
     private var bmpQuestion: Bitmap? = null
@@ -105,16 +112,17 @@ class BBoxQuestEngine(private val context: Context) {
     private var cachedSkyH = 0f
     private var cachedSkyStage = 0
 
-    // Enemies pool (24 slots)
+    // Enemies pool (24 slots) with Hit-Flash & Squash
     private val maxEnemies = 24
     private val enActive = BooleanArray(maxEnemies)
     private val enType = IntArray(maxEnemies) // 0=Slime, 1=Turtle, 2=Bat
-    private val enState = IntArray(maxEnemies) // For Turtle: 0=walk, 1=shell idle, 2=shell slide
+    private val enState = IntArray(maxEnemies) // Turtle: 0=walk, 1=shell idle, 2=shell slide
     private val enX = FloatArray(maxEnemies)
     private val enY = FloatArray(maxEnemies)
     private val enVx = FloatArray(maxEnemies)
     private val enVy = FloatArray(maxEnemies)
     private val enBaseY = FloatArray(maxEnemies)
+    private val enFlashTimer = FloatArray(maxEnemies)
 
     // Moving platforms pool (8 slots)
     private val maxPlats = 8
@@ -135,13 +143,21 @@ class BBoxQuestEngine(private val context: Context) {
     private val itVx = FloatArray(maxItems)
     private val itVy = FloatArray(maxItems)
 
-    // Player fireballs pool (4 slots)
+    // Magnetized coins pool (Object Snap effect)
+    private val maxMagCoins = 14
+    private val mcActive = BooleanArray(maxMagCoins)
+    private val mcX = FloatArray(maxMagCoins)
+    private val mcY = FloatArray(maxMagCoins)
+
+    // Player fireballs pool with Ribbon Trail
     private val maxFireballs = 4
     private val fbActive = BooleanArray(maxFireballs)
     private val fbX = FloatArray(maxFireballs)
     private val fbY = FloatArray(maxFireballs)
     private val fbVx = FloatArray(maxFireballs)
     private val fbVy = FloatArray(maxFireballs)
+    private val fbTrailX = FloatArray(maxFireballs * 4)
+    private val fbTrailY = FloatArray(maxFireballs * 4)
 
     private fun dp(v: Float): Float = v * context.resources.displayMetrics.density
 
@@ -171,8 +187,11 @@ class BBoxQuestEngine(private val context: Context) {
         jumpBufferTimer = 0f
         jumpHoldTimer = 0f
         invulnTimer = 1.2f
+        fireRecoil = 0f
+        muzzleFlashTimer = 0f
         fbActive.fill(false)
         itActive.fill(false)
+        mcActive.fill(false)
         cameraX = max(0f, px - 5f)
     }
 
@@ -184,8 +203,7 @@ class BBoxQuestEngine(private val context: Context) {
 
     private fun getTile(c: Int, r: Int): Char {
         if (c < 0 || c >= COLS) return '#'
-        if (r < 0) return '.'
-        if (r >= ROWS) return '.'
+        if (r < 0 || r >= ROWS) return '.'
         return grid[r * COLS + c]
     }
 
@@ -210,6 +228,7 @@ class BBoxQuestEngine(private val context: Context) {
                 enX[i] = col + 0.1f
                 enY[i] = row.toFloat()
                 enBaseY[i] = row.toFloat()
+                enFlashTimer[i] = 0f
                 val spd = (2.1f + difficulty * 0.45f)
                 enVx[i] = -spd
                 enVy[i] = 0f
@@ -238,14 +257,13 @@ class BBoxQuestEngine(private val context: Context) {
         tileBounce.fill(0f)
         enActive.fill(false)
         plActive.fill(false)
+        mcActive.fill(false)
 
-        // Base ground (rows 11 and 12)
         for (c in 0 until COLS) {
             setTile(c, ROWS - 2, '#')
             setTile(c, ROWS - 1, '#')
         }
 
-        // Carve pits according to stage
         val pits = when (st) {
             1 -> listOf(18..19, 38..40, 58..60, 82..84, 104..106)
             2 -> listOf(15..18, 32..36, 52..57, 74..79, 96..101)
@@ -258,22 +276,19 @@ class BBoxQuestEngine(private val context: Context) {
             }
         }
 
-        // Intro blocks & Power-up
         setTile(10, 7, '?')
         setTile(13, 7, 'B')
-        setTile(14, 7, 'U') // Power-up block
+        setTile(14, 7, 'U')
         setTile(15, 7, 'B')
         setTile(14, 4, '?')
         setTile(11, 6, 'O')
         setTile(12, 6, 'O')
 
-        // Pipes & mid-level structures
         addPipe(23, 2)
         addPipe(30, 3)
         spawnEnemy(0, 26, ROWS - 3)
         spawnEnemy(1, 35, ROWS - 3)
 
-        // Coin arcs & elevated bricks
         for (c in 43..48) {
             setTile(c, 7, if (c == 45 || c == 46) '?' else 'B')
             setTile(c, 5, 'O')
@@ -281,7 +296,6 @@ class BBoxQuestEngine(private val context: Context) {
         spawnEnemy(0, 46, 6)
         spawnEnemy(0, 50, ROWS - 3)
 
-        // Moving platforms over wider gaps in Stage 2 & 3
         if (st >= 2) {
             spawnMovingPlatform(32.5f, 8.5f, 2.5f, 32.2f, 35.2f, 2.0f)
             spawnMovingPlatform(52.5f, 8.0f, 2.5f, 52.2f, 55.5f, 2.3f)
@@ -294,10 +308,8 @@ class BBoxQuestEngine(private val context: Context) {
             spawnEnemy(2, 90, 4)
         }
 
-        // Mid-stage Checkpoint Flag at column 64
         setTile(64, ROWS - 3, 'C')
 
-        // Second half challenges
         setTile(70, 7, 'U')
         setTile(71, 7, '?')
         setTile(72, 7, 'B')
@@ -308,7 +320,6 @@ class BBoxQuestEngine(private val context: Context) {
         spawnEnemy(0, 93, ROWS - 3)
         if (st >= 2) spawnEnemy(2, 98, 6)
 
-        // Staircase before goal flagpole
         val stairStart = 113
         for (step in 0..4) {
             for (h in 0..step) {
@@ -317,7 +328,6 @@ class BBoxQuestEngine(private val context: Context) {
         }
         spawnEnemy(1, 111, ROWS - 3)
 
-        // Goal flagpole & Castle at column 123..128
         goalX = 123f
         setTile(123, ROWS - 3, 'G')
         setTile(127, ROWS - 3, 'K')
@@ -332,12 +342,23 @@ class BBoxQuestEngine(private val context: Context) {
         for (i in 0 until maxFireballs) {
             if (!fbActive[i]) {
                 fbActive[i] = true
-                fbX[i] = px + (if (facing > 0) 0.75f else -0.15f)
-                fbY[i] = py + 0.55f
-                fbVx[i] = facing * 12.5f
+                val startX = px + (if (facing > 0) 0.82f else -0.18f)
+                val startY = py + 0.55f
+                fbX[i] = startX
+                fbY[i] = startY
+                for (t in 0..3) {
+                    fbTrailX[i * 4 + t] = startX
+                    fbTrailY[i * 4 + t] = startY
+                }
+                fbVx[i] = facing * 13.0f
                 fbVy[i] = 2.5f
-                fireCooldown = 0.28f
+                fireCooldown = 0.26f
+                fireRecoil = 1f
+                muzzleFlashTimer = 0.08f
                 callbacks?.onPlaySfx(SFX_LASER, 1.3f)
+                val sx = boardLeft + (startX - cameraX) * tilePx
+                val sy = boardTop + startY * tilePx
+                callbacks?.onParticles(sx, sy, 5, 0xFFFF9800.toInt(), dp(25f), dp(85f), 2.8f)
                 return
             }
         }
@@ -347,12 +368,15 @@ class BBoxQuestEngine(private val context: Context) {
         animTime += dt
         if (invulnTimer > 0f) invulnTimer = max(0f, invulnTimer - dt)
         if (fireCooldown > 0f) fireCooldown = max(0f, fireCooldown - dt)
-        if (landSquash > 0f) landSquash = max(0f, landSquash - dt * 4.5f)
+        if (landSquash > 0f) landSquash = max(0f, landSquash - dt * 5.0f)
+        if (jumpStretch > 0f) jumpStretch = max(0f, jumpStretch - dt * 4.5f)
+        if (fireRecoil > 0f) fireRecoil = max(0f, fireRecoil - dt * 6.5f)
+        if (muzzleFlashTimer > 0f) muzzleFlashTimer = max(0f, muzzleFlashTimer - dt)
         if (jumpBufferTimer > 0f) jumpBufferTimer = max(0f, jumpBufferTimer - dt)
         if (fireHeld && powerLevel >= 2 && fireCooldown <= 0f) onFirePressed()
 
         for (i in tileBounce.indices) {
-            if (tileBounce[i] > 0f) tileBounce[i] = max(0f, tileBounce[i] - dt * 4f)
+            if (tileBounce[i] > 0f) tileBounce[i] = max(0f, tileBounce[i] - dt * 4.5f)
         }
 
         // Update moving platforms
@@ -364,7 +388,6 @@ class BBoxQuestEngine(private val context: Context) {
             if (plX[i] > plMaxX[i]) { plX[i] = plMaxX[i]; plVx[i] = -abs(plVx[i]) }
             val deltaX = plX[i] - oldX
 
-            // Carry player if standing on this platform
             val pH = if (powerLevel > 0) 1.38f else 0.92f
             val pFeet = py + pH
             if (onGround && abs(pFeet - plY[i]) < 0.16f && (px + 0.65f) > plX[i] && (px + 0.15f) < (plX[i] + plW[i])) {
@@ -372,9 +395,9 @@ class BBoxQuestEngine(private val context: Context) {
             }
         }
 
-        // Horizontal movement with momentum
+        // Horizontal movement with momentum & running dust
         val maxRun = 7.4f
-        val accel = if (onGround) 34f else 22f
+        val accel = if (onGround) 35f else 23f
         val friction = if (onGround) 28f else 8f
         if (left && !right) {
             facing = -1
@@ -385,6 +408,16 @@ class BBoxQuestEngine(private val context: Context) {
         } else {
             if (vx > 0f) vx = max(0f, vx - friction * dt)
             else if (vx < 0f) vx = min(0f, vx + friction * dt)
+        }
+
+        if (onGround && abs(vx) > 4.2f) {
+            runDustTimer -= dt
+            if (runDustTimer <= 0f) {
+                runDustTimer = 0.14f
+                val fx = boardLeft + (px + 0.35f - cameraX) * tilePx
+                val fy = boardTop + (py + (if (powerLevel > 0) 1.35f else 0.9f)) * tilePx
+                callbacks?.onParticles(fx, fy, 2, 0xFFD7CCC8.toInt(), dp(12f), dp(42f), 2.4f)
+            }
         }
 
         // Coyote time & Variable Jump
@@ -400,10 +433,11 @@ class BBoxQuestEngine(private val context: Context) {
             coyoteTimer = 0f
             jumpBufferTimer = 0f
             jumpHoldTimer = 0.18f
+            jumpStretch = 1f
             callbacks?.onPlaySfx(SFX_JUMP)
             val fx = boardLeft + (px + 0.4f - cameraX) * tilePx
             val fy = boardTop + (py + (if (powerLevel > 0) 1.35f else 0.9f)) * tilePx
-            callbacks?.onParticles(fx, fy, 6, 0xFFEFE8DA.toInt(), dp(20f), dp(75f), 3f)
+            callbacks?.onParticles(fx, fy, 7, 0xFFEFE8DA.toInt(), dp(22f), dp(80f), 3f)
         }
 
         if (jumpHeld && jumpHoldTimer > 0f && vy < 0f) {
@@ -414,14 +448,13 @@ class BBoxQuestEngine(private val context: Context) {
             jumpHoldTimer = 0f
         }
 
-        // Gravity
         vy = min(17f, vy + 33f * dt)
 
         val pW = 0.72f
         val pH = if (powerLevel > 0) 1.38f else 0.92f
         val marginX = 0.14f
 
-        // Move X & resolve tile collisions
+        // Move X
         px += vx * dt
         if (px < 0.2f) { px = 0.2f; vx = 0f }
         val leftCol = floorTile(px + marginX)
@@ -438,7 +471,7 @@ class BBoxQuestEngine(private val context: Context) {
             }
         }
 
-        // Move Y & resolve tile + moving platform collisions
+        // Move Y
         val wasOnGround = onGround
         onGround = false
         py += vy * dt
@@ -457,11 +490,15 @@ class BBoxQuestEngine(private val context: Context) {
             }
             if (hitFloor) {
                 py = footRow - pH - 0.001f
-                if (!wasOnGround && vy > 4f) landSquash = 1f
+                if (!wasOnGround && vy > 4f) {
+                    landSquash = 1f
+                    val fx = boardLeft + (px + 0.45f - cameraX) * tilePx
+                    val fy = boardTop + (py + pH) * tilePx
+                    callbacks?.onParticles(fx, fy, 4, 0xFFEFE8DA.toInt(), dp(15f), dp(55f), 2.5f)
+                }
                 vy = 0f
                 onGround = true
             } else {
-                // Check moving platforms
                 val feetY = py + pH
                 for (i in 0 until maxPlats) {
                     if (!plActive[i]) continue
@@ -489,57 +526,98 @@ class BBoxQuestEngine(private val context: Context) {
             }
         }
 
-        // Collect floating coins & checkpoint
-        val cMin = floorTile(px + marginX)
-        val cMax = floorTile(px + marginX + pW)
-        val rMin = floorTile(py)
-        val rMax = floorTile(py + pH)
-        for (r in rMin..rMax) {
-            for (c in cMin..cMax) {
+        // Magnetic Coin Scan (Object Snap) & Checkpoint
+        val scanCMin = floorTile(px - 1.8f)
+        val scanCMax = floorTile(px + 2.6f)
+        val scanRMin = floorTile(py - 1.8f)
+        val scanRMax = floorTile(py + pH + 1.8f)
+        for (r in scanRMin..scanRMax) {
+            for (c in scanCMin..scanCMax) {
                 val ch = getTile(c, r)
                 if (ch == 'O') {
-                    setTile(c, r, '.')
-                    collectCoin(c + 0.5f, r + 0.5f)
+                    val dist = hypot((c + 0.5f) - (px + 0.5f), (r + 0.5f) - (py + pH * 0.5f))
+                    if (dist < 0.9f) {
+                        setTile(c, r, '.')
+                        collectCoin(c + 0.5f, r + 0.5f)
+                    } else if (dist < 2.2f) {
+                        setTile(c, r, '.')
+                        spawnMagneticCoin(c + 0.5f, r + 0.5f)
+                    }
                 } else if (ch == 'C' && !checkpointReached) {
-                    checkpointReached = true
-                    checkpointX = c.toFloat()
-                    checkpointY = (r - 1).toFloat()
-                    callbacks?.onPlaySfx(SFX_POWERUP, 1.15f)
-                    val cx = boardLeft + (c + 0.5f - cameraX) * tilePx
-                    val cy = boardTop + r * tilePx
-                    callbacks?.onFloatText(cx, cy, "CHECKPOINT!", 0xFF4CAF7D.toInt())
+                    if (abs((c + 0.5f) - (px + 0.5f)) < 0.85f && abs((r + 0.5f) - (py + pH * 0.5f)) < 1.2f) {
+                        checkpointReached = true
+                        checkpointX = c.toFloat()
+                        checkpointY = (r - 1).toFloat()
+                        callbacks?.onPlaySfx(SFX_POWERUP, 1.15f)
+                        val cx = boardLeft + (c + 0.5f - cameraX) * tilePx
+                        val cy = boardTop + r * tilePx
+                        callbacks?.onShockwave(cx, cy, 48f, 0xFF4CAF7D.toInt())
+                        callbacks?.onFloatText(cx, cy, "CHECKPOINT!", 0xFF4CAF7D.toInt())
+                    }
                 }
             }
         }
 
-        // Check Goal Flagpole
+        updateMagneticCoins(dt, pH)
+
+        // Goal Flagpole
         if (px + pW >= goalX) {
             val heightBonus = ((ROWS - 2 - py).coerceIn(1f, 8f) * 100).toInt()
             callbacks?.onAddScore(500 + heightBonus)
             callbacks?.onPlaySfx(SFX_WIN)
             val gx = boardLeft + (goalX - cameraX) * tilePx
             val gy = boardTop + py * tilePx
+            callbacks?.onShockwave(gx, gy, 72f, 0xFFE6C88F.toInt())
             callbacks?.onFloatText(gx, gy, "STAGE SELESAI! +${500 + heightBonus}", 0xFFE6C88F.toInt())
             callbacks?.onStageFinished(true, stage + 1)
             return
         }
 
-        // Pit fall check
         if (py > ROWS + 0.5f) {
             loseLife()
             return
         }
 
-        updateItems(dt, pW, pH)
+        updateItems(dt, pH)
         updateFireballs(dt)
-        updateEnemies(dt, pW, pH)
+        updateEnemies(dt, pH)
 
-        // Smooth camera follow
         val targetCam = (px - 5.5f).coerceIn(0f, (COLS - 20).toFloat())
-        cameraX += (targetCam - cameraX) * min(1f, dt * 8f)
+        cameraX += (targetCam - cameraX) * min(1f, dt * 8.5f)
     }
 
     private fun floorTile(v: Float): Int = kotlin.math.floor(v).toInt()
+
+    private fun spawnMagneticCoin(tx: Float, ty: Float) {
+        for (i in 0 until maxMagCoins) {
+            if (!mcActive[i]) {
+                mcActive[i] = true
+                mcX[i] = tx
+                mcY[i] = ty
+                return
+            }
+        }
+        collectCoin(tx, ty)
+    }
+
+    private fun updateMagneticCoins(dt: Float, pH: Float) {
+        val targetX = px + 0.5f
+        val targetY = py + pH * 0.5f
+        for (i in 0 until maxMagCoins) {
+            if (!mcActive[i]) continue
+            val dx = targetX - mcX[i]
+            val dy = targetY - mcY[i]
+            val dist = hypot(dx, dy)
+            if (dist < 0.45f) {
+                mcActive[i] = false
+                collectCoin(targetX, targetY)
+            } else {
+                val spd = 14.5f
+                mcX[i] += (dx / dist) * spd * dt
+                mcY[i] += (dy / dist) * spd * dt
+            }
+        }
+    }
 
     private fun handleBlockHeadHit(c: Int, r: Int, ch: Char) {
         val sx = boardLeft + (c + 0.5f - cameraX) * tilePx
@@ -548,12 +626,14 @@ class BBoxQuestEngine(private val context: Context) {
             '?' -> {
                 setTile(c, r, 'X')
                 tileBounce[r * COLS + c] = 1f
+                callbacks?.onShockwave(sx, sy, 36f, 0xFFE6C88F.toInt())
                 collectCoin(c + 0.5f, r - 0.5f)
             }
             'U' -> {
                 setTile(c, r, 'X')
                 tileBounce[r * COLS + c] = 1f
                 callbacks?.onPlaySfx(SFX_POWERUP, 1.05f)
+                callbacks?.onShockwave(sx, sy, 44f, 0xFFFF9800.toInt())
                 spawnPowerUpItem(c + 0.15f, r - 1f, if (powerLevel == 0) 1 else 2)
             }
             'B' -> {
@@ -562,7 +642,8 @@ class BBoxQuestEngine(private val context: Context) {
                     callbacks?.onAddScore(25)
                     callbacks?.onPlaySfx(SFX_EXPLODE, 1.25f)
                     callbacks?.onShake(0.10f, 3.5f)
-                    callbacks?.onParticles(sx, sy, 10, 0xFFD96B43.toInt(), dp(35f), dp(130f), 4f)
+                    callbacks?.onShockwave(sx, sy, 42f, 0xFFD96B43.toInt())
+                    callbacks?.onParticles(sx, sy, 12, 0xFFD96B43.toInt(), dp(35f), dp(140f), 4f)
                 } else {
                     tileBounce[r * COLS + c] = 0.8f
                     callbacks?.onPlaySfx(SFX_BOUNCE, 0.75f)
@@ -578,11 +659,12 @@ class BBoxQuestEngine(private val context: Context) {
         callbacks?.onPlaySfx(SFX_COIN, 1.1f)
         val sx = boardLeft + (tx - cameraX) * tilePx
         val sy = boardTop + ty * tilePx
-        callbacks?.onParticles(sx, sy, 6, 0xFFE6C88F.toInt(), dp(20f), dp(80f), 3f)
+        callbacks?.onParticles(sx, sy, 7, 0xFFE6C88F.toInt(), dp(22f), dp(85f), 3f)
         callbacks?.onFloatText(sx, sy, "+50", 0xFFE6C88F.toInt())
         if (coins >= 50) {
             coins -= 50
             lives++
+            callbacks?.onShockwave(sx, sy, 52f, 0xFF4CAF7D.toInt())
             callbacks?.onFloatText(sx, sy - dp(18f), "+1 NYAWA!", 0xFF4CAF7D.toInt())
         }
     }
@@ -601,7 +683,7 @@ class BBoxQuestEngine(private val context: Context) {
         }
     }
 
-    private fun updateItems(dt: Float, pW: Float, pH: Float) {
+    private fun updateItems(dt: Float, pH: Float) {
         for (i in 0 until maxItems) {
             if (!itActive[i]) continue
             itVy[i] = min(14f, itVy[i] + 26f * dt)
@@ -621,7 +703,7 @@ class BBoxQuestEngine(private val context: Context) {
                 continue
             }
 
-            if (abs((itX[i] + 0.35f) - (px + 0.5f)) < 0.72f && abs((itY[i] + 0.35f) - (py + pH * 0.5f)) < (pH * 0.5f + 0.35f)) {
+            if (abs((itX[i] + 0.35f) - (px + 0.5f)) < 0.75f && abs((itY[i] + 0.35f) - (py + pH * 0.5f)) < (pH * 0.5f + 0.35f)) {
                 val t = itType[i]
                 itActive[i] = false
                 if (t == 2) {
@@ -632,9 +714,11 @@ class BBoxQuestEngine(private val context: Context) {
                 }
                 callbacks?.onAddScore(200)
                 callbacks?.onPlaySfx(SFX_POWERUP, 1.2f)
+                callbacks?.onHitStop(0.03f)
                 val sx = boardLeft + (px + 0.5f - cameraX) * tilePx
                 val sy = boardTop + py * tilePx
-                callbacks?.onParticles(sx, sy, 14, 0xFFE6C88F.toInt(), dp(30f), dp(120f), 4f)
+                callbacks?.onShockwave(sx, sy, 56f, 0xFFFF9800.toInt())
+                callbacks?.onParticles(sx, sy, 16, 0xFFE6C88F.toInt(), dp(30f), dp(130f), 4f)
                 callbacks?.onFloatText(sx, sy, if (t == 2) "MODE API!" else "SUPER B-BOX!", 0xFFFF9800.toInt())
             }
         }
@@ -643,6 +727,14 @@ class BBoxQuestEngine(private val context: Context) {
     private fun updateFireballs(dt: Float) {
         for (i in 0 until maxFireballs) {
             if (!fbActive[i]) continue
+            // Shift trail nodes
+            for (t in 3 downTo 1) {
+                fbTrailX[i * 4 + t] = fbTrailX[i * 4 + t - 1]
+                fbTrailY[i * 4 + t] = fbTrailY[i * 4 + t - 1]
+            }
+            fbTrailX[i * 4] = fbX[i]
+            fbTrailY[i * 4] = fbY[i]
+
             fbVy[i] = min(15f, fbVy[i] + 32f * dt)
             fbX[i] += fbVx[i] * dt
             fbY[i] += fbVy[i] * dt
@@ -654,7 +746,6 @@ class BBoxQuestEngine(private val context: Context) {
                 continue
             }
             if (isSolidTile(getTile(c, r))) {
-                // Bounce off ground, explode on wall
                 if (fbVy[i] > 0f && !isSolidTile(getTile(c, r - 1))) {
                     fbY[i] = r - 0.15f
                     fbVy[i] = -7.8f
@@ -662,22 +753,25 @@ class BBoxQuestEngine(private val context: Context) {
                     fbActive[i] = false
                     val sx = boardLeft + (fbX[i] - cameraX) * tilePx
                     val sy = boardTop + fbY[i] * tilePx
-                    callbacks?.onParticles(sx, sy, 6, 0xFFFF9800.toInt(), dp(25f), dp(90f), 3f)
+                    callbacks?.onShockwave(sx, sy, 28f, 0xFFFF9800.toInt())
+                    callbacks?.onParticles(sx, sy, 7, 0xFFFF9800.toInt(), dp(25f), dp(95f), 3f)
                     continue
                 }
             }
 
-            // Check enemy hit
             for (e in 0 until maxEnemies) {
                 if (!enActive[e]) continue
-                if (abs(fbX[i] - (enX[e] + 0.4f)) < 0.65f && abs(fbY[i] - (enY[e] + 0.4f)) < 0.65f) {
+                if (abs(fbX[i] - (enX[e] + 0.4f)) < 0.68f && abs(fbY[i] - (enY[e] + 0.4f)) < 0.68f) {
                     fbActive[i] = false
                     enActive[e] = false
                     callbacks?.onAddScore(150)
                     callbacks?.onPlaySfx(SFX_EXPLODE, 1.3f)
+                    callbacks?.onHitStop(0.032f)
                     val sx = boardLeft + (enX[e] + 0.4f - cameraX) * tilePx
                     val sy = boardTop + (enY[e] + 0.4f) * tilePx
-                    callbacks?.onParticles(sx, sy, 12, 0xFFFF9800.toInt(), dp(30f), dp(130f), 4f)
+                    callbacks?.onShockwave(sx, sy, 46f, 0xFFFF9800.toInt())
+                    callbacks?.onParticles(sx, sy, 14, 0xFFFF9800.toInt(), dp(30f), dp(140f), 4f)
+                    callbacks?.onComboEvent(sx, sy)
                     callbacks?.onFloatText(sx, sy, "+150!", 0xFFFF9800.toInt())
                     break
                 }
@@ -685,20 +779,19 @@ class BBoxQuestEngine(private val context: Context) {
         }
     }
 
-    private fun updateEnemies(dt: Float, pW: Float, pH: Float) {
+    private fun updateEnemies(dt: Float, pH: Float) {
         for (i in 0 until maxEnemies) {
             if (!enActive[i]) continue
+            if (enFlashTimer[i] > 0f) enFlashTimer[i] = max(0f, enFlashTimer[i] - dt)
             if (abs(enX[i] - px) > 22f) continue
 
             val type = enType[i]
             if (type == 2) {
-                // Bat flyer sine wave
                 enX[i] += enVx[i] * dt
                 enY[i] = enBaseY[i] + sin(animTime * 4f + i) * 1.1f
                 val frontC = floorTile(enX[i] + (if (enVx[i] > 0) 0.85f else -0.05f))
                 if (isSolidTile(getTile(frontC, floorTile(enY[i] + 0.4f)))) enVx[i] = -enVx[i]
             } else {
-                // Ground walker / turtle
                 if (type == 1 && enState[i] == 1) {
                     enVx[i] = 0f
                 }
@@ -723,62 +816,72 @@ class BBoxQuestEngine(private val context: Context) {
                     continue
                 }
 
-                // Sliding shell defeats other enemies
                 if (type == 1 && enState[i] == 2) {
                     for (other in 0 until maxEnemies) {
                         if (other != i && enActive[other] && abs(enX[i] - enX[other]) < 0.75f && abs(enY[i] - enY[other]) < 0.75f) {
                             enActive[other] = false
                             callbacks?.onAddScore(200)
                             callbacks?.onPlaySfx(SFX_STOMP, 1.2f)
+                            callbacks?.onHitStop(0.03f)
                             val sx = boardLeft + (enX[other] + 0.4f - cameraX) * tilePx
                             val sy = boardTop + (enY[other] + 0.4f) * tilePx
-                            callbacks?.onParticles(sx, sy, 10, 0xFF4CAF7D.toInt(), dp(30f), dp(120f), 4f)
+                            callbacks?.onShockwave(sx, sy, 46f, 0xFF4CAF7D.toInt())
+                            callbacks?.onParticles(sx, sy, 12, 0xFF4CAF7D.toInt(), dp(30f), dp(130f), 4f)
+                            callbacks?.onComboEvent(sx, sy)
                             callbacks?.onFloatText(sx, sy, "+200!", 0xFF4CAF7D.toInt())
                         }
                     }
                 }
             }
 
-            // Player vs Enemy collision
             val pCenterX = px + 0.5f
             val eCenterX = enX[i] + 0.42f
             val pFeet = py + pH
             if (abs(pCenterX - eCenterX) < 0.68f && pFeet > enY[i] + 0.08f && py < enY[i] + 0.82f) {
                 val isStomp = vy > 0f && (pFeet - vy * dt) <= (enY[i] + 0.48f)
                 if (isStomp) {
-                    vy = -10.5f
+                    vy = -10.8f
+                    jumpStretch = 0.8f
                     callbacks?.onPlaySfx(SFX_STOMP)
+                    callbacks?.onHitStop(0.035f)
+                    callbacks?.onShake(0.08f, 3f)
                     val sx = boardLeft + (eCenterX - cameraX) * tilePx
                     val sy = boardTop + (enY[i] + 0.4f) * tilePx
+                    callbacks?.onShockwave(sx, sy, 42f, 0xFFE6C88F.toInt())
+                    callbacks?.onComboEvent(sx, sy)
                     if (type == 1 && enState[i] == 0) {
                         enState[i] = 1
                         enVx[i] = 0f
+                        enFlashTimer[i] = 0.14f
                         callbacks?.onAddScore(100)
                         callbacks?.onFloatText(sx, sy, "CANGKANG!", 0xFF4CAF7D.toInt())
                     } else if (type == 1 && enState[i] == 1) {
                         enState[i] = 2
                         enVx[i] = if (pCenterX < eCenterX) 11.5f else -11.5f
+                        enFlashTimer[i] = 0.12f
                         callbacks?.onAddScore(150)
                         callbacks?.onFloatText(sx, sy, "TENDANG!", 0xFF4CAF7D.toInt())
                     } else {
                         enActive[i] = false
                         callbacks?.onAddScore(100)
-                        callbacks?.onParticles(sx, sy, 12, 0xFF9C6ADE.toInt(), dp(30f), dp(120f), 4f)
+                        callbacks?.onParticles(sx, sy, 14, 0xFF9C6ADE.toInt(), dp(30f), dp(130f), 4f)
                         callbacks?.onFloatText(sx, sy, "+100!", 0xFFE6C88F.toInt())
                     }
                 } else if (type == 1 && enState[i] == 1) {
-                    // Kick idle shell from the side safely
                     enState[i] = 2
                     enVx[i] = if (pCenterX < eCenterX) 11.5f else -11.5f
+                    enFlashTimer[i] = 0.12f
                     callbacks?.onPlaySfx(SFX_STOMP, 1.15f)
                 } else if (invulnTimer <= 0f) {
                     if (powerLevel > 0) {
                         powerLevel = 0
                         invulnTimer = 1.6f
+                        callbacks?.onHitStop(0.045f)
                         callbacks?.onShake(0.16f, 5f)
                         callbacks?.onPlaySfx(SFX_EXPLODE, 1.1f)
                         val sx = boardLeft + (pCenterX - cameraX) * tilePx
                         val sy = boardTop + py * tilePx
+                        callbacks?.onShockwave(sx, sy, 48f, 0xFFE05252.toInt())
                         callbacks?.onFloatText(sx, sy, "PERISAI LEPAS!", 0xFFE05252.toInt())
                     } else {
                         loseLife()
@@ -792,6 +895,7 @@ class BBoxQuestEngine(private val context: Context) {
     private fun loseLife() {
         lives--
         powerLevel = 0
+        callbacks?.onHitStop(0.05f)
         callbacks?.onShake(0.24f, 7f)
         if (lives <= 0) {
             callbacks?.onPlaySfx(SFX_OVER)
@@ -803,7 +907,7 @@ class BBoxQuestEngine(private val context: Context) {
     }
 
     // =========================================================================
-    // RENDERING (CACHED TILE SPRITES + PARALLAX + VECTOR KAPTEN B-BOX)
+    // RENDERING
     // =========================================================================
     fun draw(canvas: Canvas, w: Float, h: Float, deckTop: Float) {
         val topHud = dp(48f)
@@ -848,6 +952,14 @@ class BBoxQuestEngine(private val context: Context) {
             }
         }
 
+        // Magnetized flying coins
+        for (i in 0 until maxMagCoins) {
+            if (!mcActive[i]) continue
+            val sx = boardLeft + (mcX[i] - 0.5f - cameraX) * tilePx
+            val sy = boardTop + (mcY[i] - 0.5f) * tilePx
+            bmpCoin?.let { canvas.drawBitmap(it, sx, sy, pBmp) }
+        }
+
         // Moving platforms
         for (i in 0 until maxPlats) {
             if (!plActive[i]) continue
@@ -877,7 +989,7 @@ class BBoxQuestEngine(private val context: Context) {
             canvas.drawCircle(sx, sy, tilePx * 0.28f, pStroke)
         }
 
-        // Enemies
+        // Enemies with Hit-Flash
         for (i in 0 until maxEnemies) {
             if (!enActive[i]) continue
             val sx = boardLeft + (enX[i] - cameraX) * tilePx
@@ -894,11 +1006,23 @@ class BBoxQuestEngine(private val context: Context) {
                     bmpBat?.let { canvas.drawBitmap(it, sx, sy + flap, pBmp) }
                 }
             }
+            if (enFlashTimer[i] > 0f) {
+                pFill.color = 0xCCFFFFFF.toInt()
+                rect.set(sx + tilePx * 0.1f, sy + tilePx * 0.2f, sx + tilePx * 0.9f, sy + tilePx * 0.92f)
+                canvas.drawRoundRect(rect, dp(8f), dp(8f), pFill)
+            }
         }
 
-        // Fireballs
+        // Fireballs + Ribbon Trail
         for (i in 0 until maxFireballs) {
             if (!fbActive[i]) continue
+            for (t in 3 downTo 0) {
+                val tx = boardLeft + (fbTrailX[i * 4 + t] - cameraX) * tilePx
+                val ty = boardTop + fbTrailY[i * 4 + t] * tilePx
+                val ratio = (4 - t) / 4f
+                pFill.color = ((ratio * 130).toInt() shl 24) or 0x00FF9800
+                canvas.drawCircle(tx, ty, tilePx * 0.16f * ratio, pFill)
+            }
             val sx = boardLeft + (fbX[i] - cameraX) * tilePx
             val sy = boardTop + fbY[i] * tilePx
             pFill.color = 0x55FF9800
@@ -907,10 +1031,7 @@ class BBoxQuestEngine(private val context: Context) {
             canvas.drawCircle(sx, sy, tilePx * 0.16f, pFill)
         }
 
-        // Player: Kapten B-BOX
         drawKaptenBBox(canvas)
-
-        // Sub-HUD pill (Hearts, Coins, Power Status)
         drawQuestSubHud(canvas)
 
         canvas.restore()
@@ -933,7 +1054,6 @@ class BBoxQuestEngine(private val context: Context) {
 
         val camPx = cameraX * tilePx
         if (stage == 1) {
-            // Fluffy white clouds (0.2x parallax)
             pFill.color = 0xDDF7FBFF.toInt()
             val cloudSpan = dp(260f)
             for (i in -1..6) {
@@ -944,7 +1064,6 @@ class BBoxQuestEngine(private val context: Context) {
                 canvas.drawCircle(cx + dp(34f), cy, dp(17f), pFill)
             }
 
-            // Rolling green hills (0.45x parallax)
             val hillSpan = dp(320f)
             for (i in -1..5) {
                 val hx = boardLeft + i * hillSpan - ((camPx * 0.45f) % hillSpan)
@@ -955,7 +1074,6 @@ class BBoxQuestEngine(private val context: Context) {
                 canvas.drawCircle(hx + dp(220f), base + dp(45f), dp(95f), pFill)
             }
         } else {
-            // Cave crystals or castle pillars in Stage 2 & 3
             val span = dp(240f)
             pFill.color = if (stage == 2) 0x334CC3D9 else 0x33FF9800
             for (i in -1..6) {
@@ -968,7 +1086,6 @@ class BBoxQuestEngine(private val context: Context) {
                 canvas.drawPath(path, pFill)
             }
             if (stage == 3) {
-                // Lava glow at bottom of pits
                 pFill.color = 0xEEFF5722.toInt()
                 canvas.drawRect(boardLeft, boardTop + boardH - tilePx * 0.45f, boardLeft + boardW, boardTop + boardH, pFill)
             }
@@ -985,12 +1102,14 @@ class BBoxQuestEngine(private val context: Context) {
         val cx = boardLeft + (px + 0.5f - cameraX) * tilePx
         val bottomY = boardTop + (py + (if (isBig) 1.38f else 0.92f)) * tilePx
 
-        val squashY = 1f - landSquash * 0.16f
-        val squashX = 1f + landSquash * 0.14f
+        val squashY = 1f - landSquash * 0.16f + jumpStretch * 0.14f
+        val squashX = 1f + landSquash * 0.14f - jumpStretch * 0.10f
+        val leanDeg = (vx / 7.4f) * 7f
 
         canvas.save()
         canvas.translate(cx, bottomY)
         canvas.scale(facing * squashX, squashY)
+        canvas.rotate(leanDeg)
 
         val runCycle = if (onGround && abs(vx) > 0.3f) sin(animTime * 18f) else 0f
         val jumpPose = if (!onGround) 1f else 0f
@@ -1000,7 +1119,7 @@ class BBoxQuestEngine(private val context: Context) {
         rect.set(-pW * 0.42f, -dp(3f), pW * 0.42f, dp(3f))
         canvas.drawOval(rect, pFill)
 
-        // Flowing golden scarf behind neck
+        // Flowing golden scarf
         val neckY = -pH * 0.48f
         val scarfWave = sin(animTime * 14f) * dp(4f) + abs(vx) * dp(1.2f)
         path.reset()
@@ -1012,7 +1131,7 @@ class BBoxQuestEngine(private val context: Context) {
         pFill.color = 0xFFE6C88F.toInt()
         canvas.drawPath(path, pFill)
 
-        // Boots (animated stride)
+        // Boots
         val bootW = pW * 0.28f
         val bootH = pH * 0.18f
         val leftBootX = -pW * 0.22f - runCycle * pW * 0.16f
@@ -1024,7 +1143,7 @@ class BBoxQuestEngine(private val context: Context) {
         rect.set(rightBootX, rightBootY, rightBootX + bootW, rightBootY + bootH)
         canvas.drawRoundRect(rect, dp(3f), dp(3f), pFill)
 
-        // Jacket torso (Maroon or Ivory in Fire mode)
+        // Jacket torso
         val torsoTop = -pH * 0.52f
         val torsoBot = -bootH * 0.85f
         rect.set(-pW * 0.28f, torsoTop, pW * 0.28f, torsoBot)
@@ -1042,12 +1161,18 @@ class BBoxQuestEngine(private val context: Context) {
         pFill.color = 0xFFE6C88F.toInt()
         canvas.drawRoundRect(rect, dp(4f), dp(4f), pFill)
 
-        // White gloved hands
+        // Gloved hands + Fire Recoil & Muzzle Flash
         val handR = pW * 0.13f
+        val frontHandX = pW * 0.32f - fireRecoil * dp(5f)
         val frontHandY = if (jumpPose > 0f) torsoTop - pH * 0.12f else torsoTop + pH * 0.14f - runCycle * pH * 0.08f
         pFill.color = if (isFire) 0xFFFF9800.toInt() else Color.WHITE
-        canvas.drawCircle(pW * 0.32f, frontHandY, handR, pFill)
+        canvas.drawCircle(frontHandX, frontHandY, handR, pFill)
         canvas.drawCircle(-pW * 0.30f, torsoTop + pH * 0.16f + runCycle * pH * 0.08f, handR * 0.9f, pFill)
+
+        if (muzzleFlashTimer > 0f) {
+            pFill.color = 0xEEFFF59D.toInt()
+            canvas.drawCircle(frontHandX + handR * 1.4f, frontHandY, handR * 1.5f, pFill)
+        }
 
         // Chibi Head
         val headR = pW * 0.36f
@@ -1060,23 +1185,21 @@ class BBoxQuestEngine(private val context: Context) {
         rect.set(-headR * 1.02f, headCy - headR * 0.4f, -headR * 0.45f, headCy + headR * 0.55f)
         canvas.drawRoundRect(rect, dp(4f), dp(4f), pFill)
 
-        // Eye & smile
+        // Eye & highlight
         pFill.color = 0xFF1A1614.toInt()
         canvas.drawCircle(headR * 0.42f, headCy + headR * 0.04f, headR * 0.14f, pFill)
         pFill.color = Color.WHITE
         canvas.drawCircle(headR * 0.46f, headCy - headR * 0.01f, headR * 0.05f, pFill)
 
-        // Explorer Hat (Gold with 'B' badge)
+        // Explorer Hat
         val hatY = headCy - headR * 0.55f
         pFill.color = if (isFire) 0xFFE05252.toInt() else 0xFFD4A857.toInt()
         rect.set(-headR * 1.38f, hatY, headR * 1.42f, hatY + headR * 0.28f)
         canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
 
-        // Hat crown
         rect.set(-headR * 0.88f, hatY - headR * 0.65f, headR * 0.88f, hatY + headR * 0.12f)
         canvas.drawRoundRect(rect, dp(7f), dp(7f), pFill)
 
-        // 'B' emblem on hat
         pFill.color = 0xFFFFF3D1.toInt()
         canvas.drawCircle(headR * 0.25f, hatY - headR * 0.26f, headR * 0.24f, pFill)
         pText.typeface = Typeface.DEFAULT_BOLD
@@ -1102,14 +1225,12 @@ class BBoxQuestEngine(private val context: Context) {
     }
 
     private fun drawGoalFlagAndCastle(canvas: Canvas, sx: Float, sy: Float) {
-        // Tall flagpole
         val poleX = sx + tilePx * 0.4f
         pFill.color = Color.WHITE
         canvas.drawRect(poleX - dp(2.5f), sy - tilePx * 5.5f, poleX + dp(2.5f), sy + tilePx, pFill)
         pFill.color = 0xFFE6C88F.toInt()
         canvas.drawCircle(poleX, sy - tilePx * 5.6f, dp(5f), pFill)
 
-        // Golden flag
         path.reset()
         path.moveTo(poleX + dp(2.5f), sy - tilePx * 5.3f)
         path.lineTo(poleX + tilePx * 1.1f, sy - tilePx * 4.8f)
@@ -1118,14 +1239,12 @@ class BBoxQuestEngine(private val context: Context) {
         pFill.color = 0xFFE6C88F.toInt()
         canvas.drawPath(path, pFill)
 
-        // Mini Castle behind flagpole
         val cx = sx + tilePx * 2.4f
         val cw = tilePx * 2.6f
         val ch = tilePx * 2.8f
         rect.set(cx, sy + tilePx - ch, cx + cw, sy + tilePx)
         pFill.color = 0xFF8C4A32.toInt()
         canvas.drawRect(rect, pFill)
-        // Castle gate
         pFill.color = 0xFF141210.toInt()
         rect.set(cx + cw * 0.34f, sy + tilePx - ch * 0.45f, cx + cw * 0.66f, sy + tilePx)
         canvas.drawRoundRect(rect, dp(8f), dp(8f), pFill)
@@ -1135,7 +1254,6 @@ class BBoxQuestEngine(private val context: Context) {
         val pillY = boardTop + dp(8f)
         val pillH = dp(26f)
 
-        // Hearts pill (left)
         rect.set(dp(12f), pillY, dp(104f), pillY + pillH)
         pFill.color = 0xAA121216.toInt()
         canvas.drawRoundRect(rect, dp(13f), dp(13f), pFill)
@@ -1143,10 +1261,8 @@ class BBoxQuestEngine(private val context: Context) {
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = dp(13f)
         pText.color = 0xFFE05252.toInt()
-        val heartsStr = "♥".repeat(lives.coerceIn(0, 5))
-        canvas.drawText(heartsStr, rect.centerX(), rect.centerY() + dp(4.5f), pText)
+        canvas.drawText("♥".repeat(lives.coerceIn(0, 5)), rect.centerX(), rect.centerY() + dp(4.5f), pText)
 
-        // Coins & Power pill (right)
         rect.set(boardW - dp(176f), pillY, boardW - dp(12f), pillY + pillH)
         pFill.color = 0xAA121216.toInt()
         canvas.drawRoundRect(rect, dp(13f), dp(13f), pFill)
@@ -1162,7 +1278,6 @@ class BBoxQuestEngine(private val context: Context) {
         cachedSpriteStage = st
         val f = sz.toFloat()
 
-        // 1. Ground block (Brown stone + vibrant grass top)
         bmpGround = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = if (st == 1) 0xFF6B472A.toInt() else if (st == 2) 0xFF2D334D.toInt() else 0xFF3D2222.toInt()
@@ -1172,14 +1287,12 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawRect(f * 0.08f, f * 0.34f, f * 0.52f, f * 0.66f, pStroke)
             c.drawRect(f * 0.52f, f * 0.38f, f * 0.94f, f * 0.72f, pStroke)
             c.drawRect(f * 0.22f, f * 0.68f, f * 0.78f, f * 0.96f, pStroke)
-            // Top grass / crystal / lava rim
             pFill.color = if (st == 1) 0xFF5EC243.toInt() else if (st == 2) 0xFF4CC3D9.toInt() else 0xFFFF6D00.toInt()
             c.drawRect(0f, 0f, f, f * 0.28f, pFill)
             pFill.color = 0x33FFFFFF
             c.drawRect(0f, 0f, f, f * 0.09f, pFill)
         }
 
-        // 2. Red Brick block
         bmpBrick = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFFC85A32.toInt()
@@ -1193,7 +1306,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawLine(f * 0.75f, f * 0.5f, f * 0.75f, f, pStroke)
         }
 
-        // 3. Mystery '?' block
         bmpQuestion = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFFF5B82E.toInt()
@@ -1209,7 +1321,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawText("?", f * 0.5f, f * 0.73f, pText)
         }
 
-        // 4. Used block
         bmpUsed = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFF4A443D.toInt()
@@ -1217,7 +1328,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawRoundRect(rect, f * 0.12f, f * 0.12f, pFill)
         }
 
-        // 5. Green Pipe Top & Body
         val topW = (sz * 1.12f).toInt()
         bmpPipeTop = Bitmap.createBitmap(topW, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
@@ -1237,7 +1347,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawRect(f * 0.16f, 0f, f * 0.30f, f, pFill)
         }
 
-        // 6. Gold Coin
         bmpCoin = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFFF5C542.toInt()
@@ -1248,7 +1357,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawOval(rect, pStroke)
         }
 
-        // 7. Purple Slime Enemy
         bmpSlime = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFF9C6ADE.toInt()
@@ -1262,7 +1370,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawCircle(f * 0.66f, f * 0.56f, f * 0.05f, pFill)
         }
 
-        // 8. Green Shell Turtle
         bmpTurtle = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFF4CAF7D.toInt()
@@ -1277,7 +1384,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawCircle(f * 0.74f, f * 0.86f, f * 0.09f, pFill)
         }
 
-        // 9. Turtle Shell
         bmpShell = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFF4CAF7D.toInt()
@@ -1288,7 +1394,6 @@ class BBoxQuestEngine(private val context: Context) {
             c.drawRoundRect(rect, f * 0.32f, f * 0.32f, pStroke)
         }
 
-        // 10. Bat Flyer
         bmpBat = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888).also { bmp ->
             val c = Canvas(bmp)
             pFill.color = 0xFF2B2438.toInt()
