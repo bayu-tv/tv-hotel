@@ -23,6 +23,7 @@ import android.view.WindowManager
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -295,6 +296,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var dialogIndex = 0
     private var difficulty = DIFF_NORMAL
     private var score = 0
+    private var displayScore = 0f
+    private var scorePopScale = 1f
+    private var sessionHighScore = 0
+    private var newRecordAnnounced = false
+    private var newRecordBannerTimer = 0f
     private var stage = 1
     private var victory = false
     private var showTouchOverlay = false
@@ -324,11 +330,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val btnBRect = RectF()
 
     // =========================================================================
-    // GAME POLISH ENGINE (HIT-STOP, SHOCKWAVES, RIBBON TRAILS, COMBO, PARTICLES)
+    // GAME POLISH ENGINE (HIT-STOP, SHOCKWAVES, SHATTER SHARDS, TRAILS, COMBO)
     // =========================================================================
     private var hitStopTimer = 0f
     private var shakeTimer = 0f
     private var shakeStrength = 0f
+    private var arenaGlowTimer = 0f
+    private var arenaGlowColor = COL_GOLD
 
     private var comboCount = 0
     private var comboTimer = 0f
@@ -344,6 +352,21 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val ptMaxLife = FloatArray(maxParticles)
     private val ptSize = FloatArray(maxParticles)
     private val ptColor = IntArray(maxParticles)
+
+    // Geometric spinning shatter fragments
+    private val maxShards = 48
+    private val shActive = BooleanArray(maxShards)
+    private val shX = FloatArray(maxShards)
+    private val shY = FloatArray(maxShards)
+    private val shVx = FloatArray(maxShards)
+    private val shVy = FloatArray(maxShards)
+    private val shAngle = FloatArray(maxShards)
+    private val shVRot = FloatArray(maxShards)
+    private val shW = FloatArray(maxShards)
+    private val shH = FloatArray(maxShards)
+    private val shLife = FloatArray(maxShards)
+    private val shMaxLife = FloatArray(maxShards)
+    private val shColor = IntArray(maxShards)
 
     private val maxShockwaves = 14
     private val swActive = BooleanArray(maxShockwaves)
@@ -467,7 +490,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var ttLinesTotal = 0
     private var ttBoardBounce = 0f
     private var ttClearFlashTimer = 0f
-    private var ttClearFlashRow = -1
+    private var ttClearFlashMask = 0
 
     private val tetrominoShapes = arrayOf(
         intArrayOf(0, 1, 1, 1, 2, 1, 3, 1),
@@ -500,6 +523,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var rkTargetKills = 18
     private var rocketAutoFire = true
 
+    // Motion afterimage ghost ring buffer (3 slots)
+    private val rkGhostX = FloatArray(3)
+    private val rkGhostY = FloatArray(3)
+    private val rkGhostTilt = FloatArray(3)
+    private var rkGhostTimer = 0f
+
     private val maxRkShots = 16
     private val rsActive = BooleanArray(maxRkShots)
     private val rsFriendly = BooleanArray(maxRkShots)
@@ -517,6 +546,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val reVy = FloatArray(maxRkEnemies)
     private val reShootCd = FloatArray(maxRkEnemies)
     private val reFlash = FloatArray(maxRkEnemies)
+    private val reWarnTimer = FloatArray(maxRkEnemies)
 
     private val frameRunnable = object : Runnable {
         override fun run() {
@@ -561,7 +591,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 spawnShockwave(x, y, maxRadiusDp, color)
 
             override fun onHitStop(duration: Float) = triggerHitStop(duration)
-            override fun onComboEvent(x: Float, y: Float) = registerCombo(x, y)
+            override fun onComboEvent(x: Float, y: Float): Float = registerCombo(x, y)
 
             override fun onStageFinished(victory: Boolean, nextStage: Int) {
                 this@ArcadeCanvasView.victory = victory
@@ -628,11 +658,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
     private fun clearEffects() {
         ptActive.fill(false)
+        shActive.fill(false)
         swActive.fill(false)
         trActive.fill(false)
         flActive.fill(false)
         shakeTimer = 0f
         hitStopTimer = 0f
+        arenaGlowTimer = 0f
         comboCount = 0
         comboTimer = 0f
         comboPopScale = 1f
@@ -653,7 +685,16 @@ class ArcadeCanvasView(context: Context) : View(context) {
             else -> 1.0f
         }
         score += max(5, (basePoints * mult).toInt())
+        scorePopScale = 1.32f
         saveHighScore(mode, score)
+
+        if (!newRecordAnnounced && sessionHighScore > 0 && score > sessionHighScore) {
+            newRecordAnnounced = true
+            newRecordBannerTimer = 2.4f
+            audio.play(RetroAudioEngine.SFX_WIN, 1.32f)
+            val w = width.toFloat().coerceAtLeast(320f)
+            spawnParticles(w * 0.5f, dp(56f), 22, COL_GOLD, dp(40f), dp(160f), 4.2f)
+        }
     }
 
     private fun triggerHitStop(duration: Float) {
@@ -665,7 +706,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         shakeStrength = max(shakeStrength, dp(strengthDp))
     }
 
-    private fun registerCombo(x: Float, y: Float) {
+    private fun triggerArenaGlow(color: Int) {
+        arenaGlowTimer = 0.28f
+        arenaGlowColor = color
+    }
+
+    private fun registerCombo(x: Float, y: Float): Float {
         comboCount++
         comboTimer = 2.6f
         comboPopScale = 1.65f
@@ -673,6 +719,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
             addPoints(comboCount * 15)
             spawnFloatText(x, y - dp(16f), "COMBO x$comboCount!", COL_CYAN)
         }
+        return (1.0f + (comboCount - 1) * 0.08f).coerceAtMost(1.48f)
     }
 
     private fun spawnShockwave(x: Float, y: Float, maxRadiusDp: Float, color: Int) {
@@ -686,6 +733,35 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 swLife[i] = swMaxLife[i]
                 swColor[i] = color
                 return
+            }
+        }
+    }
+
+    private fun spawnShatterShards(x: Float, y: Float, color: Int, wDp: Float, hDp: Float) {
+        val dirs = arrayOf(
+            floatArrayOf(-1f, -1.2f),
+            floatArrayOf(1f, -1.2f),
+            floatArrayOf(-0.8f, -0.4f),
+            floatArrayOf(0.8f, -0.4f)
+        )
+        var spawned = 0
+        for (i in 0 until maxShards) {
+            if (!shActive[i]) {
+                val d = dirs[spawned]
+                shActive[i] = true
+                shX[i] = x + d[0] * dp(4f)
+                shY[i] = y + d[1] * dp(3f)
+                shVx[i] = d[0] * dp(55f + Random.nextFloat() * 45f)
+                shVy[i] = d[1] * dp(85f + Random.nextFloat() * 45f)
+                shAngle[i] = Random.nextFloat() * 360f
+                shVRot[i] = (if (spawned % 2 == 0) 1f else -1f) * (360f + Random.nextFloat() * 260f)
+                shW[i] = dp(wDp)
+                shH[i] = dp(hDp)
+                shMaxLife[i] = 0.45f
+                shLife[i] = shMaxLife[i]
+                shColor[i] = color
+                spawned++
+                if (spawned >= 4) break
             }
         }
     }
@@ -755,6 +831,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         state = STATE_READY
         readyChoice = 0
         score = 0
+        displayScore = 0f
         stage = 1
         victory = false
         audio.play(RetroAudioEngine.SFX_BOUNCE, 1.1f)
@@ -768,7 +845,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
         victory = false
         if (!keepProgress) {
             score = 0
+            displayScore = 0f
             stage = 1
+            sessionHighScore = getHighScore(targetMode)
+            newRecordAnnounced = false
+            newRecordBannerTimer = 0f
         }
         audio.play(RetroAudioEngine.SFX_POWERUP, 1.15f)
         prepareBoardForMode(targetMode)
@@ -809,12 +890,22 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // MAIN UPDATE LOOP (WITH HIT-STOP & VISUAL POLISH DECAY)
+    // MAIN UPDATE LOOP (HIT-STOP, ROLLING SCORE, SHATTER SHARDS & POLISH)
     // =========================================================================
     private fun update(dt: Float) {
         animTime += dt
         GameChiptuneEngine.sync(mode, state, audio.muted)
 
+        // Smooth rolling score counter
+        if (displayScore < score) {
+            val diff = score - displayScore
+            displayScore = min(score.toFloat(), displayScore + max(120f * dt, diff * 12f * dt))
+        } else if (displayScore > score) {
+            displayScore = score.toFloat()
+        }
+        if (scorePopScale > 1f) scorePopScale = max(1f, scorePopScale - dt * 3.2f)
+        if (newRecordBannerTimer > 0f) newRecordBannerTimer = max(0f, newRecordBannerTimer - dt)
+        if (arenaGlowTimer > 0f) arenaGlowTimer = max(0f, arenaGlowTimer - dt)
         if (shakeTimer > 0f) shakeTimer = max(0f, shakeTimer - dt)
 
         if (comboTimer > 0f) {
@@ -836,6 +927,20 @@ class ArcadeCanvasView(context: Context) : View(context) {
             if (trActive[i]) {
                 trLife[i] -= dt
                 if (trLife[i] <= 0f) trActive[i] = false
+            }
+        }
+
+        for (i in 0 until maxShards) {
+            if (shActive[i]) {
+                shLife[i] -= dt
+                if (shLife[i] <= 0f) {
+                    shActive[i] = false
+                } else {
+                    shX[i] += shVx[i] * dt
+                    shY[i] += shVy[i] * dt
+                    shVy[i] += dp(260f) * dt
+                    shAngle[i] += shVRot[i] * dt
+                }
             }
         }
 
@@ -862,7 +967,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (state != STATE_PLAYING) return
 
-        // Crunchy Hit-Stop micro freeze on big impacts
+        // Hit-Stop micro freeze on big impacts
         if (hitStopTimer > 0f) {
             hitStopTimer = max(0f, hitStopTimer - dt)
             return
@@ -945,6 +1050,19 @@ class ArcadeCanvasView(context: Context) : View(context) {
             pStroke.strokeWidth = dp(3f) * (1f - progress * 0.6f)
             pStroke.color = (swColor[i] and 0x00FFFFFF) or (alpha shl 24)
             canvas.drawCircle(swX[i], swY[i], radius, pStroke)
+        }
+
+        // Spinning geometric shatter fragments
+        for (i in 0 until maxShards) {
+            if (!shActive[i]) continue
+            val alpha = ((shLife[i] / shMaxLife[i]).coerceIn(0f, 1f) * 255).toInt()
+            pFill.color = (shColor[i] and 0x00FFFFFF) or (alpha shl 24)
+            canvas.save()
+            canvas.translate(shX[i], shY[i])
+            canvas.rotate(shAngle[i])
+            rect.set(-shW[i] * 0.5f, -shH[i] * 0.5f, shW[i] * 0.5f, shH[i] * 0.5f)
+            canvas.drawRoundRect(rect, dp(2f), dp(2f), pFill)
+            canvas.restore()
         }
 
         for (i in 0 until maxParticles) {
@@ -1090,13 +1208,27 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pText.textSize = dp(14f)
         canvas.drawText("${gameTitles[idx]} · S$stage", dp(14f), dp(28f), pText)
 
+        // Rolling Score with Pop-Scale
+        canvas.save()
+        canvas.translate(w * 0.52f, dp(24f))
+        canvas.scale(scorePopScale, scorePopScale)
         pText.textAlign = Paint.Align.CENTER
-        pText.color = COL_IVORY
+        pText.color = if (newRecordAnnounced) COL_GOLD else COL_IVORY
         pText.textSize = dp(14f)
-        canvas.drawText("SKOR: $score   |   REKOR: ${getHighScore(mode)}", w * 0.52f, dp(28f), pText)
+        canvas.drawText("SKOR: ${displayScore.toInt()}   |   REKOR: ${getHighScore(mode)}", 0f, dp(4f), pText)
+        canvas.restore()
 
-        // Pop-Scale Combo Badge below HUD when active
-        if (comboCount >= 2 && comboTimer > 0f && state == STATE_PLAYING) {
+        // Live New Record Banner below HUD
+        if (newRecordBannerTimer > 0f && state == STATE_PLAYING) {
+            val alpha = ((min(1f, newRecordBannerTimer * 2f)) * 235).toInt()
+            rect.set(w * 0.52f - dp(68f), barH + dp(6f), w * 0.52f + dp(68f), barH + dp(28f))
+            pFill.color = (alpha shl 24) or 0x00E6C88F
+            canvas.drawRoundRect(rect, dp(11f), dp(11f), pFill)
+            pText.textAlign = Paint.Align.CENTER
+            pText.textSize = dp(11.5f)
+            pText.color = (alpha shl 24) or 0x00141210
+            canvas.drawText("★ REKOR BARU! ★", rect.centerX(), rect.centerY() + dp(4f), pText)
+        } else if (comboCount >= 2 && comboTimer > 0f && state == STATE_PLAYING) {
             canvas.save()
             val cx = w * 0.52f
             val cy = barH + dp(20f)
@@ -1610,7 +1742,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 1: BOMBER ARENA (WITH SHOCKWAVES, DEBRIS PARTICLES & HIT-STOP)
+    // GAME 1: BOMBER ARENA (TELEGRAPHING BOTS, SHATTER BLOCKS & CRITICAL PULSE)
     // =========================================================================
     private fun bomberScreenPos(colF: Float, rowF: Float): Pair<Float, Float> {
         val w = width.toFloat().coerceAtLeast(320f)
@@ -1773,12 +1905,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 botAlive[i] = false
                 aliveCount--
                 addPoints(250)
-                audio.play(RetroAudioEngine.SFX_EXPLODE, 1.2f)
                 triggerHitStop(0.04f)
                 val (bx, by) = bomberScreenPos(botX[i], botY[i])
+                val pitch = registerCombo(bx, by)
+                audio.play(RetroAudioEngine.SFX_EXPLODE, pitch)
                 spawnShockwave(bx, by, 58f, COL_PURPLE)
                 spawnParticles(bx, by, 20, COL_PURPLE, dp(35f), dp(160f), 4.5f)
-                registerCombo(bx, by)
                 spawnFloatText(bx, by, "+250!", COL_GOLD)
             }
         }
@@ -1849,7 +1981,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     bmMap[idx] = 0
                     addPoints(20)
                     val (wx, wy) = bomberScreenPos(nc + 0.5f, nr + 0.5f)
-                    spawnParticles(wx, wy, 8, 0xFF8C5332.toInt(), dp(25f), dp(110f), 3.5f)
+                    spawnShatterShards(wx, wy, 0xFF8C5332.toInt(), 7f, 7f)
                     registerCombo(wx, wy)
                     break
                 }
@@ -1914,17 +2046,26 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(cx, cy, cell * 0.32f * pulse, pFill)
         }
 
+        // Bots with Telegraphing flash right before dropping bomb
         for (i in 0 until maxBots) {
             if (!botAlive[i]) continue
             val cx = ox + botX[i] * cell
             val cy = oy + botY[i] * cell
-            pFill.color = COL_PURPLE
+            val aboutToBomb = botBombCd[i] < 0.45f
+            pFill.color = if (aboutToBomb && ((animTime * 24f).toInt() and 1) == 0) COL_ORANGE else COL_PURPLE
             canvas.drawCircle(cx, cy, cell * 0.34f, pFill)
         }
 
         if (bmInvuln <= 0f || ((animTime * 16f).toInt() and 1) == 0) {
             pFill.color = COL_GOLD
             canvas.drawCircle(ox + bmPx * cell, oy + bmPy * cell, cell * 0.35f, pFill)
+        }
+
+        if (bmLives == 1) {
+            val alpha = ((0.4f + 0.6f * abs(sin(animTime * 5.5f))) * 100).toInt()
+            pStroke.strokeWidth = dp(8f)
+            pStroke.color = (alpha shl 24) or 0x00E05252
+            canvas.drawRect(ox, oy, ox + cell * bmCols, oy + cell * bmRows, pStroke)
         }
 
         pText.textAlign = Paint.Align.LEFT
@@ -1935,7 +2076,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 2: NEON BRICK (WITH RIBBON TRAIL, PADDLE RECOIL & HIT-FLASH)
+    // GAME 2: NEON BRICK (SHATTER FRAGMENTS, REACTIVE BORDER & PITCH COMBO)
     // =========================================================================
     private fun initBrick() {
         brPaddleX = 0.5f
@@ -2062,10 +2203,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     val bx = padX + (col + 0.5f) * (areaW / brCols)
                     val by = topY + (brickTop + (row + 0.5f) * brickH) * areaH
                     if (brHp[idx] <= 0) {
-                        audio.play(RetroAudioEngine.SFX_COIN, 1.2f)
-                        spawnShockwave(bx, by, 34f, brColor[idx])
-                        spawnParticles(bx, by, 10, brColor[idx], dp(28f), dp(125f), 3.6f)
-                        registerCombo(bx, by)
+                        val bCol = brColor[idx]
+                        val pitch = registerCombo(bx, by)
+                        audio.play(RetroAudioEngine.SFX_COIN, pitch)
+                        triggerArenaGlow(bCol)
+                        spawnShockwave(bx, by, 34f, bCol)
+                        spawnShatterShards(bx, by, bCol, 10f, 5f)
                         if (Random.nextFloat() < 0.22f) {
                             spawnBrickCapsule((col + 0.5f) * brickW, brickTop + (row + 0.5f) * brickH)
                         }
@@ -2146,6 +2289,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val padX = dp(16f)
         val areaW = w - padX * 2f
 
+        // Reactive arena border glow
+        pStroke.strokeWidth = if (arenaGlowTimer > 0f) dp(3f) else dp(1.2f)
+        pStroke.color = if (arenaGlowTimer > 0f) arenaGlowColor else 0x334CC3D9
+        rect.set(padX, topY, padX + areaW, botY)
+        canvas.drawRoundRect(rect, dp(10f), dp(10f), pStroke)
+
         val brickTop = topY + areaH * 0.10f
         val brickH = areaH * 0.055f
         val brickW = areaW / brCols
@@ -2194,11 +2343,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pText.typeface = Typeface.DEFAULT_BOLD
         pText.color = COL_CYAN
         pText.textSize = dp(12f)
-        canvas.drawText("BOLA: ${"●".repeat(brLives.coerceAtLeast(0))}", padX, topY + dp(16f), pText)
+        canvas.drawText("BOLA: ${"●".repeat(brLives.coerceAtLeast(0))}", padX + dp(8f), topY + dp(18f), pText)
     }
 
     // =========================================================================
-    // GAME 3: GOLD SNAKE (WITH DIGESTION WAVE PULSE & SHOCKWAVES)
+    // GAME 3: GOLD SNAKE (TRACKING EYES, FORKED TONGUE & DIGESTION WAVE)
     // =========================================================================
     private fun snakeScreenPos(col: Int, row: Int): Pair<Float, Float> {
         val w = width.toFloat().coerceAtLeast(320f)
@@ -2297,11 +2446,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
             snLen = min(snCols * snRows - 1, snLen + 1)
             snEatPulse = 1f
             addPoints(50)
-            audio.play(RetroAudioEngine.SFX_COIN, 1.15f)
             val (fx, fy) = snakeScreenPos(nx, ny)
+            val pitch = registerCombo(fx, fy)
+            audio.play(RetroAudioEngine.SFX_COIN, pitch)
             spawnShockwave(fx, fy, 38f, COL_GOLD)
             spawnParticles(fx, fy, 12, COL_GOLD, dp(25f), dp(110f), 3.4f)
-            registerCombo(fx, fy)
             spawnFloatText(fx, fy, "+50", COL_GOLD)
             spawnSnakeFood()
             if (!snBonusActive && snLen % 5 == 0) {
@@ -2365,16 +2514,48 @@ class ArcadeCanvasView(context: Context) : View(context) {
             pFill.color = if (i == 0) COL_IVORY else if (waveBoost > 0.5f) COL_GOLD else COL_GREEN
             canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
         }
+
+        // Expressive head: flicking red forked tongue + gem-tracking eyes
+        val hcx = ox + (snBodyX[0] + 0.5f) * cell
+        val hcy = oy + (snBodyY[0] + 0.5f) * cell
+        val dirX = when (snDir) { 1 -> 1f; 3 -> -1f; else -> 0f }
+        val dirY = when (snDir) { 2 -> 1f; 0 -> -1f; else -> 0f }
+
+        if (sin(animTime * 8f) > 0.25f) {
+            val tongueLen = cell * 0.34f
+            val tx = hcx + dirX * (cell * 0.45f)
+            val ty = hcy + dirY * (cell * 0.45f)
+            pStroke.strokeWidth = dp(1.8f)
+            pStroke.color = COL_RED
+            canvas.drawLine(tx, ty, tx + dirX * tongueLen, ty + dirY * tongueLen, pStroke)
+        }
+
+        val targetX = if (snBonusActive) ox + (snBonusX + 0.5f) * cell else fcx
+        val targetY = if (snBonusActive) oy + (snBonusY + 0.5f) * cell else fcy
+        val lookAngle = atan2(targetY - hcy, targetX - hcx)
+        val pupilOff = cell * 0.05f
+        val eyeOff1X = if (dirX != 0f) dirX * cell * 0.14f else -cell * 0.18f
+        val eyeOff1Y = if (dirY != 0f) dirY * cell * 0.14f else -cell * 0.18f
+        val eyeOff2X = if (dirX != 0f) dirX * cell * 0.14f else cell * 0.18f
+        val eyeOff2Y = if (dirY != 0f) dirY * cell * 0.14f else cell * 0.18f
+
+        pFill.color = COL_BG_TOP
+        canvas.drawCircle(hcx + eyeOff1X, hcy + eyeOff1Y, cell * 0.11f, pFill)
+        canvas.drawCircle(hcx + eyeOff2X, hcy + eyeOff2Y, cell * 0.11f, pFill)
+        pFill.color = COL_GOLD
+        canvas.drawCircle(hcx + eyeOff1X + cos(lookAngle) * pupilOff, hcy + eyeOff1Y + sin(lookAngle) * pupilOff, cell * 0.05f, pFill)
+        canvas.drawCircle(hcx + eyeOff2X + cos(lookAngle) * pupilOff, hcy + eyeOff2Y + sin(lookAngle) * pupilOff, cell * 0.05f, pFill)
     }
 
     // =========================================================================
-    // GAME 4: NEON TETRIS (WITH BOARD BOUNCE & ROW CLEAR FLASH)
+    // GAME 4: NEON TETRIS (BOARD BOUNCE, MULTI-ROW FLASH & REACTIVE BORDER)
     // =========================================================================
     private fun initTetris() {
         ttBoard.fill(0)
         ttLinesTotal = 0
         ttBoardBounce = 0f
         ttClearFlashTimer = 0f
+        ttClearFlashMask = 0
         ttCurType = Random.nextInt(7)
         ttNextType = Random.nextInt(7)
         spawnTetrisPiece()
@@ -2449,6 +2630,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun lockTetrisPiece() {
+        val pieceColor = tetrominoColors[ttCurType]
         for (i in 0..3) {
             val (dx, dy) = getTetrominoCell(ttCurType, ttRot, i)
             val cx = ttPx + dx
@@ -2461,6 +2643,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         var cleared = 0
         var lastClearedRow = -1
+        var mask = 0
         var r = ttRows - 1
         while (r >= 0) {
             var full = true
@@ -2472,6 +2655,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
             if (full) {
                 cleared++
+                mask = mask or (1 shl r)
                 if (lastClearedRow == -1) lastClearedRow = r
                 for (yy in r downTo 1) {
                     for (c in 0 until ttCols) {
@@ -2487,12 +2671,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (cleared > 0) {
             ttLinesTotal += cleared
             stage = 1 + ttLinesTotal / 10
-            ttClearFlashRow = lastClearedRow
-            ttClearFlashTimer = 0.22f
+            ttClearFlashMask = mask
+            ttClearFlashTimer = 0.24f
             ttBoardBounce = 1f
+            triggerArenaGlow(pieceColor)
             val pts = when (cleared) { 1 -> 100; 2 -> 300; 3 -> 500; else -> 800 }
             addPoints(pts)
-            audio.play(RetroAudioEngine.SFX_COIN, 1.25f)
             triggerHitStop(0.03f)
             triggerShake(0.14f, 4f)
 
@@ -2505,9 +2689,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
             val oy = topHud + ((deckTop - topHud) - cell * ttRows) * 0.5f
             val fx = ox + cell * ttCols * 0.5f
             val fy = oy + (lastClearedRow + 0.5f) * cell
+            val pitch = registerCombo(fx, fy)
+            audio.play(RetroAudioEngine.SFX_COIN, pitch)
             spawnShockwave(fx, fy, 68f, COL_GOLD)
             spawnParticles(fx, fy, 18, COL_GOLD, dp(30f), dp(145f), 4f)
-            registerCombo(fx, fy)
             spawnFloatText(fx, fy, "+$pts!", COL_GOLD)
         }
         spawnTetrisPiece()
@@ -2550,8 +2735,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         pFill.color = 0xFF171513.toInt()
         canvas.drawRect(ox, oy, ox + cell * ttCols, oy + cell * ttRows, pFill)
-        pStroke.strokeWidth = dp(1.5f)
-        pStroke.color = 0x55E6C88F
+        pStroke.strokeWidth = if (arenaGlowTimer > 0f) dp(3f) else dp(1.5f)
+        pStroke.color = if (arenaGlowTimer > 0f) arenaGlowColor else 0x55E6C88F
         canvas.drawRect(ox, oy, ox + cell * ttCols, oy + cell * ttRows, pStroke)
 
         for (r in 0 until ttRows) {
@@ -2566,11 +2751,15 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        if (ttClearFlashTimer > 0f && ttClearFlashRow in 0 until ttRows) {
-            val alpha = ((ttClearFlashTimer / 0.22f) * 200).toInt()
+        if (ttClearFlashTimer > 0f) {
+            val alpha = ((ttClearFlashTimer / 0.24f) * 200).toInt()
             pFill.color = (alpha shl 24) or 0x00FFFFFF
-            val fy = oy + ttClearFlashRow * cell
-            canvas.drawRect(ox, fy, ox + cell * ttCols, fy + cell, pFill)
+            for (r in 0 until ttRows) {
+                if ((ttClearFlashMask and (1 shl r)) != 0) {
+                    val fy = oy + r * cell
+                    canvas.drawRect(ox, fy, ox + cell * ttCols, fy + cell, pFill)
+                }
+            }
         }
 
         var ghostY = ttPy
@@ -2612,7 +2801,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 5: ASTRO ROCKET (SMOOTH BANKING, THRUSTER TRAIL, RECOIL & HIT-FLASH)
+    // GAME 5: ASTRO ROCKET (TELEGRAPHING, 3-LAYER STARS, AFTERIMAGE & CRITICAL PULSE)
     // =========================================================================
     private fun initRocket(keep: Boolean) {
         rkX = 0.5f
@@ -2620,6 +2809,9 @@ class ArcadeCanvasView(context: Context) : View(context) {
         rkTilt = 0f
         rkRecoil = 0f
         rkMuzzleTimer = 0f
+        rkGhostX.fill(rkX)
+        rkGhostY.fill(rkY)
+        rkGhostTilt.fill(0f)
         if (!keep) {
             rkHp = 3
             rkShield = 1.5f
@@ -2630,6 +2822,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         rsActive.fill(false)
         reActive.fill(false)
         reFlash.fill(0f)
+        reWarnTimer.fill(0f)
     }
 
     private fun fireRocketLaser() {
@@ -2686,6 +2879,20 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val targetTilt = (moveDelta * 26f).coerceIn(-22f, 22f)
         rkTilt += (targetTilt - rkTilt) * min(1f, dt * 12f)
 
+        // Motion afterimage ghost sampling
+        rkGhostTimer -= dt
+        if (rkGhostTimer <= 0f) {
+            rkGhostTimer = 0.035f
+            for (g in 2 downTo 1) {
+                rkGhostX[g] = rkGhostX[g - 1]
+                rkGhostY[g] = rkGhostY[g - 1]
+                rkGhostTilt[g] = rkGhostTilt[g - 1]
+            }
+            rkGhostX[0] = rkX
+            rkGhostY[0] = rkY
+            rkGhostTilt[0] = rkTilt
+        }
+
         val w = width.toFloat().coerceAtLeast(320f)
         val h = height.toFloat().coerceAtLeast(240f)
         val topY = dp(52f)
@@ -2718,7 +2925,9 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     reY[i] = -0.05f
                     reVx[i] = if (reType[i] == 1) (if (Random.nextBoolean()) 0.22f else -0.22f) else 0f
                     reVy[i] = 0.26f + Random.nextFloat() * 0.16f + difficulty * 0.05f
-                    reShootCd[i] = 1.2f + Random.nextFloat()
+                    reShootCd[i] = 1.4f + Random.nextFloat()
+                    // Telegraph warning `!` for fast meteors
+                    reWarnTimer[i] = if (reType[i] == 0 && reVy[i] > 0.38f) 0.42f else 0f
                     break
                 }
             }
@@ -2733,7 +2942,9 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
             if (rsFriendly[i]) {
                 for (e in 0 until maxRkEnemies) {
-                    if (reActive[e] && reType[e] != 2 && abs(rsX[i] - reX[e]) < 0.055f && abs(rsY[i] - reY[e]) < 0.055f) {
+                    if (reActive[e] && reType[e] != 2 && reWarnTimer[e] <= 0f &&
+                        abs(rsX[i] - reX[e]) < 0.055f && abs(rsY[i] - reY[e]) < 0.055f
+                    ) {
                         rsActive[i] = false
                         reHp[e]--
                         val ex = reX[e] * w
@@ -2744,17 +2955,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
                             rkKills++
                             val pts = if (isUfo) 120 else 60
                             addPoints(pts)
-                            audio.play(RetroAudioEngine.SFX_EXPLODE, 1.2f)
+                            val pitch = registerCombo(ex, ey)
+                            audio.play(RetroAudioEngine.SFX_EXPLODE, pitch)
                             triggerHitStop(0.03f)
                             triggerShake(0.10f, 3.5f)
                             val col = if (isUfo) COL_PURPLE else COL_ORANGE
                             spawnShockwave(ex, ey, if (isUfo) 52f else 38f, col)
                             spawnParticles(ex, ey, if (isUfo) 18 else 12, col, dp(30f), dp(145f), 4f)
-                            registerCombo(ex, ey)
                             spawnFloatText(ex, ey, "+$pts", col)
                         } else {
                             reFlash[e] = 0.12f
-                            reY[e] -= 0.015f // knockback
+                            reY[e] -= 0.015f
                             audio.play(RetroAudioEngine.SFX_BOUNCE, 1.35f)
                             spawnParticles(ex, ey, 6, Color.WHITE, dp(20f), dp(80f), 2.8f)
                         }
@@ -2769,6 +2980,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         for (i in 0 until maxRkEnemies) {
             if (!reActive[i]) continue
+            if (reWarnTimer[i] > 0f) {
+                reWarnTimer[i] = max(0f, reWarnTimer[i] - dt)
+                continue
+            }
             reX[i] += reVx[i] * dt
             if (reX[i] < 0.08f || reX[i] > 0.92f) reVx[i] = -reVx[i]
             reY[i] += reVy[i] * dt
@@ -2836,16 +3051,35 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val botY = getControlDeckTop(h)
         val areaH = botY - topY
 
-        pFill.color = 0x55FFFFFF
-        for (i in 0..24) {
+        // 3-Layer Parallax Starfield
+        for (i in 0..32) {
+            val layer = i % 3
+            val speed = when (layer) { 0 -> 14f; 1 -> 34f; else -> 75f }
+            val alpha = when (layer) { 0 -> 55; 1 -> 125; else -> 210 }
+            val sz = when (layer) { 0 -> dp(1.1f); 1 -> dp(1.7f); else -> dp(2.3f) }
+            pFill.color = (alpha shl 24) or 0x00FFFFFF
             val sx = ((i * 73) % 100) / 100f * w
-            val sy = topY + (((i * 41 + animTime * 22f).toInt() % 100) / 100f) * areaH
-            canvas.drawCircle(sx, sy, dp(1.5f), pFill)
+            val sy = topY + (((i * 41 + animTime * speed).toInt() % 100) / 100f) * areaH
+            canvas.drawCircle(sx, sy, sz, pFill)
         }
 
         for (i in 0 until maxRkEnemies) {
             if (!reActive[i]) continue
             val ex = reX[i] * w
+            if (reWarnTimer[i] > 0f) {
+                // Telegraph warning `!` at top edge before fast meteor enters
+                if (((animTime * 22f).toInt() and 1) == 0) {
+                    pFill.color = 0xCCFF5252.toInt()
+                    canvas.drawCircle(ex, topY + dp(18f), dp(11f), pFill)
+                    pText.textAlign = Paint.Align.CENTER
+                    pText.typeface = Typeface.DEFAULT_BOLD
+                    pText.textSize = dp(13f)
+                    pText.color = Color.WHITE
+                    canvas.drawText("!", ex, topY + dp(23f), pText)
+                }
+                continue
+            }
+
             val ey = topY + reY[i] * areaH
             val flash = reFlash[i] > 0f
             when (reType[i]) {
@@ -2857,6 +3091,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     pFill.color = if (flash) Color.WHITE else COL_PURPLE
                     rect.set(ex - dp(18f), ey - dp(9f), ex + dp(18f), ey + dp(9f))
                     canvas.drawRoundRect(rect, dp(9f), dp(9f), pFill)
+                    // Telegraphing charge ring before UFO shoots
+                    if (reShootCd[i] < 0.45f) {
+                        val chargeRadius = dp(4f) + (reShootCd[i] / 0.45f) * dp(14f)
+                        pStroke.strokeWidth = dp(2f)
+                        pStroke.color = COL_RED
+                        canvas.drawCircle(ex, ey + dp(8f), chargeRadius, pStroke)
+                    }
                 }
                 2 -> {
                     pFill.color = COL_GREEN
@@ -2871,6 +3112,24 @@ class ArcadeCanvasView(context: Context) : View(context) {
             val lx = rsX[i] * w
             val ly = topY + rsY[i] * areaH
             canvas.drawRect(lx - dp(2f), ly - dp(8f), lx + dp(2f), ly + dp(8f), pFill)
+        }
+
+        // Motion Afterimage Ghosts when banking fast
+        if (abs(rkTilt) > 6f) {
+            for (g in 2 downTo 0) {
+                val alpha = (2 - g) * 28 + 20
+                canvas.save()
+                canvas.translate(rkGhostX[g] * w, topY + rkGhostY[g] * areaH)
+                canvas.rotate(rkGhostTilt[g])
+                path.reset()
+                path.moveTo(0f, -dp(18f))
+                path.lineTo(-dp(16f), dp(14f))
+                path.lineTo(dp(16f), dp(14f))
+                path.close()
+                pFill.color = (alpha shl 24) or 0x004CC3D9
+                canvas.drawPath(path, pFill)
+                canvas.restore()
+            }
         }
 
         // Player Fighter with Smooth Banking, Recoil & Muzzle Flash
@@ -2898,6 +3157,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(0f, 0f, dp(24f), pStroke)
         }
         canvas.restore()
+
+        if (rkHp == 1) {
+            val alpha = ((0.4f + 0.6f * abs(sin(animTime * 5.5f))) * 105).toInt()
+            pStroke.strokeWidth = dp(9f)
+            pStroke.color = (alpha shl 24) or 0x00E05252
+            canvas.drawRect(0f, topY, w, botY, pStroke)
+        }
 
         pText.textAlign = Paint.Align.LEFT
         pText.typeface = Typeface.DEFAULT_BOLD
