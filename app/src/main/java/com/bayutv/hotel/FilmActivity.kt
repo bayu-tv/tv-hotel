@@ -787,19 +787,23 @@ class FilmActivity : AppCompatActivity() {
         notice.show(null, "Memuat katalog Anime Sub-Indo...")
         Thread {
             val ongoing = AnimeIndoProvider.fetchOngoing(this).take(16)
-            if (ongoing.isNotEmpty() && my == token && !isFinishing) {
-                ui.post {
-                    if (my == token && !isFinishing) {
-                        notice.hide()
+            val complete = AnimeIndoProvider.fetchComplete(this).take(16)
+            if (my != token || isFinishing) return@Thread
+
+            ui.post {
+                if (my != token || isFinishing) return@post
+                if (ongoing.isEmpty() && complete.isEmpty()) {
+                    notice.show(
+                        "Katalog Anime Sub-Indo Belum Terjangkau",
+                        "Aktifkan DNS Pribadi (dns.google / 1.1.1.1) di Setelan TV/HP atau perbarui URL lewat tombol Domain Anime.",
+                        6500L
+                    )
+                } else {
+                    notice.hide()
+                    if (ongoing.isNotEmpty()) {
                         addAnimeIndoRow("Anime Sub-Indo Terbaru (Ongoing)", ongoing)
                     }
-                }
-            }
-            val complete = AnimeIndoProvider.fetchComplete(this).take(16)
-            if (complete.isNotEmpty() && my == token && !isFinishing) {
-                ui.post {
-                    if (my == token && !isFinishing) {
-                        notice.hide()
+                    if (complete.isNotEmpty()) {
                         addAnimeIndoRow("Anime Sub-Indo Tamat (Full Episode)", complete)
                     }
                 }
