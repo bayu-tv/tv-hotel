@@ -98,6 +98,21 @@ object GameChiptuneEngine {
                 48, 48, 60, 48, 48, 60, 48, 60,
                 45, 45, 57, 45, 50, 0, 62, 0
             )
+        ),
+        QUEST(
+            stepMs = 125,
+            leadNotes = intArrayOf(
+                76, 76, 0, 76, 0, 72, 76, 0,
+                79, 0, 0, 0, 67, 0, 0, 0,
+                72, 0, 0, 67, 0, 0, 64, 0,
+                69, 0, 71, 0, 70, 69, 0, 0
+            ),
+            bassNotes = intArrayOf(
+                60, 60, 0, 60, 0, 60, 60, 0,
+                67, 0, 0, 0, 55, 0, 0, 0,
+                60, 0, 0, 55, 0, 0, 52, 0,
+                57, 0, 59, 0, 58, 57, 0, 0
+            )
         )
     }
 
@@ -128,13 +143,14 @@ object GameChiptuneEngine {
      */
     fun sync(mode: Int, state: Int, isMuted: Boolean) {
         muted = isMuted
-        if (state == 2 && mode in 1..5) {
+        if (state == 2 && mode in 1..6) {
             val targetTheme = when (mode) {
                 1 -> GameTheme.BOMBER
                 2 -> GameTheme.BRICK
                 3 -> GameTheme.SNAKE
                 4 -> GameTheme.TETRIS
-                else -> GameTheme.ROCKET
+                5 -> GameTheme.ROCKET
+                else -> GameTheme.QUEST
             }
             currentTheme = targetTheme
             if (isMuted) {
