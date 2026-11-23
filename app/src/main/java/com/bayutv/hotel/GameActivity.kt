@@ -443,11 +443,13 @@ private class ArcadeCanvasView(context: Context) : View(context) {
 
     fun pauseLoop() {
         running = false
+        GameChiptuneEngine.pause()
         removeCallbacks(frameRunnable)
     }
 
     fun releaseResources() {
         pauseLoop()
+        GameChiptuneEngine.stop()
         audio.release()
     }
 
@@ -1072,6 +1074,7 @@ private class ArcadeCanvasView(context: Context) : View(context) {
     // MASTER UPDATE & DRAW
     // =========================================================================
     private fun update(dt: Float) {
+        GameChiptuneEngine.sync(mode, state, audio.muted)
         if (shakeTimer > 0f) {
             shakeTimer = max(0f, shakeTimer - dt)
             if (shakeTimer <= 0f) shakeStrength = 0f
