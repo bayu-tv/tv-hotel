@@ -137,14 +137,14 @@ object AnimeIndoProvider {
     private fun parseAnimeCards(html: String, baseUrl: String, defaultStatus: String): List<AnimeItem> {
         val out = ArrayList<AnimeItem>()
         val seen = HashSet<String>()
-        val blockRegex = Regex("<div class=\"detpost\">(.*?)</div>\\s*</li>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val hrefRegex = Regex("<a[^>]+href=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-        val titleRegex = Regex("<h2 class=\"jdlflm\">(.*?)</h2>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-        val epRegex = Regex("<div class=\"epz\">(.*?)</div>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val hrefRegex = Regex("<a[^>]+href=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
+        val titleRegex = Regex("<h2[^>]*class=[\"'][^\"']*jdlflm[^\"']*[\"'][^>]*>(.*?)</h2>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val imgRegex = Regex("<img[^>]+src=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
+        val epRegex = Regex("<div[^>]*class=[\"'][^\"']*epz[^\"']*[\"'][^>]*>(.*?)</div>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
 
-        for (m in blockRegex.findAll(html)) {
-            val block = m.groupValues[1]
+        val chunks = html.split(Regex("<div[^>]*class=[\"'][^\"']*detpost[^\"']*[\"'][^>]*>", RegexOption.IGNORE_CASE))
+        for (i in 1 until chunks.size) {
+            val block = chunks[i].substringBefore("</li>")
             val href = normalizeUrl(hrefRegex.find(block)?.groupValues?.getOrNull(1).orEmpty(), baseUrl)
             val rawTitle = stripTags(titleRegex.find(block)?.groupValues?.getOrNull(1).orEmpty())
             val poster = normalizeUrl(imgRegex.find(block)?.groupValues?.getOrNull(1).orEmpty(), baseUrl)
