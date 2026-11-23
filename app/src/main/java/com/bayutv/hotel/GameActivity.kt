@@ -229,7 +229,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         const val COL_PANEL = 0xFF1F1C19.toInt()
         const val COL_PANEL_HI = 0xFF2B2622.toInt()
         const val COL_GOLD = 0xFFE6C88F.toInt()
-        const val COL_GOLD_DIM = 0xFF9D8356.toInt()
         const val COL_IVORY = 0xFFEFE8DA.toInt()
         const val COL_MUTED = 0xFF9C9386.toInt()
         const val COL_RED = 0xFFE05252.toInt()
@@ -309,7 +308,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var btnB = false
     private var boardHolding = false
 
-    // Hitboxes for touch navigation
+    // Hitboxes
     private val hubCardRects = Array(6) { RectF() }
     private val diffRect = RectF()
     private val muteRect = RectF()
@@ -319,16 +318,23 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val readyBackRect = RectF()
     private val dialogItemRects = Array(3) { RectF() }
 
-    // Touch deck hitboxes
     private val dpadCenter = FloatArray(2)
     private var dpadRadius = 0f
     private val btnARect = RectF()
     private val btnBRect = RectF()
 
-    // Juice: screen shake, particles, floating text
+    // =========================================================================
+    // GAME POLISH ENGINE (HIT-STOP, SHOCKWAVES, RIBBON TRAILS, COMBO, PARTICLES)
+    // =========================================================================
+    private var hitStopTimer = 0f
     private var shakeTimer = 0f
     private var shakeStrength = 0f
-    private val maxParticles = 64
+
+    private var comboCount = 0
+    private var comboTimer = 0f
+    private var comboPopScale = 1f
+
+    private val maxParticles = 72
     private val ptActive = BooleanArray(maxParticles)
     private val ptX = FloatArray(maxParticles)
     private val ptY = FloatArray(maxParticles)
@@ -339,7 +345,25 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val ptSize = FloatArray(maxParticles)
     private val ptColor = IntArray(maxParticles)
 
-    private val maxFloats = 12
+    private val maxShockwaves = 14
+    private val swActive = BooleanArray(maxShockwaves)
+    private val swX = FloatArray(maxShockwaves)
+    private val swY = FloatArray(maxShockwaves)
+    private val swMaxRadius = FloatArray(maxShockwaves)
+    private val swLife = FloatArray(maxShockwaves)
+    private val swMaxLife = FloatArray(maxShockwaves)
+    private val swColor = IntArray(maxShockwaves)
+
+    private val maxTrails = 48
+    private val trActive = BooleanArray(maxTrails)
+    private val trX = FloatArray(maxTrails)
+    private val trY = FloatArray(maxTrails)
+    private val trLife = FloatArray(maxTrails)
+    private val trMaxLife = FloatArray(maxTrails)
+    private val trSize = FloatArray(maxTrails)
+    private val trColor = IntArray(maxTrails)
+
+    private val maxFloats = 14
     private val flActive = BooleanArray(maxFloats)
     private val flX = FloatArray(maxFloats)
     private val flY = FloatArray(maxFloats)
@@ -352,8 +376,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
     // =========================================================================
     private val bmCols = 11
     private val bmRows = 9
-    private val bmMap = IntArray(bmCols * bmRows) // 0=empty, 1=hard wall, 2=soft block
-    private val bmPower = IntArray(bmCols * bmRows) // 0=none, 1=flame, 2=bomb+, 3=speed
+    private val bmMap = IntArray(bmCols * bmRows)
+    private val bmPower = IntArray(bmCols * bmRows)
     private val bmFireTimer = FloatArray(bmCols * bmRows)
 
     private var bmPx = 1f
@@ -366,7 +390,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
     private val maxBombs = 8
     private val bmbActive = BooleanArray(maxBombs)
-    private val bmbOwner = IntArray(maxBombs) // 0=player, 1..3=bot
+    private val bmbOwner = IntArray(maxBombs)
     private val bmbCol = IntArray(maxBombs)
     private val bmbRow = IntArray(maxBombs)
     private val bmbRange = IntArray(maxBombs)
@@ -384,6 +408,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     // =========================================================================
     private var brPaddleX = 0.5f
     private var brPaddleW = 0.22f
+    private var brPaddleRecoil = 0f
     private var brWideTimer = 0f
     private var brLives = 3
 
@@ -399,10 +424,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val brRows = 5
     private val brHp = IntArray(brCols * brRows)
     private val brColor = IntArray(brCols * brRows)
+    private val brFlash = FloatArray(brCols * brRows)
 
     private val maxCaps = 4
     private val cpActive = BooleanArray(maxCaps)
-    private val cpType = IntArray(maxCaps) // 0=wide, 1=multiball, 2=life
+    private val cpType = IntArray(maxCaps)
     private val cpX = FloatArray(maxCaps)
     private val cpY = FloatArray(maxCaps)
 
@@ -414,9 +440,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val snBodyX = IntArray(snCols * snRows)
     private val snBodyY = IntArray(snCols * snRows)
     private var snLen = 4
-    private var snDir = 1 // 0=up, 1=right, 2=down, 3=left
+    private var snDir = 1
     private var snNextDir = 1
     private var snMoveTimer = 0f
+    private var snEatPulse = 0f
     private var snFoodX = 10
     private var snFoodY = 7
     private var snBonusActive = false
@@ -438,15 +465,18 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var ttDropTimer = 0f
     private var ttDasTimer = 0f
     private var ttLinesTotal = 0
+    private var ttBoardBounce = 0f
+    private var ttClearFlashTimer = 0f
+    private var ttClearFlashRow = -1
 
     private val tetrominoShapes = arrayOf(
-        intArrayOf(0, 1, 1, 1, 2, 1, 3, 1), // I
-        intArrayOf(1, 0, 2, 0, 1, 1, 2, 1), // O
-        intArrayOf(1, 0, 0, 1, 1, 1, 2, 1), // T
-        intArrayOf(1, 0, 2, 0, 0, 1, 1, 1), // S
-        intArrayOf(0, 0, 1, 0, 1, 1, 2, 1), // Z
-        intArrayOf(0, 0, 0, 1, 1, 1, 2, 1), // J
-        intArrayOf(2, 0, 0, 1, 1, 1, 2, 1)  // L
+        intArrayOf(0, 1, 1, 1, 2, 1, 3, 1),
+        intArrayOf(1, 0, 2, 0, 1, 1, 2, 1),
+        intArrayOf(1, 0, 0, 1, 1, 1, 2, 1),
+        intArrayOf(1, 0, 2, 0, 0, 1, 1, 1),
+        intArrayOf(0, 0, 1, 0, 1, 1, 2, 1),
+        intArrayOf(0, 0, 0, 1, 1, 1, 2, 1),
+        intArrayOf(2, 0, 0, 1, 1, 1, 2, 1)
     )
     private val tetrominoColors = intArrayOf(
         COL_CYAN, COL_GOLD, COL_PURPLE, COL_GREEN, COL_RED, 0xFF4A90E2.toInt(), COL_ORANGE
@@ -457,6 +487,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
     // =========================================================================
     private var rkX = 0.5f
     private var rkY = 0.84f
+    private var rkTilt = 0f
+    private var rkRecoil = 0f
+    private var rkMuzzleTimer = 0f
+    private var rkTrailTimer = 0f
     private var rkHp = 3
     private var rkShield = 0f
     private var rkDualTimer = 0f
@@ -475,13 +509,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
     private val maxRkEnemies = 12
     private val reActive = BooleanArray(maxRkEnemies)
-    private val reType = IntArray(maxRkEnemies) // 0=meteor, 1=ufo, 2=powerup
+    private val reType = IntArray(maxRkEnemies)
     private val reHp = IntArray(maxRkEnemies)
     private val reX = FloatArray(maxRkEnemies)
     private val reY = FloatArray(maxRkEnemies)
     private val reVx = FloatArray(maxRkEnemies)
     private val reVy = FloatArray(maxRkEnemies)
     private val reShootCd = FloatArray(maxRkEnemies)
+    private val reFlash = FloatArray(maxRkEnemies)
 
     private val frameRunnable = object : Runnable {
         override fun run() {
@@ -521,6 +556,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
             override fun onFloatText(x: Float, y: Float, text: String, color: Int) =
                 spawnFloatText(x, y, text, color)
+
+            override fun onShockwave(x: Float, y: Float, maxRadiusDp: Float, color: Int) =
+                spawnShockwave(x, y, maxRadiusDp, color)
+
+            override fun onHitStop(duration: Float) = triggerHitStop(duration)
+            override fun onComboEvent(x: Float, y: Float) = registerCombo(x, y)
 
             override fun onStageFinished(victory: Boolean, nextStage: Int) {
                 this@ArcadeCanvasView.victory = victory
@@ -587,8 +628,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
     private fun clearEffects() {
         ptActive.fill(false)
+        swActive.fill(false)
+        trActive.fill(false)
         flActive.fill(false)
         shakeTimer = 0f
+        hitStopTimer = 0f
+        comboCount = 0
+        comboTimer = 0f
+        comboPopScale = 1f
     }
 
     private fun getHighScore(m: Int): Int = prefs.getInt("hi_$m", 0)
@@ -609,9 +656,53 @@ class ArcadeCanvasView(context: Context) : View(context) {
         saveHighScore(mode, score)
     }
 
+    private fun triggerHitStop(duration: Float) {
+        hitStopTimer = max(hitStopTimer, duration)
+    }
+
     private fun triggerShake(duration: Float, strengthDp: Float) {
         shakeTimer = max(shakeTimer, duration)
         shakeStrength = max(shakeStrength, dp(strengthDp))
+    }
+
+    private fun registerCombo(x: Float, y: Float) {
+        comboCount++
+        comboTimer = 2.6f
+        comboPopScale = 1.65f
+        if (comboCount >= 2) {
+            addPoints(comboCount * 15)
+            spawnFloatText(x, y - dp(16f), "COMBO x$comboCount!", COL_CYAN)
+        }
+    }
+
+    private fun spawnShockwave(x: Float, y: Float, maxRadiusDp: Float, color: Int) {
+        for (i in 0 until maxShockwaves) {
+            if (!swActive[i]) {
+                swActive[i] = true
+                swX[i] = x
+                swY[i] = y
+                swMaxRadius[i] = dp(maxRadiusDp)
+                swMaxLife[i] = 0.32f
+                swLife[i] = swMaxLife[i]
+                swColor[i] = color
+                return
+            }
+        }
+    }
+
+    private fun spawnTrailNode(x: Float, y: Float, sizeDp: Float, color: Int) {
+        for (i in 0 until maxTrails) {
+            if (!trActive[i]) {
+                trActive[i] = true
+                trX[i] = x
+                trY[i] = y
+                trMaxLife[i] = 0.22f
+                trLife[i] = trMaxLife[i]
+                trSize[i] = dp(sizeDp)
+                trColor[i] = color
+                return
+            }
+        }
     }
 
     private fun spawnParticles(
@@ -718,14 +809,34 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // MAIN UPDATE LOOP
+    // MAIN UPDATE LOOP (WITH HIT-STOP & VISUAL POLISH DECAY)
     // =========================================================================
     private fun update(dt: Float) {
         animTime += dt
         GameChiptuneEngine.sync(mode, state, audio.muted)
 
-        if (shakeTimer > 0f) {
-            shakeTimer = max(0f, shakeTimer - dt)
+        if (shakeTimer > 0f) shakeTimer = max(0f, shakeTimer - dt)
+
+        if (comboTimer > 0f) {
+            comboTimer = max(0f, comboTimer - dt)
+            if (comboTimer <= 0f) comboCount = 0
+        }
+        if (comboPopScale > 1f) {
+            comboPopScale = max(1f, comboPopScale - dt * 3.8f)
+        }
+
+        for (i in 0 until maxShockwaves) {
+            if (swActive[i]) {
+                swLife[i] -= dt
+                if (swLife[i] <= 0f) swActive[i] = false
+            }
+        }
+
+        for (i in 0 until maxTrails) {
+            if (trActive[i]) {
+                trLife[i] -= dt
+                if (trLife[i] <= 0f) trActive[i] = false
+            }
         }
 
         for (i in 0 until maxParticles) {
@@ -750,6 +861,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         }
 
         if (state != STATE_PLAYING) return
+
+        // Crunchy Hit-Stop micro freeze on big impacts
+        if (hitStopTimer > 0f) {
+            hitStopTimer = max(0f, hitStopTimer - dt)
+            return
+        }
 
         when (mode) {
             MODE_BOMBER -> updateBomber(dt)
@@ -788,6 +905,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (state == STATE_HUB) {
             drawHub(canvas, w, h)
         } else {
+            drawTrails(canvas)
             when (mode) {
                 MODE_BOMBER -> drawBomber(canvas, w, h)
                 MODE_BRICK -> drawBrick(canvas, w, h)
@@ -796,6 +914,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 MODE_ROCKET -> drawRocket(canvas, w, h)
                 MODE_QUEST -> questEngine.draw(canvas, w, h, getControlDeckTop(h))
             }
+            drawShockwavesAndParticles(canvas)
             drawHudBar(canvas, w)
             if (showTouchOverlay && state == STATE_PLAYING) {
                 drawTouchControls(canvas, w, h)
@@ -804,17 +923,37 @@ class ArcadeCanvasView(context: Context) : View(context) {
             if (state == STATE_PAUSED || state == STATE_GAMEOVER) drawDialogOverlay(canvas, w, h)
         }
 
-        drawParticlesAndFloats(canvas)
         canvas.restore()
     }
 
-    private fun drawParticlesAndFloats(canvas: Canvas) {
+    private fun drawTrails(canvas: Canvas) {
+        for (i in 0 until maxTrails) {
+            if (!trActive[i]) continue
+            val ratio = (trLife[i] / trMaxLife[i]).coerceIn(0f, 1f)
+            val alpha = (ratio * 150).toInt()
+            pFill.color = (trColor[i] and 0x00FFFFFF) or (alpha shl 24)
+            canvas.drawCircle(trX[i], trY[i], trSize[i] * ratio, pFill)
+        }
+    }
+
+    private fun drawShockwavesAndParticles(canvas: Canvas) {
+        for (i in 0 until maxShockwaves) {
+            if (!swActive[i]) continue
+            val progress = 1f - (swLife[i] / swMaxLife[i]).coerceIn(0f, 1f)
+            val radius = swMaxRadius[i] * (0.2f + progress * 0.8f)
+            val alpha = ((1f - progress) * 210).toInt()
+            pStroke.strokeWidth = dp(3f) * (1f - progress * 0.6f)
+            pStroke.color = (swColor[i] and 0x00FFFFFF) or (alpha shl 24)
+            canvas.drawCircle(swX[i], swY[i], radius, pStroke)
+        }
+
         for (i in 0 until maxParticles) {
             if (!ptActive[i]) continue
             val alpha = ((ptLife[i] / ptMaxLife[i]).coerceIn(0f, 1f) * 255).toInt()
             pFill.color = (ptColor[i] and 0x00FFFFFF) or (alpha shl 24)
             canvas.drawCircle(ptX[i], ptY[i], ptSize[i], pFill)
         }
+
         pText.textAlign = Paint.Align.CENTER
         pText.typeface = Typeface.DEFAULT_BOLD
         pText.textSize = dp(13f)
@@ -834,14 +973,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val topH = dp(52f)
         val isPortrait = h > w
 
-        // Header title
         pText.textAlign = Paint.Align.LEFT
         pText.typeface = Typeface.DEFAULT_BOLD
         pText.color = COL_GOLD
         pText.textSize = dp(20f)
         canvas.drawText("B-BOX ARCADE", pad, dp(33f), pText)
 
-        // Top right pills: Exit, Mute, Difficulty
         val pillH = dp(30f)
         val pillY = dp(11f)
         var rx = w - pad
@@ -896,7 +1033,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = if (focused) accent else 0x33E6C88F
         canvas.drawRoundRect(r, dp(14f), dp(14f), pStroke)
 
-        // Accent strip on left
         pFill.color = accent
         rect.set(r.left + dp(8f), r.top + dp(10f), r.left + dp(13f), r.bottom - dp(10f))
         canvas.drawRoundRect(rect, dp(3f), dp(3f), pFill)
@@ -959,6 +1095,26 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pText.textSize = dp(14f)
         canvas.drawText("SKOR: $score   |   REKOR: ${getHighScore(mode)}", w * 0.52f, dp(28f), pText)
 
+        // Pop-Scale Combo Badge below HUD when active
+        if (comboCount >= 2 && comboTimer > 0f && state == STATE_PLAYING) {
+            canvas.save()
+            val cx = w * 0.52f
+            val cy = barH + dp(20f)
+            canvas.translate(cx, cy)
+            canvas.scale(comboPopScale, comboPopScale)
+            rect.set(-dp(54f), -dp(12f), dp(54f), dp(12f))
+            pFill.color = 0xDD1A1816.toInt()
+            canvas.drawRoundRect(rect, dp(12f), dp(12f), pFill)
+            pStroke.strokeWidth = dp(1.5f)
+            pStroke.color = COL_CYAN
+            canvas.drawRoundRect(rect, dp(12f), dp(12f), pStroke)
+            pText.textAlign = Paint.Align.CENTER
+            pText.textSize = dp(12f)
+            pText.color = COL_CYAN
+            canvas.drawText("$comboCount HITS!", 0f, dp(4f), pText)
+            canvas.restore()
+        }
+
         val pillH = dp(28f)
         val pillY = dp(9f)
         hudPauseRect.set(w - dp(76f), pillY, w - dp(12f), pillY + pillH)
@@ -981,7 +1137,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         dpadCenter[1] = deckTop + deckH * 0.52f
         dpadRadius = dp(52f)
 
-        // D-Pad circle
         pFill.color = 0x22FFFFFF
         canvas.drawCircle(dpadCenter[0], dpadCenter[1], dpadRadius, pFill)
         pStroke.strokeWidth = dp(1.5f)
@@ -1134,12 +1289,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 state = STATE_PLAYING
                 audio.play(RetroAudioEngine.SFX_BOUNCE, 1.1f)
             }
-            "STAGE BERIKUTNYA" -> {
-                startGame(mode, keepProgress = true)
-            }
-            "ULANGI STAGE", "ULANGI", "MAIN LAGI" -> {
-                startGame(mode, keepProgress = false)
-            }
+            "STAGE BERIKUTNYA" -> startGame(mode, keepProgress = true)
+            "ULANGI STAGE", "ULANGI", "MAIN LAGI" -> startGame(mode, keepProgress = false)
             "MENU UTAMA" -> {
                 clearInputs()
                 clearEffects()
@@ -1254,7 +1405,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // STATE_PLAYING
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_A -> {
                 inLeft = true
@@ -1370,7 +1520,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             return true
         }
 
-        // STATE_PLAYING
         if (action == MotionEvent.ACTION_DOWN) {
             if (hudPauseRect.contains(x, y)) {
                 onBackAction()
@@ -1382,7 +1531,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Re-evaluate all active pointers for multi-touch D-pad + Action buttons
         var newLeft = false
         var newRight = false
         var newUp = false
@@ -1462,8 +1610,19 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 1: BOMBER ARENA LOGIC & RENDER
+    // GAME 1: BOMBER ARENA (WITH SHOCKWAVES, DEBRIS PARTICLES & HIT-STOP)
     // =========================================================================
+    private fun bomberScreenPos(colF: Float, rowF: Float): Pair<Float, Float> {
+        val w = width.toFloat().coerceAtLeast(320f)
+        val h = height.toFloat().coerceAtLeast(240f)
+        val topHud = dp(52f)
+        val deckTop = getControlDeckTop(h)
+        val cell = min((w - dp(24f)) / bmCols, (deckTop - topHud - dp(12f)) / bmRows)
+        val ox = (w - cell * bmCols) * 0.5f
+        val oy = topHud + ((deckTop - topHud) - cell * bmRows) * 0.5f
+        return Pair(ox + colF * cell, oy + rowF * cell)
+    }
+
     private fun initBomber() {
         bmMap.fill(0)
         bmPower.fill(0)
@@ -1547,7 +1706,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             if (bmFireTimer[i] > 0f) bmFireTimer[i] = max(0f, bmFireTimer[i] - dt)
         }
 
-        // Player movement
         var dx = 0f
         var dy = 0f
         if (inLeft) dx -= 1f
@@ -1562,21 +1720,23 @@ class ArcadeCanvasView(context: Context) : View(context) {
             if (canWalkBomber(bmPx, ny)) bmPy = ny
         }
 
-        // Collect powerup
         val pIdx = bmPy.toInt() * bmCols + bmPx.toInt()
         if (pIdx in bmPower.indices && bmMap[pIdx] == 0 && bmPower[pIdx] > 0) {
             val pw = bmPower[pIdx]
             bmPower[pIdx] = 0
-            when (pw) {
-                1 -> bmFlameRange = min(5, bmFlameRange + 1)
-                2 -> bmMaxBombs = min(4, bmMaxBombs + 1)
-                3 -> bmSpeedMult = min(1.45f, bmSpeedMult + 0.15f)
+            val (sx, sy) = bomberScreenPos(bmPx, bmPy)
+            val label = when (pw) {
+                1 -> { bmFlameRange = min(5, bmFlameRange + 1); "API +1!" }
+                2 -> { bmMaxBombs = min(4, bmMaxBombs + 1); "BOM +1!" }
+                else -> { bmSpeedMult = min(1.45f, bmSpeedMult + 0.15f); "CEPAT!" }
             }
             addPoints(80)
             audio.play(RetroAudioEngine.SFX_POWERUP)
+            spawnShockwave(sx, sy, 44f, COL_CYAN)
+            spawnParticles(sx, sy, 10, COL_CYAN, dp(25f), dp(110f), 3.5f)
+            spawnFloatText(sx, sy, label, COL_CYAN)
         }
 
-        // Update bombs
         for (i in 0 until maxBombs) {
             if (!bmbActive[i]) continue
             bmbTimer[i] -= dt
@@ -1586,7 +1746,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Update bots
         var aliveCount = 0
         for (i in 0 until maxBots) {
             if (!botAlive[i]) continue
@@ -1615,6 +1774,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 aliveCount--
                 addPoints(250)
                 audio.play(RetroAudioEngine.SFX_EXPLODE, 1.2f)
+                triggerHitStop(0.04f)
+                val (bx, by) = bomberScreenPos(botX[i], botY[i])
+                spawnShockwave(bx, by, 58f, COL_PURPLE)
+                spawnParticles(bx, by, 20, COL_PURPLE, dp(35f), dp(160f), 4.5f)
+                registerCombo(bx, by)
+                spawnFloatText(bx, by, "+250!", COL_GOLD)
             }
         }
 
@@ -1628,12 +1793,15 @@ class ArcadeCanvasView(context: Context) : View(context) {
             return
         }
 
-        // Player hit by fire
         if (bmInvuln <= 0f && pIdx in bmFireTimer.indices && bmFireTimer[pIdx] > 0f) {
             bmLives--
             bmInvuln = 2.0f
+            triggerHitStop(0.045f)
             triggerShake(0.22f, 6f)
             audio.play(RetroAudioEngine.SFX_EXPLODE, 0.85f)
+            val (pxScreen, pyScreen) = bomberScreenPos(bmPx, bmPy)
+            spawnShockwave(pxScreen, pyScreen, 52f, COL_RED)
+            spawnParticles(pxScreen, pyScreen, 16, COL_RED, dp(30f), dp(140f), 4f)
             if (bmLives <= 0) {
                 victory = false
                 audio.play(RetroAudioEngine.SFX_OVER)
@@ -1661,8 +1829,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun detonateBomb(c: Int, r: Int, range: Int) {
-        triggerShake(0.15f, 4.5f)
+        triggerShake(0.16f, 5f)
         audio.play(RetroAudioEngine.SFX_EXPLODE)
+        val (bx, by) = bomberScreenPos(c + 0.5f, r + 0.5f)
+        spawnShockwave(bx, by, 54f + range * 10f, COL_ORANGE)
+        spawnParticles(bx, by, 18, COL_ORANGE, dp(35f), dp(155f), 4f)
+
         bmFireTimer[r * bmCols + c] = 0.45f
         val dirs = arrayOf(intArrayOf(1, 0), intArrayOf(-1, 0), intArrayOf(0, 1), intArrayOf(0, -1))
         for (d in dirs) {
@@ -1676,6 +1848,9 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 if (bmMap[idx] == 2) {
                     bmMap[idx] = 0
                     addPoints(20)
+                    val (wx, wy) = bomberScreenPos(nc + 0.5f, nr + 0.5f)
+                    spawnParticles(wx, wy, 8, 0xFF8C5332.toInt(), dp(25f), dp(110f), 3.5f)
+                    registerCombo(wx, wy)
                     break
                 }
             }
@@ -1728,17 +1903,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Bombs
         for (i in 0 until maxBombs) {
             if (!bmbActive[i]) continue
             val cx = ox + (bmbCol[i] + 0.5f) * cell
             val cy = oy + (bmbRow[i] + 0.5f) * cell
-            val pulse = 1f + sin(animTime * 14f) * 0.1f
-            pFill.color = COL_RED
+            val urgent = bmbTimer[i] < 0.75f
+            val freq = if (urgent) 28f else 14f
+            val pulse = 1f + sin(animTime * freq) * (if (urgent) 0.18f else 0.1f)
+            pFill.color = if (urgent && ((animTime * 20f).toInt() and 1) == 0) Color.WHITE else COL_RED
             canvas.drawCircle(cx, cy, cell * 0.32f * pulse, pFill)
         }
 
-        // Bots
         for (i in 0 until maxBots) {
             if (!botAlive[i]) continue
             val cx = ox + botX[i] * cell
@@ -1747,7 +1922,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(cx, cy, cell * 0.34f, pFill)
         }
 
-        // Player
         if (bmInvuln <= 0f || ((animTime * 16f).toInt() and 1) == 0) {
             pFill.color = COL_GOLD
             canvas.drawCircle(ox + bmPx * cell, oy + bmPy * cell, cell * 0.35f, pFill)
@@ -1761,15 +1935,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 2: NEON BRICK LOGIC & RENDER
+    // GAME 2: NEON BRICK (WITH RIBBON TRAIL, PADDLE RECOIL & HIT-FLASH)
     // =========================================================================
     private fun initBrick() {
         brPaddleX = 0.5f
         brPaddleW = 0.22f
+        brPaddleRecoil = 0f
         brWideTimer = 0f
         brLives = 3
         blActive.fill(false)
         cpActive.fill(false)
+        brFlash.fill(0f)
 
         blActive[0] = true
         blStuck[0] = true
@@ -1798,6 +1974,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateBrick(dt: Float) {
+        if (brPaddleRecoil > 0f) brPaddleRecoil = max(0f, brPaddleRecoil - dt * 6.5f)
+        for (i in brFlash.indices) {
+            if (brFlash[i] > 0f) brFlash[i] = max(0f, brFlash[i] - dt)
+        }
+
         if (brWideTimer > 0f) {
             brWideTimer = max(0f, brWideTimer - dt)
             brPaddleW = if (brWideTimer > 0f) 0.32f else 0.22f
@@ -1807,21 +1988,32 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (inLeft) brPaddleX = max(brPaddleW * 0.5f, brPaddleX - pSpd * dt)
         if (inRight) brPaddleX = min(1f - brPaddleW * 0.5f, brPaddleX + pSpd * dt)
 
-        // Update capsules
+        val w = width.toFloat().coerceAtLeast(320f)
+        val h = height.toFloat().coerceAtLeast(240f)
+        val topY = dp(52f)
+        val areaH = getControlDeckTop(h) - dp(12f) - topY
+        val padX = dp(16f)
+        val areaW = w - padX * 2f
+
         for (i in 0 until maxCaps) {
             if (!cpActive[i]) continue
             cpY[i] += 0.35f * dt
             if (cpY[i] > 1.05f) {
                 cpActive[i] = false
             } else if (abs(cpY[i] - 0.88f) < 0.04f && abs(cpX[i] - brPaddleX) < brPaddleW * 0.55f) {
+                val t = cpType[i]
                 cpActive[i] = false
                 audio.play(RetroAudioEngine.SFX_POWERUP)
                 addPoints(100)
-                when (cpType[i]) {
-                    0 -> { brWideTimer = 10f; brPaddleW = 0.32f }
-                    1 -> spawnExtraBrickBalls()
-                    2 -> brLives = min(5, brLives + 1)
+                val sx = padX + brPaddleX * areaW
+                val sy = topY + 0.88f * areaH
+                spawnShockwave(sx, sy, 48f, COL_GOLD)
+                val msg = when (t) {
+                    0 -> { brWideTimer = 10f; brPaddleW = 0.32f; "PADDLE LEBAR!" }
+                    1 -> { spawnExtraBrickBalls(); "MULTI BOLA!" }
+                    else -> { brLives = min(5, brLives + 1); "+1 BOLA!" }
                 }
+                spawnFloatText(sx, sy - dp(12f), msg, COL_GOLD)
             }
         }
 
@@ -1835,6 +2027,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 continue
             }
 
+            spawnTrailNode(padX + blX[i] * areaW, topY + blY[i] * areaH, 6.5f, COL_CYAN)
+
             val spdMult = 1f + difficulty * 0.16f
             blX[i] += blVx[i] * spdMult * dt
             blY[i] += blVy[i] * spdMult * dt
@@ -1843,15 +2037,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
             if (blX[i] > 0.98f) { blX[i] = 0.98f; blVx[i] = -abs(blVx[i]); audio.play(RetroAudioEngine.SFX_BOUNCE) }
             if (blY[i] < 0.04f) { blY[i] = 0.04f; blVy[i] = abs(blVy[i]); audio.play(RetroAudioEngine.SFX_BOUNCE) }
 
-            // Paddle bounce
             if (blVy[i] > 0f && blY[i] >= 0.86f && blY[i] <= 0.91f && abs(blX[i] - brPaddleX) <= brPaddleW * 0.54f) {
                 val hitOffset = ((blX[i] - brPaddleX) / (brPaddleW * 0.5f)).coerceIn(-1f, 1f)
                 blVx[i] = hitOffset * 0.52f
                 blVy[i] = -abs(blVy[i])
+                brPaddleRecoil = 1f
                 audio.play(RetroAudioEngine.SFX_BOUNCE, 1.1f)
+                val sx = padX + blX[i] * areaW
+                val sy = topY + 0.87f * areaH
+                spawnParticles(sx, sy, 6, COL_GOLD, dp(20f), dp(80f), 2.8f)
             }
 
-            // Brick collision
             val brickTop = 0.10f
             val brickH = 0.055f
             val brickW = 1f / brCols
@@ -1863,9 +2059,20 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     brHp[idx]--
                     blVy[i] = -blVy[i]
                     addPoints(40)
-                    audio.play(RetroAudioEngine.SFX_COIN, 1.2f)
-                    if (brHp[idx] <= 0 && Random.nextFloat() < 0.22f) {
-                        spawnBrickCapsule((col + 0.5f) * brickW, brickTop + (row + 0.5f) * brickH)
+                    val bx = padX + (col + 0.5f) * (areaW / brCols)
+                    val by = topY + (brickTop + (row + 0.5f) * brickH) * areaH
+                    if (brHp[idx] <= 0) {
+                        audio.play(RetroAudioEngine.SFX_COIN, 1.2f)
+                        spawnShockwave(bx, by, 34f, brColor[idx])
+                        spawnParticles(bx, by, 10, brColor[idx], dp(28f), dp(125f), 3.6f)
+                        registerCombo(bx, by)
+                        if (Random.nextFloat() < 0.22f) {
+                            spawnBrickCapsule((col + 0.5f) * brickW, brickTop + (row + 0.5f) * brickH)
+                        }
+                    } else {
+                        brFlash[idx] = 0.14f
+                        audio.play(RetroAudioEngine.SFX_BOUNCE, 1.35f)
+                        spawnParticles(bx, by, 5, Color.WHITE, dp(20f), dp(75f), 2.5f)
                     }
                 }
             }
@@ -1878,6 +2085,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (activeBalls <= 0) {
             brLives--
+            triggerHitStop(0.04f)
             triggerShake(0.2f, 5f)
             if (brLives <= 0) {
                 victory = false
@@ -1949,7 +2157,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 val x0 = padX + c * brickW + dp(2f)
                 val y0 = brickTop + r * brickH + dp(2f)
                 rect.set(x0, y0, x0 + brickW - dp(4f), y0 + brickH - dp(4f))
-                pFill.color = brColor[idx]
+                pFill.color = if (brFlash[idx] > 0f) Color.WHITE else brColor[idx]
                 canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
                 if (brHp[idx] > 1) {
                     pStroke.strokeWidth = dp(2f)
@@ -1959,15 +2167,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Paddle
         val px = padX + brPaddleX * areaW
-        val py = topY + areaH * 0.88f
+        val py = topY + areaH * 0.88f + sin(brPaddleRecoil * Math.PI.toFloat()) * dp(5f)
         val pw = brPaddleW * areaW
         rect.set(px - pw * 0.5f, py - dp(6f), px + pw * 0.5f, py + dp(6f))
         pFill.color = COL_GOLD
         canvas.drawRoundRect(rect, dp(6f), dp(6f), pFill)
 
-        // Capsules
         for (i in 0 until maxCaps) {
             if (!cpActive[i]) continue
             pFill.color = when (cpType[i]) {
@@ -1978,7 +2184,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(padX + cpX[i] * areaW, topY + cpY[i] * areaH, dp(8f), pFill)
         }
 
-        // Balls
         for (i in 0 until maxBalls) {
             if (!blActive[i]) continue
             pFill.color = Color.WHITE
@@ -1993,13 +2198,25 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 3: GOLD SNAKE LOGIC & RENDER
+    // GAME 3: GOLD SNAKE (WITH DIGESTION WAVE PULSE & SHOCKWAVES)
     // =========================================================================
+    private fun snakeScreenPos(col: Int, row: Int): Pair<Float, Float> {
+        val w = width.toFloat().coerceAtLeast(320f)
+        val h = height.toFloat().coerceAtLeast(240f)
+        val topHud = dp(52f)
+        val deckTop = getControlDeckTop(h)
+        val cell = min((w - dp(24f)) / snCols, (deckTop - topHud - dp(12f)) / snRows)
+        val ox = (w - cell * snCols) * 0.5f
+        val oy = topHud + ((deckTop - topHud) - cell * snRows) * 0.5f
+        return Pair(ox + (col + 0.5f) * cell, oy + (row + 0.5f) * cell)
+    }
+
     private fun initSnake() {
         snLen = 4
         snDir = 1
         snNextDir = 1
         snMoveTimer = 0f
+        snEatPulse = 0f
         for (i in 0 until snLen) {
             snBodyX[i] = 8 - i
             snBodyY[i] = 7
@@ -2028,6 +2245,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun updateSnake(dt: Float) {
+        if (snEatPulse > 0f) snEatPulse = max(0f, snEatPulse - dt * 2.5f)
         if (snBonusActive) {
             snBonusTimer -= dt
             if (snBonusTimer <= 0f) snBonusActive = false
@@ -2050,6 +2268,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (nx !in 0 until snCols || ny !in 0 until snRows) {
             victory = false
+            triggerShake(0.2f, 5f)
             audio.play(RetroAudioEngine.SFX_OVER)
             state = STATE_GAMEOVER
             dialogIndex = 0
@@ -2059,6 +2278,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         for (i in 0 until snLen) {
             if (snBodyX[i] == nx && snBodyY[i] == ny) {
                 victory = false
+                triggerShake(0.2f, 5f)
                 audio.play(RetroAudioEngine.SFX_OVER)
                 state = STATE_GAMEOVER
                 dialogIndex = 0
@@ -2075,8 +2295,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (nx == snFoodX && ny == snFoodY) {
             snLen = min(snCols * snRows - 1, snLen + 1)
+            snEatPulse = 1f
             addPoints(50)
             audio.play(RetroAudioEngine.SFX_COIN, 1.15f)
+            val (fx, fy) = snakeScreenPos(nx, ny)
+            spawnShockwave(fx, fy, 38f, COL_GOLD)
+            spawnParticles(fx, fy, 12, COL_GOLD, dp(25f), dp(110f), 3.4f)
+            registerCombo(fx, fy)
+            spawnFloatText(fx, fy, "+50", COL_GOLD)
             spawnSnakeFood()
             if (!snBonusActive && snLen % 5 == 0) {
                 snBonusActive = true
@@ -2088,8 +2314,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (snBonusActive && nx == snBonusX && ny == snBonusY) {
             snBonusActive = false
+            snEatPulse = 1f
             addPoints(200)
             audio.play(RetroAudioEngine.SFX_POWERUP, 1.25f)
+            val (bx, by) = snakeScreenPos(nx, ny)
+            spawnShockwave(bx, by, 54f, COL_CYAN)
+            spawnParticles(bx, by, 18, COL_CYAN, dp(30f), dp(135f), 4f)
+            registerCombo(bx, by)
+            spawnFloatText(bx, by, "+200!", COL_CYAN)
         }
     }
 
@@ -2106,31 +2338,43 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = 0x55E6C88F
         canvas.drawRect(ox, oy, ox + cell * snCols, oy + cell * snRows, pStroke)
 
-        // Gem Food
+        val gemPulse = 1f + sin(animTime * 8f) * 0.12f
+        val fcx = ox + (snFoodX + 0.5f) * cell
+        val fcy = oy + (snFoodY + 0.5f) * cell
+        pFill.color = 0x33E6C88F
+        canvas.drawCircle(fcx, fcy, cell * 0.48f * gemPulse, pFill)
         pFill.color = COL_GOLD
-        canvas.drawCircle(ox + (snFoodX + 0.5f) * cell, oy + (snFoodY + 0.5f) * cell, cell * 0.34f, pFill)
+        canvas.drawCircle(fcx, fcy, cell * 0.34f * gemPulse, pFill)
 
         if (snBonusActive) {
+            val bcx = ox + (snBonusX + 0.5f) * cell
+            val bcy = oy + (snBonusY + 0.5f) * cell
+            pFill.color = 0x444CC3D9
+            canvas.drawCircle(bcx, bcy, cell * 0.56f * gemPulse, pFill)
             pFill.color = COL_CYAN
-            canvas.drawCircle(ox + (snBonusX + 0.5f) * cell, oy + (snBonusY + 0.5f) * cell, cell * 0.40f, pFill)
+            canvas.drawCircle(bcx, bcy, cell * 0.40f * gemPulse, pFill)
         }
 
-        // Snake segments
         for (i in snLen - 1 downTo 0) {
-            val x0 = ox + snBodyX[i] * cell + dp(1.5f)
-            val y0 = oy + snBodyY[i] * cell + dp(1.5f)
-            rect.set(x0, y0, x0 + cell - dp(3f), y0 + cell - dp(3f))
-            pFill.color = if (i == 0) COL_IVORY else COL_GREEN
+            val wavePos = (1f - snEatPulse) * snLen
+            val waveBoost = if (snEatPulse > 0f) max(0f, 1f - abs(i - wavePos) * 0.45f) * dp(3f) else 0f
+            val pad = dp(1.5f) - waveBoost
+            val x0 = ox + snBodyX[i] * cell + pad
+            val y0 = oy + snBodyY[i] * cell + pad
+            rect.set(x0, y0, x0 + cell - pad * 2f, y0 + cell - pad * 2f)
+            pFill.color = if (i == 0) COL_IVORY else if (waveBoost > 0.5f) COL_GOLD else COL_GREEN
             canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
         }
     }
 
     // =========================================================================
-    // GAME 4: NEON TETRIS LOGIC & RENDER
+    // GAME 4: NEON TETRIS (WITH BOARD BOUNCE & ROW CLEAR FLASH)
     // =========================================================================
     private fun initTetris() {
         ttBoard.fill(0)
         ttLinesTotal = 0
+        ttBoardBounce = 0f
+        ttClearFlashTimer = 0f
         ttCurType = Random.nextInt(7)
         ttNextType = Random.nextInt(7)
         spawnTetrisPiece()
@@ -2154,7 +2398,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val base = tetrominoShapes[type]
         var x = base[idx * 2]
         var y = base[idx * 2 + 1]
-        if (type == 1) return Pair(x, y) // O-piece doesn't rotate
+        if (type == 1) return Pair(x, y)
         val size = if (type == 0) 4 else 3
         repeat(rot and 3) {
             val nx = size - 1 - y
@@ -2200,6 +2444,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         while (isValidTetris(ttPx, ttPy + 1, ttRot)) {
             ttPy++
         }
+        ttBoardBounce = 1f
         lockTetrisPiece()
     }
 
@@ -2215,6 +2460,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         audio.play(RetroAudioEngine.SFX_BOUNCE, 0.8f)
 
         var cleared = 0
+        var lastClearedRow = -1
         var r = ttRows - 1
         while (r >= 0) {
             var full = true
@@ -2226,6 +2472,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
             if (full) {
                 cleared++
+                if (lastClearedRow == -1) lastClearedRow = r
                 for (yy in r downTo 1) {
                     for (c in 0 until ttCols) {
                         ttBoard[yy * ttCols + c] = ttBoard[(yy - 1) * ttCols + c]
@@ -2240,15 +2487,36 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (cleared > 0) {
             ttLinesTotal += cleared
             stage = 1 + ttLinesTotal / 10
+            ttClearFlashRow = lastClearedRow
+            ttClearFlashTimer = 0.22f
+            ttBoardBounce = 1f
             val pts = when (cleared) { 1 -> 100; 2 -> 300; 3 -> 500; else -> 800 }
             addPoints(pts)
             audio.play(RetroAudioEngine.SFX_COIN, 1.25f)
-            triggerShake(0.12f, 3.5f)
+            triggerHitStop(0.03f)
+            triggerShake(0.14f, 4f)
+
+            val w = width.toFloat().coerceAtLeast(320f)
+            val h = height.toFloat().coerceAtLeast(240f)
+            val topHud = dp(52f)
+            val deckTop = getControlDeckTop(h)
+            val cell = ((deckTop - topHud - dp(12f)) / ttRows).coerceAtMost((w * 0.56f) / ttCols)
+            val ox = (w - cell * ttCols) * 0.44f
+            val oy = topHud + ((deckTop - topHud) - cell * ttRows) * 0.5f
+            val fx = ox + cell * ttCols * 0.5f
+            val fy = oy + (lastClearedRow + 0.5f) * cell
+            spawnShockwave(fx, fy, 68f, COL_GOLD)
+            spawnParticles(fx, fy, 18, COL_GOLD, dp(30f), dp(145f), 4f)
+            registerCombo(fx, fy)
+            spawnFloatText(fx, fy, "+$pts!", COL_GOLD)
         }
         spawnTetrisPiece()
     }
 
     private fun updateTetris(dt: Float) {
+        if (ttBoardBounce > 0f) ttBoardBounce = max(0f, ttBoardBounce - dt * 6f)
+        if (ttClearFlashTimer > 0f) ttClearFlashTimer = max(0f, ttClearFlashTimer - dt)
+
         if (inLeft || inRight) {
             ttDasTimer += dt
             if (ttDasTimer > 0.16f) {
@@ -2277,7 +2545,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val deckTop = getControlDeckTop(h)
         val cell = ((deckTop - topHud - dp(12f)) / ttRows).coerceAtMost((w * 0.56f) / ttCols)
         val ox = (w - cell * ttCols) * 0.44f
-        val oy = topHud + ((deckTop - topHud) - cell * ttRows) * 0.5f
+        val bounceY = sin(ttBoardBounce * Math.PI.toFloat()) * dp(6f)
+        val oy = topHud + ((deckTop - topHud) - cell * ttRows) * 0.5f + bounceY
 
         pFill.color = 0xFF171513.toInt()
         canvas.drawRect(ox, oy, ox + cell * ttCols, oy + cell * ttRows, pFill)
@@ -2285,7 +2554,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = 0x55E6C88F
         canvas.drawRect(ox, oy, ox + cell * ttCols, oy + cell * ttRows, pStroke)
 
-        // Placed blocks
         for (r in 0 until ttRows) {
             for (c in 0 until ttCols) {
                 val v = ttBoard[r * ttCols + c]
@@ -2298,7 +2566,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Ghost piece
+        if (ttClearFlashTimer > 0f && ttClearFlashRow in 0 until ttRows) {
+            val alpha = ((ttClearFlashTimer / 0.22f) * 200).toInt()
+            pFill.color = (alpha shl 24) or 0x00FFFFFF
+            val fy = oy + ttClearFlashRow * cell
+            canvas.drawRect(ox, fy, ox + cell * ttCols, fy + cell, pFill)
+        }
+
         var ghostY = ttPy
         while (isValidTetris(ttPx, ghostY + 1, ttRot)) ghostY++
         pStroke.strokeWidth = dp(1.2f)
@@ -2311,7 +2585,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawRoundRect(rect, dp(3f), dp(3f), pStroke)
         }
 
-        // Active piece
         pFill.color = tetrominoColors[ttCurType]
         for (i in 0..3) {
             val (dx, dy) = getTetrominoCell(ttCurType, ttRot, i)
@@ -2321,7 +2594,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawRoundRect(rect, dp(3f), dp(3f), pFill)
         }
 
-        // Next piece box
         val nx = ox + cell * ttCols + dp(14f)
         pText.textAlign = Paint.Align.LEFT
         pText.typeface = Typeface.DEFAULT_BOLD
@@ -2340,11 +2612,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 5: ASTRO ROCKET LOGIC & RENDER
+    // GAME 5: ASTRO ROCKET (SMOOTH BANKING, THRUSTER TRAIL, RECOIL & HIT-FLASH)
     // =========================================================================
     private fun initRocket(keep: Boolean) {
         rkX = 0.5f
         rkY = 0.85f
+        rkTilt = 0f
+        rkRecoil = 0f
+        rkMuzzleTimer = 0f
         if (!keep) {
             rkHp = 3
             rkShield = 1.5f
@@ -2354,11 +2629,14 @@ class ArcadeCanvasView(context: Context) : View(context) {
         rkTargetKills = 16 + stage * 6
         rsActive.fill(false)
         reActive.fill(false)
+        reFlash.fill(0f)
     }
 
     private fun fireRocketLaser() {
         if (rkFireCd > 0f) return
         rkFireCd = 0.22f
+        rkRecoil = 1f
+        rkMuzzleTimer = 0.07f
         audio.play(RetroAudioEngine.SFX_LASER)
         if (rkDualTimer > 0f) {
             spawnRocketShot(true, rkX - 0.025f, rkY - 0.03f, -1.1f)
@@ -2390,12 +2668,35 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (rkShield > 0f) rkShield = max(0f, rkShield - dt)
         if (rkDualTimer > 0f) rkDualTimer = max(0f, rkDualTimer - dt)
         if (rkFireCd > 0f) rkFireCd = max(0f, rkFireCd - dt)
+        if (rkRecoil > 0f) rkRecoil = max(0f, rkRecoil - dt * 7f)
+        if (rkMuzzleTimer > 0f) rkMuzzleTimer = max(0f, rkMuzzleTimer - dt)
+        for (i in reFlash.indices) {
+            if (reFlash[i] > 0f) reFlash[i] = max(0f, reFlash[i] - dt)
+        }
 
+        val prevX = rkX
         val spd = 0.78f
         if (inLeft) rkX = max(0.08f, rkX - spd * dt)
         if (inRight) rkX = min(0.92f, rkX + spd * dt)
         if (inUp) rkY = max(0.25f, rkY - spd * 0.8f * dt)
         if (inDown) rkY = min(0.90f, rkY + spd * 0.8f * dt)
+
+        // Smooth Banking / Tilt based on horizontal movement
+        val moveDelta = (rkX - prevX) / dt
+        val targetTilt = (moveDelta * 26f).coerceIn(-22f, 22f)
+        rkTilt += (targetTilt - rkTilt) * min(1f, dt * 12f)
+
+        val w = width.toFloat().coerceAtLeast(320f)
+        val h = height.toFloat().coerceAtLeast(240f)
+        val topY = dp(52f)
+        val areaH = getControlDeckTop(h) - topY
+
+        // Thruster Ribbon Trail
+        rkTrailTimer -= dt
+        if (rkTrailTimer <= 0f) {
+            rkTrailTimer = 0.025f
+            spawnTrailNode(rkX * w, topY + rkY * areaH + dp(14f), 6f, COL_ORANGE)
+        }
 
         if (rocketAutoFire || btnA) fireRocketLaser()
 
@@ -2407,11 +2708,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     reActive[i] = true
                     val roll = Random.nextFloat()
                     reType[i] = when {
-                        roll < 0.14f -> 2 // powerup crate
-                        roll < 0.45f -> 1 // enemy UFO
-                        else -> 0         // meteor
+                        roll < 0.14f -> 2
+                        roll < 0.45f -> 1
+                        else -> 0
                     }
                     reHp[i] = if (reType[i] == 1) 2 else 1
+                    reFlash[i] = 0f
                     reX[i] = 0.1f + Random.nextFloat() * 0.8f
                     reY[i] = -0.05f
                     reVx[i] = if (reType[i] == 1) (if (Random.nextBoolean()) 0.22f else -0.22f) else 0f
@@ -2422,7 +2724,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Update shots
         for (i in 0 until maxRkShots) {
             if (!rsActive[i]) continue
             rsY[i] += rsVy[i] * dt
@@ -2435,11 +2736,27 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     if (reActive[e] && reType[e] != 2 && abs(rsX[i] - reX[e]) < 0.055f && abs(rsY[i] - reY[e]) < 0.055f) {
                         rsActive[i] = false
                         reHp[e]--
+                        val ex = reX[e] * w
+                        val ey = topY + reY[e] * areaH
                         if (reHp[e] <= 0) {
+                            val isUfo = reType[e] == 1
                             reActive[e] = false
                             rkKills++
-                            addPoints(if (reType[e] == 1) 120 else 60)
+                            val pts = if (isUfo) 120 else 60
+                            addPoints(pts)
                             audio.play(RetroAudioEngine.SFX_EXPLODE, 1.2f)
+                            triggerHitStop(0.03f)
+                            triggerShake(0.10f, 3.5f)
+                            val col = if (isUfo) COL_PURPLE else COL_ORANGE
+                            spawnShockwave(ex, ey, if (isUfo) 52f else 38f, col)
+                            spawnParticles(ex, ey, if (isUfo) 18 else 12, col, dp(30f), dp(145f), 4f)
+                            registerCombo(ex, ey)
+                            spawnFloatText(ex, ey, "+$pts", col)
+                        } else {
+                            reFlash[e] = 0.12f
+                            reY[e] -= 0.015f // knockback
+                            audio.play(RetroAudioEngine.SFX_BOUNCE, 1.35f)
+                            spawnParticles(ex, ey, 6, Color.WHITE, dp(20f), dp(80f), 2.8f)
                         }
                         break
                     }
@@ -2450,7 +2767,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Update enemies & crates
         for (i in 0 until maxRkEnemies) {
             if (!reActive[i]) continue
             reX[i] += reVx[i] * dt
@@ -2471,9 +2787,15 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 val t = reType[i]
                 reActive[i] = false
                 if (t == 2) {
-                    if (Random.nextBoolean()) rkDualTimer = 10f else rkShield = 5f
+                    val isDual = Random.nextBoolean()
+                    if (isDual) rkDualTimer = 10f else rkShield = 5f
                     addPoints(100)
                     audio.play(RetroAudioEngine.SFX_POWERUP)
+                    val sx = rkX * w
+                    val sy = topY + rkY * areaH
+                    spawnShockwave(sx, sy, 52f, COL_GREEN)
+                    spawnParticles(sx, sy, 14, COL_GREEN, dp(25f), dp(120f), 3.6f)
+                    spawnFloatText(sx, sy - dp(12f), if (isDual) "LASER GANDA!" else "PERISAI AKTIF!", COL_GREEN)
                 } else {
                     damageRocketPlayer()
                 }
@@ -2494,8 +2816,13 @@ class ArcadeCanvasView(context: Context) : View(context) {
         if (rkShield > 0f) return
         rkHp--
         rkShield = 1.6f
+        triggerHitStop(0.045f)
         triggerShake(0.22f, 6f)
         audio.play(RetroAudioEngine.SFX_EXPLODE, 0.85f)
+        val sx = rkX * width.toFloat()
+        val sy = dp(52f) + rkY * (getControlDeckTop(height.toFloat()) - dp(52f))
+        spawnShockwave(sx, sy, 54f, COL_RED)
+        spawnParticles(sx, sy, 18, COL_RED, dp(30f), dp(150f), 4f)
         if (rkHp <= 0) {
             victory = false
             audio.play(RetroAudioEngine.SFX_OVER)
@@ -2509,7 +2836,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val botY = getControlDeckTop(h)
         val areaH = botY - topY
 
-        // Starfield
         pFill.color = 0x55FFFFFF
         for (i in 0..24) {
             val sx = ((i * 73) % 100) / 100f * w
@@ -2517,18 +2843,18 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(sx, sy, dp(1.5f), pFill)
         }
 
-        // Enemies
         for (i in 0 until maxRkEnemies) {
             if (!reActive[i]) continue
             val ex = reX[i] * w
             val ey = topY + reY[i] * areaH
+            val flash = reFlash[i] > 0f
             when (reType[i]) {
                 0 -> {
-                    pFill.color = COL_ORANGE
+                    pFill.color = if (flash) Color.WHITE else COL_ORANGE
                     canvas.drawCircle(ex, ey, dp(14f), pFill)
                 }
                 1 -> {
-                    pFill.color = COL_PURPLE
+                    pFill.color = if (flash) Color.WHITE else COL_PURPLE
                     rect.set(ex - dp(18f), ey - dp(9f), ex + dp(18f), ey + dp(9f))
                     canvas.drawRoundRect(rect, dp(9f), dp(9f), pFill)
                 }
@@ -2539,7 +2865,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Lasers
         for (i in 0 until maxRkShots) {
             if (!rsActive[i]) continue
             pFill.color = if (rsFriendly[i]) COL_CYAN else COL_RED
@@ -2548,22 +2873,31 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawRect(lx - dp(2f), ly - dp(8f), lx + dp(2f), ly + dp(8f), pFill)
         }
 
-        // Player Fighter
+        // Player Fighter with Smooth Banking, Recoil & Muzzle Flash
         val px = rkX * w
-        val py = topY + rkY * areaH
+        val py = topY + rkY * areaH + rkRecoil * dp(5f)
+        canvas.save()
+        canvas.translate(px, py)
+        canvas.rotate(rkTilt)
         path.reset()
-        path.moveTo(px, py - dp(18f))
-        path.lineTo(px - dp(16f), py + dp(14f))
-        path.lineTo(px + dp(16f), py + dp(14f))
+        path.moveTo(0f, -dp(18f))
+        path.lineTo(-dp(16f), dp(14f))
+        path.lineTo(dp(16f), dp(14f))
         path.close()
         pFill.color = COL_GOLD
         canvas.drawPath(path, pFill)
 
+        if (rkMuzzleTimer > 0f) {
+            pFill.color = 0xEEFFF59D.toInt()
+            canvas.drawCircle(0f, -dp(21f), dp(6.5f), pFill)
+        }
+
         if (rkShield > 0f) {
             pStroke.strokeWidth = dp(2f)
             pStroke.color = COL_CYAN
-            canvas.drawCircle(px, py, dp(24f), pStroke)
+            canvas.drawCircle(0f, 0f, dp(24f), pStroke)
         }
+        canvas.restore()
 
         pText.textAlign = Paint.Align.LEFT
         pText.typeface = Typeface.DEFAULT_BOLD
