@@ -3,7 +3,6 @@ package com.bayutv.hotel
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
@@ -20,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
@@ -37,7 +35,6 @@ object AnimeIndoProvider {
         "https://otakudesu.lol"
     )
 
-    // Cache IP hasil DNS-over-HTTPS (Cloudflare 1.1.1.1 & Google 8.8.8.8) agar tembus blokir DNS WiFi/Orbit
     private val dohIpCache = ConcurrentHashMap<String, String>()
 
     data class AnimeItem(
@@ -80,6 +77,7 @@ object AnimeIndoProvider {
 
     fun saveBaseUrl(context: Context, rawUrl: String) {
         val clean = rawUrl.trim().trimEnd('/')
+        dohIpCache.clear()
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_BASE_URL, clean)
@@ -102,13 +100,11 @@ object AnimeIndoProvider {
             .setPositiveButton("Simpan") { _, _ ->
                 val v = input.text.toString().trim().trimEnd('/')
                 if (v.startsWith("http")) {
-                    dohIpCache.clear()
                     saveBaseUrl(context, v)
                     onSaved(v)
                 }
             }
             .setNeutralButton("Reset Default") { _, _ ->
-                dohIpCache.clear()
                 saveBaseUrl(context, "")
                 onSaved(getBaseUrl(context))
             }
@@ -116,17 +112,26 @@ object AnimeIndoProvider {
             .show()
     }
 
+    private fun isValidAnimeHtml(html: String?): Boolean {
+        if (html.isNullOrBlank()) return false
+        val low = html.lowercase(Locale.US)
+        if (low.contains("internetpositif") || low.contains("uzone.id") || low.contains("trustpositif") || low.contains("blokir")) {
+            return false
+        }
+        return html.contains("venz") || html.contains("episodelist") || html.contains("chivsrc")
+    }
+
     private fun fetchHtmlWithMirrorFallback(context: Context, relativePath: String): Pair<String, String>? {
         val primary = getBaseUrl(context)
         val candidates = (listOf(primary) + DEFAULT_MIRRORS).distinct()
         for (base in candidates) {
             val fullUrl = if (relativePath.startsWith("http")) relativePath else "$base$relativePath"
-            val html = httpGet(fullUrl, base)
-            if (!html.isNullOrBlank() && (html.contains("venz") || html.contains("episodelist") || html.contains("chivsrc"))) {
+            val html = smartHttpGet(fullUrl, base)
+            if (isValidAnimeHtml(html)) {
                 if (base != primary && !relativePath.startsWith("http")) {
                     saveBaseUrl(context, base)
                 }
-                return Pair(base, html)
+                return Pair(base, html!!)
             }
         }
         return null
@@ -197,7 +202,8 @@ object AnimeIndoProvider {
 
     fun fetchDetail(context: Context, item: AnimeItem): AnimeDetail? {
         val baseUrl = getBaseUrl(context)
-        val html = httpGet(item.url, baseUrl) ?: return null
+        val targetUrl = rewriteToActiveMirror(item.url, baseUrl)
+        val html = smartHttpGet(targetUrl, baseUrl) ?: return null
 
         val synopsisRaw = Regex("<div class=\"sinopc\">(.*?)</div>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
             .find(html)?.groupValues?.getOrNull(1).orEmpty()
@@ -237,7 +243,7 @@ object AnimeIndoProvider {
 
         return AnimeDetail(
             title = item.title,
-            url = item.url,
+            url = targetUrl,
             poster = item.poster,
             score = score,
             status = status,
@@ -249,7 +255,8 @@ object AnimeIndoProvider {
 
     fun resolveEpisodeStreams(context: Context, episodeUrl: String): List<StreamOption> {
         val baseUrl = getBaseUrl(context)
-        val html = httpGet(episodeUrl, baseUrl) ?: return emptyList()
+        val activeEpUrl = rewriteToActiveMirror(episodeUrl, baseUrl)
+        val html = smartHttpGet(activeEpUrl, baseUrl) ?: return emptyList()
         val results = ArrayList<StreamOption>()
         val seenUrls = HashSet<String>()
 
@@ -259,7 +266,7 @@ object AnimeIndoProvider {
 
         if (!defaultIframe.isNullOrBlank()) {
             val cleanEmbed = normalizeUrl(defaultIframe, baseUrl)
-            val resolved = extractDirectVideo(cleanEmbed, episodeUrl)
+            val resolved = extractDirectVideo(cleanEmbed, activeEpUrl)
             if (resolved != null && seenUrls.add(resolved.videoUrl)) {
                 results.add(StreamOption("Server Utama (Auto HD)", resolved.videoUrl, resolved.referer, resolved.isDirectMedia))
             }
@@ -290,8 +297,8 @@ object AnimeIndoProvider {
 
         if (nonce.isNotEmpty()) {
             for ((label, token) in sortedTokens) {
-                val embedUrl = exchangeMirrorTokenForIframe(baseUrl, episodeUrl, token, nonce) ?: continue
-                val resolved = extractDirectVideo(embedUrl, episodeUrl) ?: continue
+                val embedUrl = exchangeMirrorTokenForIframe(baseUrl, activeEpUrl, token, nonce) ?: continue
+                val resolved = extractDirectVideo(embedUrl, activeEpUrl) ?: continue
                 if (seenUrls.add(resolved.videoUrl)) {
                     results.add(StreamOption(label, resolved.videoUrl, resolved.referer, resolved.isDirectMedia))
                 }
@@ -306,7 +313,7 @@ object AnimeIndoProvider {
         if (!inlineNonce.isNullOrEmpty()) return inlineNonce
 
         val actionMatch = Regex("action\\s*:\\s*[\"']([a-zA-Z0-9_]+)[\"']").find(html)?.groupValues?.getOrNull(1) ?: return ""
-        val resp = httpPost("$baseUrl/wp-admin/admin-ajax.php", "action=$actionMatch", baseUrl) ?: return ""
+        val resp = smartHttpPost("$baseUrl/wp-admin/admin-ajax.php", "action=$actionMatch", baseUrl) ?: return ""
         return try {
             JSONObject(resp).optString("data", "")
         } catch (_: Exception) {
@@ -325,7 +332,7 @@ object AnimeIndoProvider {
 
             val action = "2a3505c93b0035d3f455df82bf976b84"
             val body = "id=${URLEncoder.encode(id, "UTF-8")}&i=${URLEncoder.encode(i, "UTF-8")}&q=${URLEncoder.encode(q, "UTF-8")}&nonce=${URLEncoder.encode(nonce, "UTF-8")}&action=$action"
-            val resp = httpPost("$baseUrl/wp-admin/admin-ajax.php", body, referer) ?: return null
+            val resp = smartHttpPost("$baseUrl/wp-admin/admin-ajax.php", body, referer) ?: return null
             val dataB64 = JSONObject(resp).optString("data", "")
             if (dataB64.isEmpty()) return null
             val iframeHtml = String(Base64.decode(dataB64, Base64.DEFAULT), Charsets.UTF_8)
@@ -341,7 +348,7 @@ object AnimeIndoProvider {
             return StreamOption("Direct", embedUrl, pageReferer, true)
         }
 
-        val embedHtml = httpGet(embedUrl, pageReferer) ?: return null
+        val embedHtml = smartHttpGet(embedUrl, pageReferer) ?: return null
 
         val gVideoRegex = Regex("\"play_url\"\\s*:\\s*\"(https:[^\"]+googlevideo\\.com[^\"]+)\"")
         val gMatch = gVideoRegex.findAll(embedHtml).lastOrNull()?.groupValues?.getOrNull(1)
@@ -394,7 +401,7 @@ object AnimeIndoProvider {
                     .setTitle("${detail.title} (${detail.episodes.size} Episode)")
                     .setItems(epTitles) { _, which ->
                         val chosenEp = detail.episodes[which]
-                        resolveAndPlayEpisode(context, detail, chosenEp, 0L, false, onStatus, onHideStatus)
+                        resolveAndPlayEpisode(context, detail, chosenEp, onStatus, onHideStatus)
                     }
                     .setNegativeButton("Tutup", null)
                     .show()
@@ -402,50 +409,15 @@ object AnimeIndoProvider {
         }.start()
     }
 
-    fun resumeSavedEpisode(
-        context: Context,
-        cw: ContinueWatch.Entry,
-        forcePicker: Boolean,
-        onStatus: (title: String?, message: String, autoHideMs: Long) -> Unit,
-        onHideStatus: () -> Unit
-    ) {
-        val detail = AnimeDetail(
-            title = cw.movie.title.substringBefore(" - Episode").trim(),
-            url = cw.detailUrl,
-            poster = cw.movie.poster ?: "",
-            score = "",
-            status = "Sub Indo",
-            genres = "",
-            synopsis = cw.movie.overview,
-            episodes = emptyList()
-        )
-        val ep = EpisodeItem(
-            title = "Episode ${cw.episode}",
-            url = cw.epUrl,
-            episodeNumber = cw.episode
-        )
-        resolveAndPlayEpisode(
-            context = context,
-            detail = detail,
-            ep = ep,
-            resumeMs = cw.posMs,
-            autoPickFirst = !forcePicker,
-            onStatus = onStatus,
-            onHideStatus = onHideStatus
-        )
-    }
-
     private fun resolveAndPlayEpisode(
         context: Context,
         detail: AnimeDetail,
         ep: EpisodeItem,
-        resumeMs: Long,
-        autoPickFirst: Boolean,
         onStatus: (title: String?, message: String, autoHideMs: Long) -> Unit,
         onHideStatus: () -> Unit
     ) {
         val ui = Handler(Looper.getMainLooper())
-        onStatus("Mengekstrak Video...", "Mengambil tautan streaming segar Sub-Indo...", 0L)
+        onStatus("Mengekstrak Video...", "Mengambil tautan streaming langsung Sub-Indo...", 0L)
 
         Thread {
             val streams = resolveEpisodeStreams(context, ep.url)
@@ -455,14 +427,14 @@ object AnimeIndoProvider {
                     onStatus("Stream Tidak Ditemukan", "Server episode ini sedang padat. Coba episode atau judul lain.", 4000L)
                     return@post
                 }
-                if (streams.size == 1 || autoPickFirst) {
-                    launchVodPlayer(context, detail, ep, streams[0], resumeMs)
+                if (streams.size == 1) {
+                    launchVodPlayer(context, detail, ep, streams[0])
                 } else {
                     val labels = streams.map { it.label }.toTypedArray()
                     AlertDialog.Builder(context)
                         .setTitle("Pilih Kualitas - ${ep.title}")
                         .setItems(labels) { _, idx ->
-                            launchVodPlayer(context, detail, ep, streams[idx], resumeMs)
+                            launchVodPlayer(context, detail, ep, streams[idx])
                         }
                         .show()
                 }
@@ -470,21 +442,14 @@ object AnimeIndoProvider {
         }.start()
     }
 
-    private fun launchVodPlayer(
-        context: Context,
-        detail: AnimeDetail,
-        ep: EpisodeItem,
-        stream: StreamOption,
-        resumeMs: Long = 0L
-    ) {
-        val fullTitle = if (detail.title.contains(ep.title, ignoreCase = true)) detail.title else "${detail.title} - ${ep.title}"
+    private fun launchVodPlayer(context: Context, detail: AnimeDetail, ep: EpisodeItem, stream: StreamOption) {
+        val fullTitle = "${detail.title} - ${ep.title}"
         val resumeKey = "anime_indo_${detail.url.hashCode()}_${ep.episodeNumber}"
-        if (resumeMs > 0L) {
-            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putLong("pos_$resumeKey", resumeMs)
-                .apply()
-        }
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString("anime_ep_$resumeKey", ep.url)
+            .apply()
+
         val intent = Intent(context, VodPlayerActivity::class.java).apply {
             putExtra("title", fullTitle)
             putExtra("url", stream.videoUrl)
@@ -492,125 +457,91 @@ object AnimeIndoProvider {
             putExtra("origin", getBaseUrl(context))
             putExtra("user_agent", UA)
             putExtra("resume_key", resumeKey)
-            putExtra("resume_ms", resumeMs)
-            putExtra("detail_url", detail.url)
-            putExtra("ep_url", ep.url)
+            putExtra("resume_ms", 0L)
             putExtra("tmdb_kind", "tv")
             putExtra("season", 1)
             putExtra("episode", ep.episodeNumber)
             putExtra("poster", detail.poster)
             putExtra("backdrop", detail.poster)
             putExtra("overview", detail.synopsis)
+            putExtra("anime_ep_url", ep.url)
         }
-        ContinueWatch.saveFromIntent(context, intent, resumeMs)
+        ContinueWatch.saveFromIntent(context, intent, 0L)
         context.startActivity(intent)
     }
 
-    // ---------- HTTP Client dengan Auto-Bypass DNS-over-HTTPS (1.1.1.1 / 8.8.8.8) ----------
-
-    private fun httpGet(urlStr: String, referer: String): String? {
-        val direct = tryHttpRequest(urlStr, null, "GET", null, referer)
-        if (direct != null && !looksLikeIspBlockPage(direct)) return direct
-
-        val parsed = try { URL(urlStr) } catch (_: Exception) { return null }
-        val host = parsed.host ?: return null
-        if (isIpLiteral(host)) return null
-
-        val dohIp = resolveHostViaDoh(host) ?: return null
-        return tryHttpRequest(urlStr, dohIp, "GET", null, referer)
-    }
-
-    private fun httpPost(urlStr: String, formBody: String, referer: String): String? {
-        val direct = tryHttpRequest(urlStr, null, "POST", formBody, referer)
-        if (direct != null && !looksLikeIspBlockPage(direct)) return direct
-
-        val parsed = try { URL(urlStr) } catch (_: Exception) { return null }
-        val host = parsed.host ?: return null
-        if (isIpLiteral(host)) return null
-
-        val dohIp = resolveHostViaDoh(host) ?: return null
-        return tryHttpRequest(urlStr, dohIp, "POST", formBody, referer)
-    }
-
-    private fun tryHttpRequest(
-        urlStr: String,
-        overrideIp: String?,
-        method: String,
-        formBody: String?,
-        referer: String
-    ): String? {
+    private fun rewriteToActiveMirror(rawUrl: String, activeBase: String): String {
         return try {
-            val origUrl = URL(urlStr)
-            val origHost = origUrl.host
-            val targetUrl = if (!overrideIp.isNullOrEmpty() && origHost.isNotEmpty()) {
-                URL(urlStr.replaceFirst("://$origHost", "://$overrideIp"))
+            val u = URL(rawUrl)
+            val host = u.host.lowercase(Locale.US)
+            if (host.contains("otakudesu")) {
+                val pathAndQuery = u.file.ifEmpty { "/" }
+                "$activeBase$pathAndQuery"
             } else {
-                origUrl
+                rawUrl
             }
+        } catch (_: Exception) {
+            rawUrl
+        }
+    }
 
-            val conn = targetUrl.openConnection() as HttpURLConnection
-            if (conn is HttpsURLConnection && !overrideIp.isNullOrEmpty() && origHost.isNotEmpty()) {
-                conn.sslSocketFactory = createSniSocketFactory(origHost)
-                conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
-            }
+    private fun smartHttpGet(urlStr: String, referer: String): String? {
+        val normal = httpGetInternal(urlStr, referer, null)
+        if (!normal.isNullOrBlank() && !looksLikeIspBlock(normal)) {
+            return normal
+        }
+        val host = extractHost(urlStr) ?: return normal
+        val dohIp = resolveHostViaDoH(host) ?: return normal
+        return httpGetInternal(urlStr, referer, dohIp)
+    }
 
-            conn.instanceFollowRedirects = overrideIp.isNullOrEmpty()
-            conn.connectTimeout = 9000
-            conn.readTimeout = 12000
-            conn.requestMethod = method
-            conn.setRequestProperty("User-Agent", UA)
-            if (!overrideIp.isNullOrEmpty() && origHost.isNotEmpty()) {
-                conn.setRequestProperty("Host", origHost)
-            }
-            if (referer.isNotEmpty()) conn.setRequestProperty("Referer", referer)
+    private fun smartHttpPost(urlStr: String, formBody: String, referer: String): String? {
+        val normal = httpPostInternal(urlStr, formBody, referer, null)
+        if (!normal.isNullOrBlank() && !looksLikeIspBlock(normal)) {
+            return normal
+        }
+        val host = extractHost(urlStr) ?: return normal
+        val dohIp = resolveHostViaDoH(host) ?: return normal
+        return httpPostInternal(urlStr, formBody, referer, dohIp)
+    }
 
-            if (method == "POST" && formBody != null) {
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
-                conn.outputStream.use { it.write(formBody.toByteArray(Charsets.UTF_8)) }
-            }
+    private fun looksLikeIspBlock(body: String): Boolean {
+        val low = body.lowercase(Locale.US)
+        return low.contains("internetpositif") ||
+            low.contains("uzone.id") ||
+            low.contains("trustpositif") ||
+            low.contains("kominfo.go.id")
+    }
 
-            val code = conn.responseCode
-            if (code in 301..308) {
-                val loc = conn.getHeaderField("Location")
-                if (!loc.isNullOrBlank()) {
-                    val nextUrl = if (loc.startsWith("http")) loc else "${origUrl.protocol}://$origHost$loc"
-                    return tryHttpRequest(nextUrl, null, method, formBody, referer)
-                }
-            }
-            if (code in 200..299) {
-                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            } else {
-                null
-            }
+    private fun extractHost(urlStr: String): String? {
+        return try {
+            URL(urlStr).host?.takeIf { it.isNotEmpty() }
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun resolveHostViaDoh(host: String): String? {
+    private fun resolveHostViaDoH(host: String): String? {
         dohIpCache[host]?.let { return it }
-        val encoded = URLEncoder.encode(host, "UTF-8")
-        val endpoints = listOf(
-            "https://1.1.1.1/dns-query?name=$encoded&type=A",
-            "https://8.8.8.8/resolve?name=$encoded&type=A"
+        val dohEndpoints = listOf(
+            "https://cloudflare-dns.com/dns-query?name=$host&type=A",
+            "https://dns.google/resolve?name=$host&type=A"
         )
-        for (ep in endpoints) {
+        for (endpoint in dohEndpoints) {
             try {
-                val c = URL(ep).openConnection() as HttpURLConnection
-                c.connectTimeout = 5000
-                c.readTimeout = 6000
-                c.setRequestProperty("Accept", "application/dns-json")
-                c.setRequestProperty("User-Agent", UA)
-                if (c.responseCode == 200) {
-                    val body = c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                    val ans = JSONObject(body).optJSONArray("Answer") ?: continue
-                    for (i in 0 until ans.length()) {
-                        val rec = ans.getJSONObject(i)
-                        if (rec.optInt("type") == 1) {
-                            val ip = rec.optString("data", "").trim()
-                            if (isIpLiteral(ip)) {
+                val conn = URL(endpoint).openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 6000
+                conn.setRequestProperty("Accept", "application/dns-json")
+                conn.setRequestProperty("User-Agent", UA)
+                if (conn.responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    val answers = JSONObject(body).optJSONArray("Answer") ?: continue
+                    for (i in 0 until answers.length()) {
+                        val ans = answers.getJSONObject(i)
+                        if (ans.optInt("type") == 1) {
+                            val ip = ans.optString("data", "").trim()
+                            if (ip.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
                                 dohIpCache[host] = ip
                                 return ip
                             }
@@ -623,66 +554,108 @@ object AnimeIndoProvider {
         return null
     }
 
-    private fun createSniSocketFactory(sniHost: String): SSLSocketFactory {
-        val ctx = SSLContext.getInstance("TLS")
-        ctx.init(null, null, null)
-        val base = ctx.socketFactory
-        return object : SSLSocketFactory() {
-            override fun getDefaultCipherSuites(): Array<String> = base.defaultCipherSuites
-            override fun getSupportedCipherSuites(): Array<String> = base.supportedCipherSuites
+    private fun openConfiguredConnection(urlStr: String, overrideIp: String?): HttpURLConnection {
+        if (overrideIp.isNullOrEmpty()) {
+            return URL(urlStr).openConnection() as HttpURLConnection
+        }
+        val orig = URL(urlStr)
+        val origHost = orig.host
+        val portPart = if (orig.port != -1) ":${orig.port}" else ""
+        val ipUrl = URL("${orig.protocol}://$overrideIp$portPart${orig.file}")
+        val conn = ipUrl.openConnection() as HttpURLConnection
+        conn.setRequestProperty("Host", origHost)
 
-            override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket {
-                val sock = base.createSocket(s, sniHost, port, autoClose) as SSLSocket
-                applySni(sock, sniHost)
-                return sock
-            }
-
-            override fun createSocket(host: String?, port: Int): Socket {
-                val sock = base.createSocket(host, port) as SSLSocket
-                applySni(sock, sniHost)
-                return sock
-            }
-
-            override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket {
-                val sock = base.createSocket(host, port, localHost, localPort) as SSLSocket
-                applySni(sock, sniHost)
-                return sock
-            }
-
-            override fun createSocket(host: InetAddress?, port: Int): Socket {
-                val sock = base.createSocket(host, port) as SSLSocket
-                applySni(sock, sniHost)
-                return sock
-            }
-
-            override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket {
-                val sock = base.createSocket(address, port, localAddress, localPort) as SSLSocket
-                applySni(sock, sniHost)
-                return sock
+        if (conn is HttpsURLConnection) {
+            try {
+                val baseFactory = HttpsURLConnection.getDefaultSSLSocketFactory()
+                conn.sslSocketFactory = object : SSLSocketFactory() {
+                    override fun getDefaultCipherSuites(): Array<String> = baseFactory.defaultCipherSuites
+                    override fun getSupportedCipherSuites(): Array<String> = baseFactory.supportedCipherSuites
+                    override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket {
+                        val sock = baseFactory.createSocket(s, origHost, port, autoClose)
+                        applySni(sock, origHost)
+                        return sock
+                    }
+                    override fun createSocket(host: String?, port: Int): Socket {
+                        val sock = baseFactory.createSocket(overrideIp, port)
+                        applySni(sock, origHost)
+                        return sock
+                    }
+                    override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket {
+                        val sock = baseFactory.createSocket(overrideIp, port, localHost, localPort)
+                        applySni(sock, origHost)
+                        return sock
+                    }
+                    override fun createSocket(host: InetAddress?, port: Int): Socket {
+                        val sock = baseFactory.createSocket(host, port)
+                        applySni(sock, origHost)
+                        return sock
+                    }
+                    override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket {
+                        val sock = baseFactory.createSocket(address, port, localAddress, localPort)
+                        applySni(sock, origHost)
+                        return sock
+                    }
+                }
+                conn.hostnameVerifier = HostnameVerifier { _, session ->
+                    HttpsURLConnection.getDefaultHostnameVerifier().verify(origHost, session)
+                }
+            } catch (_: Throwable) {
             }
         }
+        return conn
     }
 
-    private fun applySni(socket: SSLSocket, host: String) {
-        if (Build.VERSION.SDK_INT >= 24) {
+    private fun applySni(socket: Socket, sniHost: String) {
+        if (socket is SSLSocket) {
             try {
                 val params = socket.sslParameters
-                params.serverNames = listOf(SNIHostName(host))
+                params.serverNames = listOf(SNIHostName(sniHost))
                 socket.sslParameters = params
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
             }
         }
     }
 
-    private fun isIpLiteral(s: String): Boolean =
-        Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$").matches(s)
+    private fun httpGetInternal(urlStr: String, referer: String, overrideIp: String?): String? {
+        return try {
+            val conn = openConfiguredConnection(urlStr, overrideIp)
+            conn.instanceFollowRedirects = true
+            conn.connectTimeout = 9000
+            conn.readTimeout = 12000
+            conn.setRequestProperty("User-Agent", UA)
+            if (referer.isNotEmpty()) conn.setRequestProperty("Referer", referer)
+            val code = conn.responseCode
+            if (code in 200..299) {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
-    private fun looksLikeIspBlockPage(html: String): Boolean {
-        val low = html.lowercase(Locale.US)
-        return low.contains("internetpositif") ||
-            low.contains("trustpositif") ||
-            low.contains("uzone.id") ||
-            (low.contains("situs ini diblokir") && !low.contains("episodelist"))
+    private fun httpPostInternal(urlStr: String, formBody: String, referer: String, overrideIp: String?): String? {
+        return try {
+            val conn = openConfiguredConnection(urlStr, overrideIp)
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 9000
+            conn.readTimeout = 12000
+            conn.setRequestProperty("User-Agent", UA)
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+            if (referer.isNotEmpty()) conn.setRequestProperty("Referer", referer)
+            conn.outputStream.use { it.write(formBody.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun normalizeUrl(raw: String, baseUrl: String): String {
