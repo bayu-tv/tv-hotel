@@ -328,6 +328,7 @@ class FilmActivity : AppCompatActivity() {
         val alp = LinearLayout.LayoutParams(-2, -2)
         alp.leftMargin = dp(10)
         topBar.addView(addonBtn, alp)
+
         val domainAnimeBtn = tv(
             "Domain Anime", 12f, brassLight,
             Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -811,9 +812,6 @@ class FilmActivity : AppCompatActivity() {
         }.start()
     }
 
-    /**
-     * Kartu info permanen jika WiFi/ISP memblokir total atau domain anime sedang ganti TLD.
-     */
     private fun addAnimeDnsInfoBanner() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1398,7 +1396,7 @@ class FilmActivity : AppCompatActivity() {
         }
         val ed = prefs.edit()
         for (k in prefs.all.keys) {
-            if (k.startsWith("pos_") || k.startsWith("srv_")) ed.remove(k)
+            if (k.startsWith("pos_") || k.startsWith("srv_") || k.startsWith("anime_ep_")) ed.remove(k)
         }
         ed.apply()
     }
@@ -1611,10 +1609,74 @@ class FilmActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Lanjutkan Menonton selalu mencari ulang tautan server terbaru yang segar (anti-expired)
-     * lalu otomatis melompat ke menit terakhir [cw.posMs].
-     */
+    private fun resumeAnimeIndoFromHistory(cw: ContinueWatch.Entry, autoPickBest: Boolean) {
+        val epUrl = prefs.getString("anime_ep_${cw.key}", "") ?: ""
+        if (epUrl.isEmpty()) {
+            notice.show(
+                "Link Episode Tidak Tersimpan",
+                "Buka tab Anime & Serial lalu pilih judulnya kembali.",
+                4000L
+            )
+            return
+        }
+        notice.show("Mengekstrak Video...", "Mengambil tautan streaming segar Sub-Indo...")
+        Thread {
+            val streams = AnimeIndoProvider.resolveEpisodeStreams(this, epUrl)
+            ui.post {
+                if (isFinishing) return@post
+                notice.hide()
+                if (streams.isEmpty()) {
+                    notice.show(
+                        "Stream Tidak Ditemukan",
+                        "Server episode ini sedang padat. Coba episode atau judul lain.",
+                        4000L
+                    )
+                    return@post
+                }
+                if (streams.size == 1 || autoPickBest) {
+                    launchAnimeStream(cw, epUrl, streams[0])
+                } else {
+                    val labels = streams.map { it.label }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Pilih Kualitas - Episode ${cw.episode}")
+                        .setItems(labels) { _, idx ->
+                            launchAnimeStream(cw, epUrl, streams[idx])
+                        }
+                        .show()
+                }
+            }
+        }.start()
+    }
+
+    private fun launchAnimeStream(
+        cw: ContinueWatch.Entry,
+        epUrl: String,
+        stream: AnimeIndoProvider.StreamOption
+    ) {
+        prefs.edit().putString("anime_ep_${cw.key}", epUrl).apply()
+        val intent = Intent(this, VodPlayerActivity::class.java).apply {
+            putExtra("title", cw.movie.title)
+            putExtra("url", stream.videoUrl)
+            putExtra("referer", stream.referer)
+            putExtra("origin", AnimeIndoProvider.getBaseUrl(this@FilmActivity))
+            putExtra(
+                "user_agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            )
+            putExtra("resume_key", cw.key)
+            putExtra("resume_ms", cw.posMs)
+            putExtra("tmdb_kind", "tv")
+            putExtra("season", 1)
+            putExtra("episode", cw.episode)
+            putExtra("poster", cw.movie.poster ?: "")
+            putExtra("backdrop", cw.movie.backdrop ?: "")
+            putExtra("overview", cw.movie.overview)
+            putExtra("anime_ep_url", epUrl)
+        }
+        ContinueWatch.saveFromIntent(this, intent, cw.posMs)
+        startActivity(intent)
+    }
+
     private fun openContinueDetail(cw: ContinueWatch.Entry) {
         val m = cw.movie
         resolvedImdbId = ""
@@ -1648,30 +1710,13 @@ class FilmActivity : AppCompatActivity() {
         } else if (isAnimeIndo) {
             addDetailButton("Lanjutkan Menonton", true) {
                 closeDetail()
-                AnimeIndoProvider.resumeAnimeEpisode(
-                    context = this,
-                    cw = cw,
-                    autoPickBest = true,
-                    onStatus = { t, msg, ms ->
-                        if (ms > 0L) notice.show(t, msg, ms) else notice.show(t, msg)
-                    },
-                    onHideStatus = { notice.hide() }
-                )
+                resumeAnimeIndoFromHistory(cw, autoPickBest = true)
             }
             addDetailButton("Ganti Kualitas", false) {
                 closeDetail()
-                AnimeIndoProvider.resumeAnimeEpisode(
-                    context = this,
-                    cw = cw,
-                    autoPickBest = false,
-                    onStatus = { t, msg, ms ->
-                        if (ms > 0L) notice.show(t, msg, ms) else notice.show(t, msg)
-                    },
-                    onHideStatus = { notice.hide() }
-                )
+                resumeAnimeIndoFromHistory(cw, autoPickBest = false)
             }
         } else {
-            // Langsung ambil link server segar terbaru (autoPickBest = true) tanpa pakai URL lama yang expired
             addDetailButton("Lanjutkan Menonton", true) {
                 startStremioStream(m, cw.season, cw.episode, "", cw.posMs, autoPickBest = true)
             }
@@ -1682,7 +1727,7 @@ class FilmActivity : AppCompatActivity() {
 
         addDetailButton("Hapus Riwayat", false) {
             ContinueWatch.remove(this, cw.key)
-            prefs.edit().remove("srv_$rKey").remove("pos_$rKey").apply()
+            prefs.edit().remove("srv_$rKey").remove("pos_$rKey").remove("anime_ep_${cw.key}").apply()
             closeDetail()
             if (tabIdx == 0) {
                 tabIdx = -1
