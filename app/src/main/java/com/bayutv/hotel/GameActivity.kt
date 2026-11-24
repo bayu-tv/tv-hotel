@@ -288,6 +288,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var running = false
     private var lastFrameNs = 0L
     private var animTime = 0f
+    private var bgmMuted = false
 
     private var state = STATE_HUB
     private var mode = MODE_HUB
@@ -317,7 +318,8 @@ class ArcadeCanvasView(context: Context) : View(context) {
     // Hitboxes
     private val hubCardRects = Array(6) { RectF() }
     private val diffRect = RectF()
-    private val muteRect = RectF()
+    private val bgmMuteRect = RectF()
+    private val sfxMuteRect = RectF()
     private val exitRect = RectF()
     private val hudPauseRect = RectF()
     private val readyStartRect = RectF()
@@ -353,7 +355,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private val ptSize = FloatArray(maxParticles)
     private val ptColor = IntArray(maxParticles)
 
-    // Geometric spinning shatter fragments
     private val maxShards = 48
     private val shActive = BooleanArray(maxShards)
     private val shX = FloatArray(maxShards)
@@ -523,7 +524,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
     private var rkTargetKills = 18
     private var rocketAutoFire = true
 
-    // Motion afterimage ghost ring buffer (3 slots)
     private val rkGhostX = FloatArray(3)
     private val rkGhostY = FloatArray(3)
     private val rkGhostTilt = FloatArray(3)
@@ -565,8 +565,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
         isFocusable = true
         isFocusableInTouchMode = true
         requestFocus()
-        audio.muted = prefs.getBoolean("arcade_mute", false)
-        GameChiptuneEngine.setMuted(audio.muted)
+        val legacyMute = prefs.getBoolean("arcade_mute", false)
+        bgmMuted = prefs.getBoolean("arcade_bgm_mute", legacyMute)
+        audio.muted = prefs.getBoolean("arcade_sfx_mute", legacyMute)
+        GameChiptuneEngine.setMuted(bgmMuted)
         difficulty = prefs.getInt("arcade_diff", DIFF_NORMAL).coerceIn(0, 2)
         showTouchOverlay = context.resources.displayMetrics.widthPixels < context.resources.displayMetrics.heightPixels
 
@@ -872,11 +874,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
         audio.play(RetroAudioEngine.SFX_BOUNCE, 1.15f)
     }
 
-    private fun toggleMute() {
+    private fun toggleBgmMute() {
+        bgmMuted = !bgmMuted
+        GameChiptuneEngine.setMuted(bgmMuted)
+        prefs.edit().putBoolean("arcade_bgm_mute", bgmMuted).apply()
+        if (!audio.muted) audio.play(RetroAudioEngine.SFX_BOUNCE, 1.15f)
+    }
+
+    private fun toggleSfxMute() {
         audio.muted = !audio.muted
-        GameChiptuneEngine.setMuted(audio.muted)
-        prefs.edit().putBoolean("arcade_mute", audio.muted).apply()
-        if (!audio.muted) audio.play(RetroAudioEngine.SFX_BOUNCE, 1.2f)
+        prefs.edit().putBoolean("arcade_sfx_mute", audio.muted).apply()
+        if (!audio.muted) audio.play(RetroAudioEngine.SFX_BOUNCE, 1.25f)
     }
 
     private fun difficultyLabel(): String = when (difficulty) {
@@ -890,13 +898,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // MAIN UPDATE LOOP (HIT-STOP, ROLLING SCORE, SHATTER SHARDS & POLISH)
+    // MAIN UPDATE LOOP
     // =========================================================================
     private fun update(dt: Float) {
         animTime += dt
-        GameChiptuneEngine.sync(mode, state, audio.muted)
+        GameChiptuneEngine.sync(mode, state, bgmMuted)
 
-        // Smooth rolling score counter
         if (displayScore < score) {
             val diff = score - displayScore
             displayScore = min(score.toFloat(), displayScore + max(120f * dt, diff * 12f * dt))
@@ -967,7 +974,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         if (state != STATE_PLAYING) return
 
-        // Hit-Stop micro freeze on big impacts
         if (hitStopTimer > 0f) {
             hitStopTimer = max(0f, hitStopTimer - dt)
             return
@@ -1052,7 +1058,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(swX[i], swY[i], radius, pStroke)
         }
 
-        // Spinning geometric shatter fragments
         for (i in 0 until maxShards) {
             if (!shActive[i]) continue
             val alpha = ((shLife[i] / shMaxLife[i]).coerceIn(0f, 1f) * 255).toInt()
@@ -1084,7 +1089,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // HUB MENU (6 GAMES GRID / STACK)
+    // HUB MENU (6 GAMES GRID / STACK + SEPARATE BGM & SFX BUTTONS)
     // =========================================================================
     private fun drawHub(canvas: Canvas, w: Float, h: Float) {
         val pad = dp(18f)
@@ -1101,19 +1106,24 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val pillY = dp(11f)
         var rx = w - pad
 
-        val exitW = dp(74f)
+        val exitW = dp(68f)
         exitRect.set(rx - exitW, pillY, rx, pillY + pillH)
         drawPillButton(canvas, exitRect, "KELUAR", COL_RED, false)
-        rx -= exitW + dp(8f)
+        rx -= exitW + dp(6f)
 
-        val muteW = dp(42f)
-        muteRect.set(rx - muteW, pillY, rx, pillY + pillH)
-        drawPillButton(canvas, muteRect, if (audio.muted) "\uD83D\uDD07" else "\uD83D\uDD0A", COL_GOLD, false)
-        rx -= muteW + dp(8f)
+        val sfxW = dp(52f)
+        sfxMuteRect.set(rx - sfxW, pillY, rx, pillY + pillH)
+        drawPillButton(canvas, sfxMuteRect, if (audio.muted) "SFX ✕" else "SFX", COL_GOLD, !audio.muted)
+        rx -= sfxW + dp(6f)
 
-        val diffW = dp(104f)
+        val bgmW = dp(56f)
+        bgmMuteRect.set(rx - bgmW, pillY, rx, pillY + pillH)
+        drawPillButton(canvas, bgmMuteRect, if (bgmMuted) "BGM ✕" else "BGM", COL_CYAN, !bgmMuted)
+        rx -= bgmW + dp(6f)
+
+        val diffW = dp(84f)
         diffRect.set(rx - diffW, pillY, rx, pillY + pillH)
-        drawPillButton(canvas, diffRect, difficultyLabel(), COL_CYAN, false)
+        drawPillButton(canvas, diffRect, difficultyLabel(), COL_GREEN, false)
 
         val topY = topH + dp(8f)
         val botY = h - pad
@@ -1189,7 +1199,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.CENTER
         pText.typeface = Typeface.DEFAULT_BOLD
         pText.color = if (active) COL_BG_TOP else COL_IVORY
-        pText.textSize = dp(11.5f)
+        pText.textSize = dp(11f)
         canvas.drawText(label, r.centerX(), r.centerY() + dp(4f), pText)
     }
 
@@ -1205,23 +1215,21 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.LEFT
         pText.typeface = Typeface.DEFAULT_BOLD
         pText.color = gameAccents[idx]
-        pText.textSize = dp(14f)
-        canvas.drawText("${gameTitles[idx]} · S$stage", dp(14f), dp(28f), pText)
+        pText.textSize = dp(13.5f)
+        canvas.drawText("${gameTitles[idx]} · S$stage", dp(12f), dp(28f), pText)
 
-        // Rolling Score with Pop-Scale
         canvas.save()
-        canvas.translate(w * 0.52f, dp(24f))
+        canvas.translate(w * 0.47f, dp(24f))
         canvas.scale(scorePopScale, scorePopScale)
         pText.textAlign = Paint.Align.CENTER
         pText.color = if (newRecordAnnounced) COL_GOLD else COL_IVORY
-        pText.textSize = dp(14f)
-        canvas.drawText("SKOR: ${displayScore.toInt()}   |   REKOR: ${getHighScore(mode)}", 0f, dp(4f), pText)
+        pText.textSize = dp(13.5f)
+        canvas.drawText("SKOR: ${displayScore.toInt()}  |  REKOR: ${getHighScore(mode)}", 0f, dp(4f), pText)
         canvas.restore()
 
-        // Live New Record Banner below HUD
         if (newRecordBannerTimer > 0f && state == STATE_PLAYING) {
             val alpha = ((min(1f, newRecordBannerTimer * 2f)) * 235).toInt()
-            rect.set(w * 0.52f - dp(68f), barH + dp(6f), w * 0.52f + dp(68f), barH + dp(28f))
+            rect.set(w * 0.47f - dp(68f), barH + dp(6f), w * 0.47f + dp(68f), barH + dp(28f))
             pFill.color = (alpha shl 24) or 0x00E6C88F
             canvas.drawRoundRect(rect, dp(11f), dp(11f), pFill)
             pText.textAlign = Paint.Align.CENTER
@@ -1230,7 +1238,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawText("★ REKOR BARU! ★", rect.centerX(), rect.centerY() + dp(4f), pText)
         } else if (comboCount >= 2 && comboTimer > 0f && state == STATE_PLAYING) {
             canvas.save()
-            val cx = w * 0.52f
+            val cx = w * 0.47f
             val cy = barH + dp(20f)
             canvas.translate(cx, cy)
             canvas.scale(comboPopScale, comboPopScale)
@@ -1249,11 +1257,21 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
         val pillH = dp(28f)
         val pillY = dp(9f)
-        hudPauseRect.set(w - dp(76f), pillY, w - dp(12f), pillY + pillH)
-        drawPillButton(canvas, hudPauseRect, "JEDA", COL_GOLD, false)
+        var rx = w - dp(10f)
 
-        muteRect.set(w - dp(122f), pillY, w - dp(82f), pillY + pillH)
-        drawPillButton(canvas, muteRect, if (audio.muted) "\uD83D\uDD07" else "\uD83D\uDD0A", COL_GOLD, false)
+        val pauseW = dp(58f)
+        hudPauseRect.set(rx - pauseW, pillY, rx, pillY + pillH)
+        drawPillButton(canvas, hudPauseRect, "JEDA", COL_GOLD, false)
+        rx -= pauseW + dp(5f)
+
+        val sfxW = dp(48f)
+        sfxMuteRect.set(rx - sfxW, pillY, rx, pillY + pillH)
+        drawPillButton(canvas, sfxMuteRect, if (audio.muted) "SFX✕" else "SFX", COL_GOLD, !audio.muted)
+        rx -= sfxW + dp(5f)
+
+        val bgmW = dp(52f)
+        bgmMuteRect.set(rx - bgmW, pillY, rx, pillY + pillH)
+        drawPillButton(canvas, bgmMuteRect, if (bgmMuted) "BGM✕" else "BGM", COL_CYAN, !bgmMuted)
     }
 
     private fun drawTouchControls(canvas: Canvas, w: Float, h: Float) {
@@ -1495,6 +1513,10 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     cycleDifficulty()
                     true
                 }
+                KeyEvent.KEYCODE_BUTTON_Y -> {
+                    toggleBgmMute()
+                    true
+                }
                 else -> super.onKeyDown(keyCode, event)
             }
         }
@@ -1613,8 +1635,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                     (context as? Activity)?.finish()
                     return true
                 }
-                if (muteRect.contains(x, y)) {
-                    toggleMute()
+                if (bgmMuteRect.contains(x, y)) {
+                    toggleBgmMute()
+                    return true
+                }
+                if (sfxMuteRect.contains(x, y)) {
+                    toggleSfxMute()
                     return true
                 }
                 if (diffRect.contains(x, y)) {
@@ -1657,8 +1683,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 onBackAction()
                 return true
             }
-            if (muteRect.contains(x, y)) {
-                toggleMute()
+            if (bgmMuteRect.contains(x, y)) {
+                toggleBgmMute()
+                return true
+            }
+            if (sfxMuteRect.contains(x, y)) {
+                toggleSfxMute()
                 return true
             }
         }
@@ -1742,7 +1772,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 1: BOMBER ARENA (CHARACTER SPRITES, LIT BOMBS, CRATES & STEEL WALLS)
+    // GAME 1: BOMBER ARENA
     // =========================================================================
     private fun bomberScreenPos(colF: Float, rowF: Float): Pair<Float, Float> {
         val w = width.toFloat().coerceAtLeast(320f)
@@ -2007,7 +2037,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
 
                 when (bmMap[idx]) {
                     1 -> {
-                        // Riveted Steel-Stone Block
                         pFill.color = 0xFF3E3832.toInt()
                         canvas.drawRoundRect(rect, dp(4f), dp(4f), pFill)
                         pFill.color = 0x28FFFFFF
@@ -2022,7 +2051,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
                         canvas.drawCircle(rect.right - rOff, rect.bottom - rOff, dp(1.5f), pFill)
                     }
                     2 -> {
-                        // Cross-braced Wooden Crate
                         pFill.color = 0xFF8C5332.toInt()
                         canvas.drawRoundRect(rect, dp(4f), dp(4f), pFill)
                         pStroke.strokeWidth = dp(1.5f)
@@ -2065,7 +2093,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Iron Bombs with Burning Fuse & Spark
         for (i in 0 until maxBombs) {
             if (!bmbActive[i]) continue
             val cx = ox + (bmbCol[i] + 0.5f) * cell
@@ -2073,7 +2100,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             drawBomberBomb(canvas, cx, cy, cell * 0.33f, bmbTimer[i])
         }
 
-        // Enemy Mecha-Bombers
         for (i in 0 until maxBots) {
             if (!botAlive[i]) continue
             val cx = ox + botX[i] * cell
@@ -2086,7 +2112,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             )
         }
 
-        // Player Bomber Hero
         if (bmInvuln <= 0f || ((animTime * 16f).toInt() and 1) == 0) {
             val moving = inLeft || inRight || inUp || inDown
             drawBomberCharacter(
@@ -2117,23 +2142,19 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val pulse = 1f + sin(animTime * freq) * (if (urgent) 0.16f else 0.08f)
         val r = radius * pulse
 
-        // Shadow
         pFill.color = 0x55000000
         rect.set(cx - r * 0.9f, cy + r * 0.65f, cx + r * 0.9f, cy + r * 1.15f)
         canvas.drawOval(rect, pFill)
 
-        // Iron sphere
         pFill.color = if (urgent && ((animTime * 20f).toInt() and 1) == 0) COL_RED else 0xFF23232A.toInt()
         canvas.drawCircle(cx, cy + r * 0.08f, r, pFill)
         pStroke.strokeWidth = dp(1.2f)
         pStroke.color = 0xFF555562.toInt()
         canvas.drawCircle(cx, cy + r * 0.08f, r, pStroke)
 
-        // Glossy reflection
         pFill.color = 0x55FFFFFF
         canvas.drawCircle(cx - r * 0.34f, cy - r * 0.25f, r * 0.24f, pFill)
 
-        // Metallic fuse cap & cord
         pFill.color = 0xFF7A7A88.toInt()
         rect.set(cx - r * 0.24f, cy - r * 1.05f, cx + r * 0.24f, cy - r * 0.80f)
         canvas.drawRoundRect(rect, dp(2f), dp(2f), pFill)
@@ -2145,7 +2166,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         path.quadTo(cx + r * 0.35f, cy - r * 1.38f, cx + r * 0.55f, cy - r * 1.25f)
         canvas.drawPath(path, pStroke)
 
-        // Flickering fuse spark
         val sparkR = r * (0.24f + abs(sin(animTime * 32f)) * 0.16f)
         pFill.color = COL_ORANGE
         canvas.drawCircle(cx + r * 0.55f, cy - r * 1.25f, sparkR, pFill)
@@ -2165,37 +2185,30 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val bob = abs(sin(walkPhase)) * r * 0.14f
         val footSwing = sin(walkPhase) * r * 0.22f
 
-        // Ground shadow
         pFill.color = 0x55000000
         rect.set(cx - r * 0.85f, cy + r * 0.72f, cx + r * 0.85f, cy + r * 1.12f)
         canvas.drawOval(rect, pFill)
 
-        // Feet
         pFill.color = if (isPlayer) COL_ORANGE else 0xFF2B1B3D.toInt()
         canvas.drawCircle(cx - r * 0.36f, cy + r * 0.78f + footSwing, r * 0.24f, pFill)
         canvas.drawCircle(cx + r * 0.36f, cy + r * 0.78f - footSwing, r * 0.24f, pFill)
 
-        // Torso
         pFill.color = if (isPlayer) 0xFF2B5B84.toInt() else 0xFF4A2574.toInt()
         rect.set(cx - r * 0.62f, cy + r * 0.05f - bob, cx + r * 0.62f, cy + r * 0.72f - bob)
         canvas.drawRoundRect(rect, r * 0.3f, r * 0.3f, pFill)
 
-        // Helmet Head
         val headY = cy - r * 0.24f - bob
         pFill.color = if (isPlayer) COL_IVORY else if (alert && ((animTime * 24f).toInt() and 1) == 0) COL_ORANGE else COL_PURPLE
         canvas.drawCircle(cx, headY, r * 0.76f, pFill)
 
-        // Visor Faceplate
         pFill.color = 0xFF1A1614.toInt()
         rect.set(cx - r * 0.54f, headY - r * 0.24f, cx + r * 0.54f, headY + r * 0.28f)
         canvas.drawRoundRect(rect, r * 0.24f, r * 0.24f, pFill)
 
-        // Glowing Eyes
         pFill.color = if (isPlayer) COL_CYAN else COL_RED
         canvas.drawCircle(cx - r * 0.22f, headY + r * 0.02f, r * 0.13f, pFill)
         canvas.drawCircle(cx + r * 0.22f, headY + r * 0.02f, r * 0.13f, pFill)
 
-        // Antenna / Horn Crest
         if (isPlayer) {
             pStroke.strokeWidth = dp(1.6f)
             pStroke.color = COL_GOLD
@@ -2221,7 +2234,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 2: NEON BRICK (3D BEVELED BRICKS, ENERGY PADDLE & LABELED CAPSULES)
+    // GAME 2: NEON BRICK
     // =========================================================================
     private fun initBrick() {
         brPaddleX = 0.5f
@@ -2455,7 +2468,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 pFill.color = if (brFlash[idx] > 0f) Color.WHITE else brColor[idx]
                 canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
 
-                // 3D glossy top highlight & bottom bevel shadow
                 pFill.color = 0x44FFFFFF
                 canvas.drawRect(x0 + dp(3f), y0 + dp(2f), x0 + bw - dp(3f), y0 + bh * 0.34f, pFill)
                 pFill.color = 0x33000000
@@ -2469,35 +2481,29 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Futuristic Thruster Paddle
         val px = padX + brPaddleX * areaW
         val py = topY + areaH * 0.88f + sin(brPaddleRecoil * Math.PI.toFloat()) * dp(5f)
         val pw = brPaddleW * areaW
         val ph = dp(13f)
 
-        // Twin bottom thruster glows
         val thrR = dp(4.5f) + sin(animTime * 36f) * dp(1.2f)
         pFill.color = 0xAA4CC3D9.toInt()
         canvas.drawCircle(px - pw * 0.28f, py + ph * 0.55f, thrR, pFill)
         canvas.drawCircle(px + pw * 0.28f, py + ph * 0.55f, thrR, pFill)
 
-        // Main paddle hull
         rect.set(px - pw * 0.5f, py - ph * 0.5f, px + pw * 0.5f, py + ph * 0.5f)
         pFill.color = COL_GOLD
         canvas.drawRoundRect(rect, dp(6f), dp(6f), pFill)
 
-        // Metallic side bumpers
         pFill.color = COL_RED
         rect.set(px - pw * 0.5f, py - ph * 0.5f, px - pw * 0.5f + dp(12f), py + ph * 0.5f)
         canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
         rect.set(px + pw * 0.5f - dp(12f), py - ph * 0.5f, px + pw * 0.5f, py + ph * 0.5f)
         canvas.drawRoundRect(rect, dp(5f), dp(5f), pFill)
 
-        // Top energy reflector strip
         pFill.color = COL_CYAN
         canvas.drawRect(px - pw * 0.34f, py - ph * 0.5f + dp(1.5f), px + pw * 0.34f, py - ph * 0.5f + dp(4f), pFill)
 
-        // Pill-shaped Power-Up Capsules with Icon Tag
         for (i in 0 until maxCaps) {
             if (!cpActive[i]) continue
             val cx = padX + cpX[i] * areaW
@@ -2517,7 +2523,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawText(label, cx, cy + dp(3.5f), pText)
         }
 
-        // Glowing Energy Balls
         for (i in 0 until maxBalls) {
             if (!blActive[i]) continue
             val bx = padX + blX[i] * areaW
@@ -2538,7 +2543,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 3: GOLD SNAKE (SCALED SERPENT, FORKED TONGUE & FACETED GEMS)
+    // GAME 3: GOLD SNAKE
     // =========================================================================
     private fun snakeScreenPos(col: Int, row: Int): Pair<Float, Float> {
         val w = width.toFloat().coerceAtLeast(320f)
@@ -2678,20 +2683,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = 0x55E6C88F
         canvas.drawRect(ox, oy, ox + cell * snCols, oy + cell * snRows, pStroke)
 
-        // Faceted Gold Gemstone
         val gemPulse = 1f + sin(animTime * 8f) * 0.12f
         val fcx = ox + (snFoodX + 0.5f) * cell
         val fcy = oy + (snFoodY + 0.5f) * cell
         drawFacetedGem(canvas, fcx, fcy, cell * 0.42f * gemPulse, COL_GOLD, 0xFFFFF59D.toInt())
 
-        // Faceted Cyan Diamond Bonus
         if (snBonusActive) {
             val bcx = ox + (snBonusX + 0.5f) * cell
             val bcy = oy + (snBonusY + 0.5f) * cell
             drawFacetedGem(canvas, bcx, bcy, cell * 0.48f * gemPulse, COL_CYAN, Color.WHITE)
         }
 
-        // Tapered Serpent Body with Dorsal Scales
         for (i in snLen - 1 downTo 1) {
             val wavePos = (1f - snEatPulse) * snLen
             val waveBoost = if (snEatPulse > 0f) max(0f, 1f - abs(i - wavePos) * 0.45f) * dp(2.8f) else 0f
@@ -2703,18 +2705,15 @@ class ArcadeCanvasView(context: Context) : View(context) {
             pFill.color = if (waveBoost > 0.5f) COL_GOLD else if ((i and 1) == 0) COL_GREEN else 0xFF3B9668.toInt()
             canvas.drawCircle(scx, scy, baseRadius, pFill)
 
-            // Dorsal diamond scale marking
             pFill.color = if (waveBoost > 0.5f) Color.WHITE else 0x55E6C88F
             canvas.drawCircle(scx, scy, baseRadius * 0.42f, pFill)
         }
 
-        // Sculpted Serpent Head + Forked Y-Tongue + Tracking Eyes
         val hcx = ox + (snBodyX[0] + 0.5f) * cell
         val hcy = oy + (snBodyY[0] + 0.5f) * cell
         val dirX = when (snDir) { 1 -> 1f; 3 -> -1f; else -> 0f }
         val dirY = when (snDir) { 2 -> 1f; 0 -> -1f; else -> 0f }
 
-        // Forked Red Tongue
         if (sin(animTime * 8f) > 0.25f) {
             val tongueLen = cell * 0.34f
             val tx = hcx + dirX * (cell * 0.46f)
@@ -2730,20 +2729,17 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawLine(tipX, tipY, tipX + dirX * dp(3.5f) - perpX, tipY + dirY * dp(3.5f) - perpY, pStroke)
         }
 
-        // Head base & snout
         pFill.color = 0xFF56BD8B.toInt()
         canvas.drawCircle(hcx, hcy, cell * 0.48f, pFill)
         pFill.color = COL_GOLD
         canvas.drawCircle(hcx - dirX * cell * 0.08f, hcy - dirY * cell * 0.08f, cell * 0.22f, pFill)
 
-        // Nostrils
         pFill.color = COL_BG_TOP
         val nBaseX = hcx + dirX * cell * 0.32f
         val nBaseY = hcy + dirY * cell * 0.32f
         canvas.drawCircle(nBaseX - dirY * cell * 0.10f, nBaseY + dirX * cell * 0.10f, cell * 0.04f, pFill)
         canvas.drawCircle(nBaseX + dirY * cell * 0.10f, nBaseY - dirX * cell * 0.10f, cell * 0.04f, pFill)
 
-        // Gem-tracking eyes
         val targetX = if (snBonusActive) ox + (snBonusX + 0.5f) * cell else fcx
         val targetY = if (snBonusActive) oy + (snBonusY + 0.5f) * cell else fcy
         val lookAngle = atan2(targetY - hcy, targetX - hcx)
@@ -2776,7 +2772,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = mainCol
         canvas.drawPath(path, pFill)
 
-        // Inner bright crown facet
         path.reset()
         path.moveTo(cx, cy - r * 0.55f)
         path.lineTo(cx + r * 0.42f, cy - r * 0.18f)
@@ -2788,7 +2783,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 4: NEON TETRIS (3D BEVELED JEWEL BLOCKS & MULTI-ROW FLASH)
+    // GAME 4: NEON TETRIS
     // =========================================================================
     private fun initTetris() {
         ttBoard.fill(0)
@@ -3037,15 +3032,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = col
         canvas.drawRoundRect(rect, dp(3f), dp(3f), pFill)
 
-        // Top-left bevel highlight
         pFill.color = 0x55FFFFFF
         canvas.drawRect(x0 + dp(1.5f), y0 + dp(1.5f), x0 + sz - dp(1.5f), y0 + sz * 0.26f, pFill)
 
-        // Bottom-right bevel shade
         pFill.color = 0x44000000
         canvas.drawRect(x0 + dp(1.5f), y0 + sz * 0.74f, x0 + sz - dp(1.5f), y0 + sz - dp(1.5f), pFill)
 
-        // Inner jewel facet frame
         pStroke.strokeWidth = dp(1f)
         pStroke.color = 0x66FFFFFF
         rect.set(x0 + sz * 0.24f, y0 + sz * 0.24f, x0 + sz * 0.76f, y0 + sz * 0.76f)
@@ -3053,7 +3045,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GAME 5: ASTRO ROCKET (STARFIGHTER SPRITE, SAUCER UFO & CRATERED ASTEROIDS)
+    // GAME 5: ASTRO ROCKET
     // =========================================================================
     private fun initRocket(keep: Boolean) {
         rkX = 0.5f
@@ -3299,7 +3291,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val botY = getControlDeckTop(h)
         val areaH = botY - topY
 
-        // 3-Layer Parallax Starfield
         for (i in 0..32) {
             val layer = i % 3
             val speed = when (layer) { 0 -> 14f; 1 -> 34f; else -> 75f }
@@ -3333,7 +3324,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
                 0 -> drawRocketMeteor(canvas, ex, ey, dp(15f), i, flash)
                 1 -> drawRocketUfo(canvas, ex, ey, flash, reShootCd[i])
                 2 -> {
-                    // Spinning Energy Power-Up Capsule
                     val pulse = 1f + sin(animTime * 10f) * 0.12f
                     pFill.color = 0x444CAF7D
                     canvas.drawCircle(ex, ey, dp(16f) * pulse, pFill)
@@ -3351,7 +3341,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Glowing Plasma Laser Bolts
         for (i in 0 until maxRkShots) {
             if (!rsActive[i]) continue
             val lx = rsX[i] * w
@@ -3375,7 +3364,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Motion Afterimage Starfighter Ghosts when banking fast
         if (abs(rkTilt) > 6f) {
             for (g in 2 downTo 0) {
                 val alpha = (2 - g) * 26 + 18
@@ -3390,7 +3378,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             }
         }
 
-        // Detailed Starfighter Spacecraft
         val px = rkX * w
         val py = topY + rkY * areaH + rkRecoil * dp(5f)
         drawRocketShip(canvas, px, py, rkTilt, isGhost = false, ghostAlpha = 255)
@@ -3440,7 +3427,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             return
         }
 
-        // Animated Twin Plasma Thruster Flames
         val flameLen = dp(12f) + abs(sin(animTime * 42f)) * dp(7f)
         val nozOffsets = floatArrayOf(-dp(6.5f), dp(6.5f))
         for (nx in nozOffsets) {
@@ -3461,7 +3447,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawPath(path, pFill)
         }
 
-        // Swept-Back Delta Wings (Metallic Slate + Crimson Trim)
         path.reset()
         path.moveTo(0f, -dp(8f))
         path.lineTo(-dp(23f), dp(10f))
@@ -3477,13 +3462,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = COL_RED
         canvas.drawPath(path, pStroke)
 
-        // Wingtip Laser Pods (expanded when Dual-Laser is active)
         val podH = if (rkDualTimer > 0f) dp(16f) else dp(10f)
         pFill.color = if (rkDualTimer > 0f) COL_CYAN else COL_RED
         canvas.drawRect(-dp(22f), dp(11f) - podH, -dp(19f), dp(12f), pFill)
         canvas.drawRect(dp(19f), dp(11f) - podH, dp(22f), dp(12f), pFill)
 
-        // Main Starfighter Fuselage Hull
         path.reset()
         path.moveTo(0f, -dp(23f))
         path.lineTo(-dp(8.5f), -dp(3f))
@@ -3495,7 +3478,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = COL_GOLD
         canvas.drawPath(path, pFill)
 
-        // Center Spine Ridge & Nose Tip
         path.reset()
         path.moveTo(0f, -dp(23f))
         path.lineTo(-dp(3.5f), -dp(6f))
@@ -3505,7 +3487,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = COL_IVORY
         canvas.drawPath(path, pFill)
 
-        // Glass Cockpit Canopy + Specular Highlight
         rect.set(-dp(4.2f), -dp(9f), dp(4.2f), dp(4f))
         pFill.color = 0xFF132A38.toInt()
         canvas.drawOval(rect, pFill)
@@ -3515,13 +3496,11 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pFill.color = Color.WHITE
         canvas.drawCircle(-dp(1.2f), -dp(4.5f), dp(1.3f), pFill)
 
-        // Muzzle Flash
         if (rkMuzzleTimer > 0f) {
             pFill.color = 0xEEFFF59D.toInt()
             canvas.drawCircle(0f, -dp(25f), dp(6.5f), pFill)
         }
 
-        // Active Energy Shield Bubble
         if (rkShield > 0f) {
             pStroke.strokeWidth = dp(2f)
             pStroke.color = COL_CYAN
@@ -3534,14 +3513,12 @@ class ArcadeCanvasView(context: Context) : View(context) {
     }
 
     private fun drawRocketUfo(canvas: Canvas, ex: Float, ey: Float, flash: Boolean, shootCd: Float) {
-        // Glass Cockpit Dome on Top
         rect.set(ex - dp(10f), ey - dp(15f), ex + dp(10f), ey - dp(1f))
         pFill.color = if (flash) Color.WHITE else 0xAA4CC3D9.toInt()
         canvas.drawArc(rect, 180f, 180f, true, pFill)
         pFill.color = 0x88FFFFFF.toInt()
         canvas.drawCircle(ex - dp(3.5f), ey - dp(10f), dp(2f), pFill)
 
-        // Saucer Main Disc
         rect.set(ex - dp(21f), ey - dp(8f), ex + dp(21f), ey + dp(8f))
         pFill.color = if (flash) Color.WHITE else COL_PURPLE
         canvas.drawOval(rect, pFill)
@@ -3549,7 +3526,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         pStroke.color = COL_GOLD
         canvas.drawOval(rect, pStroke)
 
-        // 3 Blinking Rim Lights
         val blinkPhase = (animTime * 8f).toInt()
         for (k in -1..1) {
             val lit = ((blinkPhase + k + 3) % 3) == 0
@@ -3557,7 +3533,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
             canvas.drawCircle(ex + k * dp(10f), ey + dp(1f), dp(2.3f), pFill)
         }
 
-        // Telegraphing charge ring before UFO shoots
         if (shootCd < 0.45f) {
             val chargeRadius = dp(4f) + (shootCd / 0.45f) * dp(14f)
             pStroke.strokeWidth = dp(2f)
@@ -3572,7 +3547,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         val rotDir = if ((seed and 1) == 0) 1f else -1f
         canvas.rotate(animTime * 55f * rotDir + seed * 37f)
 
-        // 8-point irregular asteroid polygon
         val factors = floatArrayOf(1.0f, 0.82f, 0.96f, 0.78f, 1.04f, 0.86f, 0.94f, 0.80f)
         path.reset()
         for (v in 0 until 8) {
@@ -3591,7 +3565,6 @@ class ArcadeCanvasView(context: Context) : View(context) {
         canvas.drawPath(path, pStroke)
 
         if (!flash) {
-            // Impact craters
             pFill.color = 0xFF5A321B.toInt()
             canvas.drawCircle(-r * 0.28f, -r * 0.20f, r * 0.24f, pFill)
             canvas.drawCircle(r * 0.30f, r * 0.24f, r * 0.18f, pFill)
