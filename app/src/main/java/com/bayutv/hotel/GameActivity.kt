@@ -3538,7 +3538,7 @@ class ArcadeCanvasView(context: Context) : View(context) {
         rect.set(ex - dp(10f), ey - dp(15f), ex + dp(10f), ey - dp(1f))
         pFill.color = if (flash) Color.WHITE else 0xAA4CC3D9.toInt()
         canvas.drawArc(rect, 180f, 180f, true, pFill)
-        pFill.color = 0x88FFFFFF
+        pFill.color = 0x88FFFFFF.toInt()
         canvas.drawCircle(ex - dp(3.5f), ey - dp(10f), dp(2f), pFill)
 
         // Saucer Main Disc
