@@ -51,6 +51,9 @@ class TorrentBufferActivity : AppCompatActivity() {
     @Volatile private var metadataReady = false
     @Volatile private var playerLaunched = false
     @Volatile private var cancelled = false
+
+    // Penanda generasi koneksi HTTP agar saat user loncat menit (seek), thread koneksi lama langsung berhenti
+    @Volatile private var streamGeneration = 0
     private var waitSeconds = 0
 
     private lateinit var titleText: TextView
@@ -272,7 +275,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                 val lastPiece = ti.mapFile(selectedIdx, (fileSize - 1L).coerceAtLeast(0L), 1).piece()
                 val pieceLen = ti.pieceLength().coerceAtLeast(16384)
 
-                val headBytesTarget = if (resumeMs > 60000L) 3L * 1024L * 1024L else 6L * 1024L * 1024L
+                val headBytesTarget = if (resumeMs > 60000L) 4L * 1024L * 1024L else 6L * 1024L * 1024L
                 val headPieces = (headBytesTarget / pieceLen.toLong()).toInt().coerceIn(2, 16)
                 val headEnd = (firstPiece + headPieces).coerceAtMost(lastPiece)
 
@@ -286,8 +289,8 @@ class TorrentBufferActivity : AppCompatActivity() {
                     val ratio = (resumeMs.toDouble() / estTotalMs.toDouble()).coerceIn(0.02, 0.96)
                     val estByte = (fileSize.toDouble() * ratio).toLong().coerceIn(0L, fileSize - 1L)
                     val resumePiece = ti.mapFile(selectedIdx, estByte, 1).piece()
-                    val resumeSpan = ((3L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(2, 8)
-                    val rStart = (resumePiece - 1).coerceAtLeast(firstPiece)
+                    val resumeSpan = ((4L * 1024L * 1024L) / pieceLen.toLong()).toInt().coerceIn(3, 12)
+                    val rStart = (resumePiece - 2).coerceAtLeast(firstPiece)
                     val rEnd = (resumePiece + resumeSpan).coerceAtMost(lastPiece)
                     for (p in rStart..rEnd) {
                         criticalSet.add(p)
@@ -353,11 +356,19 @@ class TorrentBufferActivity : AppCompatActivity() {
                         )
                         if (streamUrl != null) {
                             playerLaunched = true
+                            val rKey = intent.getStringExtra("resume_key") ?: ""
+                            if (rKey.isNotEmpty() && resumeMs > 0L) {
+                                getSharedPreferences("bayutv", MODE_PRIVATE)
+                                    .edit()
+                                    .putLong("pos_$rKey", resumeMs)
+                                    .apply()
+                            }
                             ui.post {
                                 if (!cancelled && !isFinishing) {
                                     val playIntent = Intent(this, VodPlayerActivity::class.java).apply {
                                         putExtras(intent)
                                         putExtra("url", streamUrl)
+                                        putExtra("resume_ms", resumeMs)
                                     }
                                     ContinueWatch.saveFromIntent(this, playIntent, resumeMs)
                                     playerLauncher.launch(playIntent)
@@ -445,7 +456,7 @@ class TorrentBufferActivity : AppCompatActivity() {
         pieceLen: Int
     ) {
         try {
-            socket.soTimeout = 90000
+            socket.soTimeout = 120000
             socket.tcpNoDelay = true
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
             val requestLine = reader.readLine() ?: return
@@ -459,6 +470,9 @@ class TorrentBufferActivity : AppCompatActivity() {
                     rangeHeader = line.substringAfter(':').trim()
                 }
             }
+
+            // Setiap request baru (termasuk saat seek/loncat menit) menghentikan worker koneksi lama
+            val myGen = if (isHead) streamGeneration else ++streamGeneration
 
             var rangeStart = 0L
             var rangeEnd = fileSize - 1L
@@ -502,11 +516,11 @@ class TorrentBufferActivity : AppCompatActivity() {
             if (isHead || contentLength <= 0L) return
 
             var waitFile = 0
-            while (!videoFile.exists() && waitFile < 80 && serverRunning && !cancelled) {
+            while (!videoFile.exists() && waitFile < 80 && serverRunning && !cancelled && myGen == streamGeneration) {
                 Thread.sleep(100L)
                 waitFile++
             }
-            if (!videoFile.exists()) return
+            if (!videoFile.exists() || myGen != streamGeneration) return
 
             RandomAccessFile(videoFile, "r").use { raf ->
                 val buf = ByteArray(65536)
@@ -514,17 +528,17 @@ class TorrentBufferActivity : AppCompatActivity() {
                 var remaining = contentLength
                 var lastPrioritizedPiece = -1
 
-                while (remaining > 0L && serverRunning && !cancelled && !isFinishing && !socket.isClosed) {
+                while (remaining > 0L && serverRunning && !cancelled && !isFinishing && !socket.isClosed && myGen == streamGeneration) {
                     val piece = ti.mapFile(selectedIdx, pos, 1).piece()
                     val nextPiece = (piece + 1).coerceAtMost(lastPiece)
 
                     if (piece != lastPrioritizedPiece) {
                         lastPrioritizedPiece = piece
-                        val lookAheadEnd = (piece + 16).coerceAtMost(lastPiece)
+                        val lookAheadEnd = (piece + 22).coerceAtMost(lastPiece)
                         for (p in piece..lookAheadEnd) {
                             try {
                                 th.piecePriority(p, Priority.TOP_PRIORITY)
-                                th.setPieceDeadline(p, 120 + (p - piece) * 120)
+                                th.setPieceDeadline(p, 100 + (p - piece) * 100)
                             } catch (_: Throwable) {
                             }
                         }
@@ -532,7 +546,7 @@ class TorrentBufferActivity : AppCompatActivity() {
 
                     var stallLoops = 0
                     while ((!th.havePiece(piece) || !th.havePiece(nextPiece)) &&
-                        serverRunning && !cancelled && !isFinishing && !socket.isClosed
+                        serverRunning && !cancelled && !isFinishing && !socket.isClosed && myGen == streamGeneration
                     ) {
                         if (stallLoops % 10 == 0) {
                             try {
@@ -549,7 +563,7 @@ class TorrentBufferActivity : AppCompatActivity() {
                         stallLoops++
                     }
 
-                    if (!serverRunning || cancelled || isFinishing || socket.isClosed) break
+                    if (!serverRunning || cancelled || isFinishing || socket.isClosed || myGen != streamGeneration) break
 
                     val maxChunk = minOf(remaining, buf.size.toLong(), pieceLen.toLong()).toInt()
                     raf.seek(pos)
@@ -660,4 +674,3 @@ class TorrentBufferActivity : AppCompatActivity() {
         super.onDestroy()
     }
 }
-// END OF TorrentBufferActivity.kt
