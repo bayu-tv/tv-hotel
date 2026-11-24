@@ -1,5 +1,6 @@
 package com.bayutv.hotel
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -45,7 +46,9 @@ object ContinueWatch {
         val movie: Movie,
         val season: Int,
         val episode: Int,
-        val posMs: Long
+        val posMs: Long,
+        val detailUrl: String = "",
+        val epUrl: String = ""
     )
 
     fun saveFromIntent(ctx: Context, intent: Intent, posMs: Long) {
@@ -66,14 +69,30 @@ object ContinueWatch {
             jfId = jfId,
             backdrop = intent.getStringExtra("backdrop")
         )
-        upsert(ctx, Entry(key, m, intent.getIntExtra("season", 1), intent.getIntExtra("episode", 1), posMs))
+        upsert(
+            ctx,
+            Entry(
+                key = key,
+                movie = m,
+                season = intent.getIntExtra("season", 1),
+                episode = intent.getIntExtra("episode", 1),
+                posMs = posMs,
+                detailUrl = intent.getStringExtra("detail_url") ?: "",
+                epUrl = intent.getStringExtra("ep_url") ?: ""
+            )
+        )
     }
 
     @Synchronized
     fun upsert(ctx: Context, item: Entry) {
         val prefs = ctx.getSharedPreferences("bayutv", Context.MODE_PRIVATE)
+        val existing = load(ctx).firstOrNull { it.key == item.key }
+        val finalDetailUrl = item.detailUrl.ifEmpty { existing?.detailUrl ?: "" }
+        val finalEpUrl = item.epUrl.ifEmpty { existing?.epUrl ?: "" }
+        val mergedItem = item.copy(detailUrl = finalDetailUrl, epUrl = finalEpUrl)
+
         val old = load(ctx).filterNot { it.key == item.key }
-        val combined = (listOf(item) + old).take(10)
+        val combined = (listOf(mergedItem) + old).take(10)
         val arr = JSONArray()
         for (e in combined) {
             val o = JSONObject()
@@ -90,6 +109,8 @@ object ContinueWatch {
             o.put("season", e.season)
             o.put("episode", e.episode)
             o.put("pos", e.posMs)
+            o.put("detail_url", e.detailUrl)
+            o.put("ep_url", e.epUrl)
             arr.put(o)
         }
         prefs.edit().putString("continue_watch", arr.toString()).apply()
@@ -117,6 +138,8 @@ object ContinueWatch {
             o.put("season", e.season)
             o.put("episode", e.episode)
             o.put("pos", e.posMs)
+            o.put("detail_url", e.detailUrl)
+            o.put("ep_url", e.epUrl)
             arr.put(o)
         }
         prefs.edit().putString("continue_watch", arr.toString()).apply()
@@ -145,7 +168,17 @@ object ContinueWatch {
                     jfId = o.optString("jfId"),
                     backdrop = b.ifEmpty { null }
                 )
-                out.add(Entry(key, m, o.optInt("season", 1), o.optInt("episode", 1), o.optLong("pos", 0L)))
+                out.add(
+                    Entry(
+                        key = key,
+                        movie = m,
+                        season = o.optInt("season", 1),
+                        episode = o.optInt("episode", 1),
+                        posMs = o.optLong("pos", 0L),
+                        detailUrl = o.optString("detail_url", ""),
+                        epUrl = o.optString("ep_url", "")
+                    )
+                )
             }
         } catch (_: Exception) {
         }
@@ -157,6 +190,7 @@ class VodPlayerActivity : AppCompatActivity() {
 
     companion object {
         private const val PAUSE_NIGHT_DELAY_MS = 25_000L
+        private const val MAX_ORBIT_RETRIES = 3
     }
 
     private var player: ExoPlayer? = null
@@ -168,11 +202,52 @@ class VodPlayerActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("bayutv", MODE_PRIVATE) }
     private val rawKey: String get() = intent.getStringExtra("resume_key") ?: ""
     private val resumeKey: String get() = "pos_" + rawKey
+    private val subOffsetKey: String get() = "sub_offset_" + rawKey
 
     private val brass = 0xFFB8975A.toInt()
     private val brassLight = 0xFFE6C88F.toInt()
     private val ivory = 0xFFEFE8DA.toInt()
     private val mute = 0xFFA79F90.toInt()
+
+    // Ketahanan jaringan Orbit & pemulihan otomatis saat seek/loncat menit
+    private var streamUrl: String = ""
+    private var networkRetryCount = 0
+    private var lastKnownPlaybackPos = 0L
+
+    // Pengaturan Sinkronisasi Subtitle Real-Time (-0.5s / +0.5s)
+    private lateinit var customSubtitleText: TextView
+    private lateinit var subControlBar: LinearLayout
+    private lateinit var btnSubMinus: TextView
+    private lateinit var btnSubStatus: TextView
+    private lateinit var btnSubPlus: TextView
+    private lateinit var btnSubTrack: TextView
+
+    private val availableSubTracks = ArrayList<Subtitles.Track>()
+    private var activeSubTrackIndex = -1 // -2 = mati, -1 = bawaan video (MKV), >=0 = external synced
+    @Volatile private var activeCues: List<Subtitles.CueEntry> = emptyList()
+    private var subtitleOffsetMs: Long = 0L
+
+    private val hideSubBarRunnable = Runnable {
+        if (::subControlBar.isInitialized) {
+            subControlBar.visibility = View.GONE
+        }
+    }
+
+    private val cueSyncRunnable = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            updateCustomSubtitleDisplay()
+            ui.postDelayed(this, 100L)
+        }
+    }
+
+    private val periodicSaveRunnable = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            persistCurrentProgress()
+            ui.postDelayed(this, 15_000L)
+        }
+    }
 
     // Mode Gelap otomatis saat video dijeda lama
     private var isNightModeOpen = false
@@ -227,10 +302,12 @@ class VodPlayerActivity : AppCompatActivity() {
         root = FrameLayout(this)
         root.setBackgroundColor(0xFF000000.toInt())
 
+        subtitleOffsetMs = if (rawKey.isNotEmpty()) prefs.getLong(subOffsetKey, 0L) else 0L
+
         view = PlayerView(this)
         view.useController = true
         view.setShowSubtitleButton(true)
-        view.controllerShowTimeoutMs = 3500
+        view.controllerShowTimeoutMs = 4500
         view.subtitleView?.apply {
             setStyle(
                 CaptionStyleCompat(
@@ -246,6 +323,8 @@ class VodPlayerActivity : AppCompatActivity() {
             setApplyEmbeddedStyles(false)
         }
         root.addView(view, FrameLayout.LayoutParams(-1, -1))
+
+        buildSubtitleOverlayAndControls()
         buildPauseNightModeOverlay()
         buildAdzanAndRamadanOverlays()
         notice = Notice(this, root)
@@ -259,8 +338,9 @@ class VodPlayerActivity : AppCompatActivity() {
             }
         }.start()
 
+        // Buffer & timeout diperbesar agar stabil di Telkomsel Orbit dan tahan saat seek/loncat menit
         val lc = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 35000, 2000, 4000)
+            .setBufferDurationsMs(20000, 50000, 2500, 5000)
             .build()
 
         val ref = intent.getStringExtra("referer") ?: ""
@@ -268,8 +348,8 @@ class VodPlayerActivity : AppCompatActivity() {
         val ua = intent.getStringExtra("user_agent") ?: Playlist.DEFAULT_UA
         val dsf = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(12000)
-            .setReadTimeoutMs(15000)
+            .setConnectTimeoutMs(20000)
+            .setReadTimeoutMs(45000)
             .setUserAgent(ua)
 
         val extraHeaders = HashMap<String, String>()
@@ -300,24 +380,77 @@ class VodPlayerActivity : AppCompatActivity() {
             .setPreferredAudioLanguages("id", "ja", "en")
             .build()
 
+        val url = intent.getStringExtra("url") ?: run {
+            finish()
+            return
+        }
+        streamUrl = url
+
+        val savedPrefPos = if (rawKey.isNotEmpty()) prefs.getLong(resumeKey, 0L) else 0L
+        val intentResumePos = intent.getLongExtra("resume_ms", 0L)
+        val resume = maxOf(savedPrefPos, intentResumePos)
+        lastKnownPlaybackPos = resume
+
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 cancelPauseNightMode()
+                val curPos = p.currentPosition.takeIf { it > 0L } ?: lastKnownPlaybackPos
+
+                // Auto-retry hingga 3x di posisi menit yang sama jika koneksi Orbit/seek tersendat
+                if (networkRetryCount < MAX_ORBIT_RETRIES && !isFinishing) {
+                    networkRetryCount++
+                    val attempt = networkRetryCount
+                    val menitInfo = if (curPos > 60000L) " di menit ${curPos / 60000L}" else ""
+                    notice.show(
+                        null,
+                        "Koneksi Orbit tersendat, menyambung ulang$menitInfo ($attempt/$MAX_ORBIT_RETRIES)...",
+                        3500L
+                    )
+                    ui.postDelayed({
+                        val active = player ?: return@postDelayed
+                        if (isFinishing) return@postDelayed
+                        val targetUrl = if (usedFallback) (intent.getStringExtra("fallback") ?: streamUrl) else streamUrl
+                        active.setMediaItem(buildMediaItem(targetUrl), curPos)
+                        active.prepare()
+                        active.playWhenReady = true
+                    }, 1500L)
+                    return
+                }
+
                 val fb = intent.getStringExtra("fallback") ?: ""
                 if (!usedFallback && fb.isNotEmpty()) {
                     usedFallback = true
-                    val pos = p.currentPosition
+                    networkRetryCount = 0
                     notice.show(null, "Mengonversi video di server...", 3000L)
-                    p.setMediaItem(item(fb, emptyList()), pos)
+                    p.setMediaItem(buildMediaItem(fb), curPos)
                     p.prepare()
                     p.playWhenReady = true
                     return
                 }
-                notice.show("Stream tidak dapat diputar", "Silakan kembali dan pilih server lain (${error.errorCodeName}).")
+
+                notice.show(
+                    "Stream tidak dapat diputar",
+                    "Jaringan terputus atau server penuh (${error.errorCodeName}). Kembali dan pilih Ganti Server."
+                )
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                if (newPosition.positionMs > 0L) {
+                    lastKnownPlaybackPos = newPosition.positionMs
+                }
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    networkRetryCount = 0
+                    updateCustomSubtitleDisplay()
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) {
+                    networkRetryCount = 0
                     cancelPauseNightMode()
                     if (isNightModeOpen) {
                         exitNightMode(resumePlayback = false)
@@ -332,6 +465,9 @@ class VodPlayerActivity : AppCompatActivity() {
             }
 
             override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY && p.isPlaying) {
+                    networkRetryCount = 0
+                }
                 if (state == Player.STATE_ENDED) {
                     cancelPauseNightMode()
                     ContinueWatch.remove(this@VodPlayerActivity, rawKey)
@@ -349,51 +485,342 @@ class VodPlayerActivity : AppCompatActivity() {
         view.player = p
         player = p
 
-        val url = intent.getStringExtra("url") ?: run {
-            finish()
-            return
-        }
-        val resume = prefs.getLong(resumeKey, 0L)
-        p.setMediaItem(item(url, emptyList()), resume)
+        p.setMediaItem(buildMediaItem(url), resume)
         p.prepare()
         p.playWhenReady = true
 
         val title = intent.getStringExtra("title") ?: ""
-        if (resume > 60000L) notice.show("B-BOX - $title", "Melanjutkan dari menit " + (resume / 60000L), 3000L)
-        else if (title.isNotEmpty()) notice.show(null, title, 2500L)
+        if (resume > 60000L) {
+            notice.show("B-BOX - $title", "Melanjutkan dari menit " + (resume / 60000L) + " · Tekan Panah Atas untuk atur subtitle", 3500L)
+        } else if (title.isNotEmpty()) {
+            notice.show(null, "$title · Tekan Panah Atas untuk atur subtitle", 3000L)
+        }
 
-        val tmdbId = intent.getIntExtra("tmdb_id", 0)
-        val hasExistingSubs = (intent.getStringArrayExtra("sub_urls")?.isNotEmpty() == true)
-        if (tmdbId > 0 && !hasExistingSubs) {
-            val kind = intent.getStringExtra("tmdb_kind") ?: "movie"
-            val season = intent.getIntExtra("season", 0)
-            val episode = intent.getIntExtra("episode", 0)
-            val passedImdb = intent.getStringExtra("imdb_id") ?: ""
-            Thread {
-                val imdbId = passedImdb.ifEmpty { Tmdb.imdbId(this, tmdbId, kind) }
-                val tracks = Subtitles.fetch(tmdbId, kind, season, episode, imdbId)
-                if (tracks.isNotEmpty()) {
-                    ui.post {
-                        val activePlayer = player ?: return@post
-                        if (isFinishing) return@post
-                        val curPos = activePlayer.currentPosition
-                        val wasPlaying = activePlayer.playWhenReady
-                        activePlayer.setMediaItem(item(url, tracks), curPos)
-                        activePlayer.trackSelectionParameters = activePlayer.trackSelectionParameters.buildUpon()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                            .setPreferredTextLanguages("id", "in", "ind", "ms", "en")
-                            .build()
-                        activePlayer.prepare()
-                        activePlayer.playWhenReady = wasPlaying
-                        val hasId = tracks.any { it.lang == "id" }
-                        notice.show(
-                            null,
-                            if (hasId) "Subtitle Indonesia aktif" else "Subtitle tersedia (tekan tombol CC)",
-                            2500L
-                        )
+        // Muat subtitle dari intent (mis. Jellyfin) atau dari Wyzie/OpenSubtitles tanpa me-reload video
+        loadSubtitlesInBackground()
+        ui.postDelayed(cueSyncRunnable, 150L)
+    }
+
+    private fun buildSubtitleOverlayAndControls() {
+        // 1. Teks Subtitle Sinkronisasi Real-Time di bagian bawah layar
+        customSubtitleText = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTextColor(0xFFF5F0E6.toInt())
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0xB3000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        val subLp = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            setMargins(dp(48), 0, dp(48), dp(68))
+        }
+        root.addView(customSubtitleText, subLp)
+
+        // 2. Bilah Kontrol Subtitle (-0.5s / +0.5s / Pilih Sub) di bagian atas layar
+        subControlBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(0xE8141210.toInt())
+                setStroke(dp(1), brass)
+            }
+            visibility = View.GONE
+        }
+
+        btnSubMinus = makeSubControlButton("Sub -0.5s") {
+            adjustSubtitleOffset(-500L)
+        }
+        btnSubStatus = makeSubControlButton(formatOffsetLabel()) {
+            subtitleOffsetMs = 0L
+            saveSubtitleOffset()
+            updateSubStatusButton()
+            updateCustomSubtitleDisplay()
+            notice.show(null, "Sinkronisasi subtitle direset ke 0.0 detik", 1800L)
+        }
+        btnSubPlus = makeSubControlButton("Sub +0.5s") {
+            adjustSubtitleOffset(500L)
+        }
+        btnSubTrack = makeSubControlButton("Pilih Sub") {
+            showSubtitleTrackPicker()
+        }
+
+        subControlBar.addView(btnSubMinus)
+        val lp1 = LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) }
+        subControlBar.addView(btnSubStatus, lp1)
+        val lp2 = LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) }
+        subControlBar.addView(btnSubPlus, lp2)
+        val lp3 = LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) }
+        subControlBar.addView(btnSubTrack, lp3)
+
+        val barLp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = dp(20)
+        }
+        root.addView(subControlBar, barLp)
+    }
+
+    private fun makeSubControlButton(label: String, onClick: () -> Unit): TextView {
+        return tv(label, 12.5f, ivory, Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)).apply {
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0x26FFFFFF)
+                setStroke(dp(1), 0x44FFFFFF)
+            }
+            setOnFocusChangeListener { _, hasFocus ->
+                setTextColor(if (hasFocus) Color.BLACK else ivory)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(8).toFloat()
+                    if (hasFocus) {
+                        setColor(brassLight)
+                        setStroke(dp(2), Color.WHITE)
+                    } else {
+                        setColor(0x26FFFFFF)
+                        setStroke(dp(1), 0x44FFFFFF)
                     }
                 }
-            }.start()
+                if (hasFocus) {
+                    showSubControlBar(requestFocus = false)
+                }
+            }
+            setOnClickListener {
+                showSubControlBar(requestFocus = false)
+                onClick()
+            }
+        }
+    }
+
+    private fun showSubControlBar(requestFocus: Boolean) {
+        subControlBar.visibility = View.VISIBLE
+        ui.removeCallbacks(hideSubBarRunnable)
+        ui.postDelayed(hideSubBarRunnable, 5000L)
+        if (requestFocus) {
+            btnSubMinus.requestFocus()
+        }
+    }
+
+    private fun adjustSubtitleOffset(deltaMs: Long) {
+        if (activeSubTrackIndex < 0 && availableSubTracks.isEmpty()) {
+            notice.show(null, "Subtitle eksternal tidak tersedia untuk video ini", 2200L)
+            return
+        }
+        if (activeSubTrackIndex < 0 && availableSubTracks.isNotEmpty()) {
+            activateExternalSubTrack(0)
+        }
+        subtitleOffsetMs = (subtitleOffsetMs + deltaMs).coerceIn(-60_000L, 60_000L)
+        saveSubtitleOffset()
+        updateSubStatusButton()
+        updateCustomSubtitleDisplay()
+    }
+
+    private fun saveSubtitleOffset() {
+        if (rawKey.isNotEmpty()) {
+            prefs.edit().putLong(subOffsetKey, subtitleOffsetMs).apply()
+        }
+    }
+
+    private fun formatOffsetLabel(): String {
+        val sec = subtitleOffsetMs / 1000.0
+        return when {
+            subtitleOffsetMs > 0L -> String.format(Locale.US, "Sub: +%.1fs", sec)
+            subtitleOffsetMs < 0L -> String.format(Locale.US, "Sub: %.1fs", sec)
+            else -> "Sub: 0.0s"
+        }
+    }
+
+    private fun updateSubStatusButton() {
+        if (::btnSubStatus.isInitialized) {
+            btnSubStatus.text = formatOffsetLabel()
+        }
+    }
+
+    private fun loadSubtitlesInBackground() {
+        val urls = intent.getStringArrayExtra("sub_urls") ?: emptyArray()
+        val langs = intent.getStringArrayExtra("sub_langs") ?: emptyArray()
+        val labels = intent.getStringArrayExtra("sub_labels") ?: emptyArray()
+
+        if (urls.isNotEmpty()) {
+            for (i in urls.indices) {
+                val u = urls[i]
+                val l = langs.getOrNull(i) ?: "id"
+                val lbl = labels.getOrNull(i) ?: l
+                availableSubTracks.add(Subtitles.Track(u, l, lbl, u.lowercase(Locale.US).contains(".vtt")))
+            }
+            val indoIdx = availableSubTracks.indexOfFirst {
+                it.lang.startsWith("id") || it.lang.startsWith("in") || it.lang == "ind"
+            }.let { if (it >= 0) it else 0 }
+            activateExternalSubTrack(indoIdx)
+            return
+        }
+
+        val tmdbId = intent.getIntExtra("tmdb_id", 0)
+        if (tmdbId <= 0) return
+        val kind = intent.getStringExtra("tmdb_kind") ?: "movie"
+        val season = intent.getIntExtra("season", 0)
+        val episode = intent.getIntExtra("episode", 0)
+        val passedImdb = intent.getStringExtra("imdb_id") ?: ""
+
+        Thread {
+            val imdbId = passedImdb.ifEmpty { Tmdb.imdbId(this, tmdbId, kind) }
+            val tracks = Subtitles.fetch(tmdbId, kind, season, episode, imdbId)
+            if (tracks.isEmpty() || isFinishing) return@Thread
+            ui.post {
+                if (isFinishing) return@post
+                availableSubTracks.clear()
+                availableSubTracks.addAll(tracks)
+                val indoIdx = availableSubTracks.indexOfFirst { it.lang == "id" }
+                    .let { if (it >= 0) it else 0 }
+                activateExternalSubTrack(indoIdx, showToast = true)
+            }
+        }.start()
+    }
+
+    private fun activateExternalSubTrack(index: Int, showToast: Boolean = false) {
+        val track = availableSubTracks.getOrNull(index) ?: return
+        activeSubTrackIndex = index
+        // Matikan subtitle bawaan ExoPlayer agar tidak tampil ganda
+        player?.let { p ->
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                .build()
+        }
+        Thread {
+            val parsed = Subtitles.downloadAndParse(track.url)
+            ui.post {
+                if (isFinishing || activeSubTrackIndex != index) return@post
+                activeCues = parsed
+                updateCustomSubtitleDisplay()
+                if (showToast && parsed.isNotEmpty()) {
+                    val offInfo = if (subtitleOffsetMs != 0L) " (${formatOffsetLabel()})" else ""
+                    notice.show(null, "Subtitle ${track.label} aktif$offInfo", 2500L)
+                }
+            }
+        }.start()
+    }
+
+    private fun showSubtitleTrackPicker() {
+        val items = ArrayList<String>()
+        for (t in availableSubTracks) {
+            items.add(t.label)
+        }
+        items.add("Subtitle Bawaan Video (MKV)")
+        items.add("Matikan Subtitle")
+
+        AlertDialog.Builder(this)
+            .setTitle("Pilih Subtitle (${formatOffsetLabel()})")
+            .setItems(items.toTypedArray()) { _, which ->
+                when {
+                    which < availableSubTracks.size -> {
+                        activateExternalSubTrack(which, showToast = true)
+                    }
+                    which == availableSubTracks.size -> {
+                        activeSubTrackIndex = -1
+                        activeCues = emptyList()
+                        customSubtitleText.visibility = View.GONE
+                        player?.let { p ->
+                            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                .setPreferredTextLanguages("id", "in", "ind", "ms", "en")
+                                .build()
+                        }
+                        notice.show(null, "Menggunakan subtitle bawaan video", 2000L)
+                    }
+                    else -> {
+                        activeSubTrackIndex = -2
+                        activeCues = emptyList()
+                        customSubtitleText.visibility = View.GONE
+                        player?.let { p ->
+                            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                .build()
+                        }
+                        notice.show(null, "Subtitle dimatikan", 2000L)
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun updateCustomSubtitleDisplay() {
+        val p = player ?: return
+        if (activeSubTrackIndex < 0 || activeCues.isEmpty() || isNightModeOpen || adzanOverlay.visibility == View.VISIBLE) {
+            if (customSubtitleText.visibility != View.GONE) {
+                customSubtitleText.visibility = View.GONE
+            }
+            return
+        }
+        val targetMs = (p.currentPosition - subtitleOffsetMs).coerceAtLeast(0L)
+        val cues = activeCues
+        var lo = 0
+        var hi = cues.size - 1
+        var matched: Subtitles.CueEntry? = null
+
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            val c = cues[mid]
+            if (targetMs < c.startMs) {
+                hi = mid - 1
+            } else if (targetMs > c.endMs) {
+                lo = mid + 1
+            } else {
+                matched = c
+                break
+            }
+        }
+
+        if (matched != null) {
+            if (customSubtitleText.text != matched.text) {
+                customSubtitleText.text = matched.text
+            }
+            if (customSubtitleText.visibility != View.VISIBLE) {
+                customSubtitleText.visibility = View.VISIBLE
+            }
+        } else if (customSubtitleText.visibility != View.GONE) {
+            customSubtitleText.visibility = View.GONE
+        }
+    }
+
+    private fun buildMediaItem(url: String): MediaItem {
+        val urls = intent.getStringArrayExtra("sub_urls") ?: emptyArray()
+        val langs = intent.getStringArrayExtra("sub_langs") ?: emptyArray()
+        val labels = intent.getStringArrayExtra("sub_labels") ?: emptyArray()
+        val subs = ArrayList<MediaItem.SubtitleConfiguration>()
+
+        for (i in urls.indices) {
+            val subUrl = urls[i]
+            val lang = langs.getOrNull(i) ?: "und"
+            val indo = lang.startsWith("id") || lang.startsWith("in") || lang == "ind"
+            val mime = if (subUrl.lowercase(Locale.US).contains(".srt")) MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
+            subs.add(
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                    .setMimeType(mime)
+                    .setLanguage(lang)
+                    .setLabel(labels.getOrNull(i) ?: lang)
+                    .setSelectionFlags(if (indo) C.SELECTION_FLAG_DEFAULT else 0)
+                    .build()
+            )
+        }
+
+        return MediaItem.Builder().setUri(url).setSubtitleConfigurations(subs).build()
+    }
+
+    private fun persistCurrentProgress() {
+        val p = player ?: return
+        if (rawKey.isEmpty()) return
+        val pos = p.currentPosition
+        val dur = p.duration
+        if (pos > 60000L && (dur <= 0L || pos < dur - 180000L)) {
+            lastKnownPlaybackPos = pos
+            prefs.edit().putLong(resumeKey, pos).apply()
+            ContinueWatch.saveFromIntent(this, intent, pos)
         }
     }
 
@@ -458,6 +885,8 @@ class VodPlayerActivity : AppCompatActivity() {
 
         isNightModeOpen = true
         view.hideController()
+        subControlBar.visibility = View.GONE
+        customSubtitleText.visibility = View.GONE
         updateNightModeInfo()
         nightModeOverlay.visibility = View.VISIBLE
         nightModeOverlay.requestFocus()
@@ -477,8 +906,10 @@ class VodPlayerActivity : AppCompatActivity() {
             p.playWhenReady = true
             p.play()
             view.showController()
+            showSubControlBar(requestFocus = false)
         } else {
             view.showController()
+            showSubControlBar(requestFocus = false)
             if (p != null && !p.isPlaying && !pausedForAdzan) {
                 schedulePauseNightMode()
             }
@@ -507,7 +938,6 @@ class VodPlayerActivity : AppCompatActivity() {
             }
         }
 
-        // Pergeseran posisi halus tiap 10 detik untuk mencegah burn-in layar TV
         val shifts = intArrayOf(-16, -8, 0, 8, 16, 8, 0, -8)
         val dx = dp(shifts[nightBurnInStep % shifts.size]).toFloat()
         val dy = dp(shifts[(nightBurnInStep + 2) % shifts.size] / 2).toFloat()
@@ -869,43 +1299,6 @@ class VodPlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun item(url: String, fetchedSubs: List<Subtitles.Track>): MediaItem {
-        val urls = intent.getStringArrayExtra("sub_urls") ?: emptyArray()
-        val langs = intent.getStringArrayExtra("sub_langs") ?: emptyArray()
-        val labels = intent.getStringArrayExtra("sub_labels") ?: emptyArray()
-        val subs = ArrayList<MediaItem.SubtitleConfiguration>()
-
-        for (i in urls.indices) {
-            val subUrl = urls[i]
-            val lang = langs.getOrNull(i) ?: "und"
-            val indo = lang.startsWith("id") || lang.startsWith("in") || lang == "ind"
-            val mime = if (subUrl.lowercase().contains(".srt")) MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
-            subs.add(
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                    .setMimeType(mime)
-                    .setLanguage(lang)
-                    .setLabel(labels.getOrNull(i) ?: lang)
-                    .setSelectionFlags(if (indo) C.SELECTION_FLAG_DEFAULT else 0)
-                    .build()
-            )
-        }
-
-        for (t in fetchedSubs) {
-            val indo = t.lang == "id"
-            val mime = if (t.isVtt) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
-            subs.add(
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(t.url))
-                    .setMimeType(mime)
-                    .setLanguage(t.lang)
-                    .setLabel(t.label)
-                    .setSelectionFlags(if (indo) C.SELECTION_FLAG_DEFAULT else 0)
-                    .build()
-            )
-        }
-
-        return MediaItem.Builder().setUri(url).setSubtitleConfigurations(subs).build()
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (adzanOverlay.visibility == View.VISIBLE) {
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
@@ -930,11 +1323,48 @@ class VodPlayerActivity : AppCompatActivity() {
             return true
         }
 
+        // Navigasi D-Pad untuk bilah kontrol subtitle (-0.5s / +0.5s)
+        if (subControlBar.hasFocus()) {
+            showSubControlBar(requestFocus = false)
+            if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (event.action == KeyEvent.ACTION_UP) {
+                    view.requestFocus()
+                }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_MENU,
+                KeyEvent.KEYCODE_CAPTIONS,
+                KeyEvent.KEYCODE_INFO -> {
+                    view.showController()
+                    showSubControlBar(requestFocus = true)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    showSubControlBar(requestFocus = false)
+                }
+            }
+        }
+
         if (player?.isPlaying == false && event.action == KeyEvent.ACTION_UP) {
             schedulePauseNightMode()
         }
 
-        if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (subControlBar.visibility == View.VISIBLE) {
+                subControlBar.visibility = View.GONE
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         return view.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
     }
 
@@ -942,25 +1372,22 @@ class VodPlayerActivity : AppCompatActivity() {
         super.onStart()
         ui.removeCallbacks(tick)
         ui.postDelayed(tick, 15000L)
+        ui.removeCallbacks(periodicSaveRunnable)
+        ui.postDelayed(periodicSaveRunnable, 15000L)
     }
 
     override fun onStop() {
         super.onStop()
         ui.removeCallbacks(tick)
+        ui.removeCallbacks(periodicSaveRunnable)
         cancelPauseNightMode()
         ui.removeCallbacks(nightClockTickRunnable)
         if (pausedForAdzan) {
             wasPlayingBeforeAdzan = false
             endAdzan()
         }
-        val p = player ?: return
-        val pos = p.currentPosition
-        val dur = p.duration
-        if (pos > 60000L && (dur <= 0L || pos < dur - 180000L)) {
-            prefs.edit().putLong(resumeKey, pos).apply()
-            ContinueWatch.saveFromIntent(this, intent, pos)
-        }
-        p.pause()
+        persistCurrentProgress()
+        player?.pause()
     }
 
     override fun onDestroy() {
